@@ -21,6 +21,106 @@ Voicebot is a mono-user voice assistant that provides AI-powered conversational 
 - **AI Models**: S2S (Speech-to-Speech)
 - **Protocol**: MCP (Model Context Protocol) for tool integration
 
+### System Architecture Diagram
+
+```mermaid
+graph TB
+    %% Input Layer
+    MIC[Microphone] -->|Audio Stream| VAD[Voice Activity Detector]
+    VAD -->|Active Speech| AUDIO_BUF[Audio Buffer]
+    
+    %% Session Management
+    AUDIO_BUF -->|Audio Chunks| SESSION[Session Manager]
+    SESSION -->|Manage Context| DB[(SQLite Database)]
+    SESSION -->|Session State| HISTORY[Conversation History]
+    
+    %% S2S Model Layer with Adapter Pattern
+    SESSION -->|Audio Input| ADAPTER[S2S Model Adapter]
+    
+    subgraph S2S_MODELS[Interchangeable S2S Models]
+        LLAMA_OMNI[LLaMA-Omni]
+        MOSHI[Moshi]
+        ULTRAVOX[Ultravox]
+        LFM[LFM2.5-Audio]
+    end
+    
+    ADAPTER -.->|Load Model| S2S_MODELS
+    S2S_MODELS -.->|Model Interface| ADAPTER
+    
+    %% Tool Integration
+    ADAPTER <-->|Tool Calls| TOOL_ROUTER[Tool Router]
+    TOOL_ROUTER <-->|MCP Protocol| MCP_SERVER[MCP Server]
+    
+    subgraph TOOLS[Available Tools]
+        TOOL1[File Operations]
+        TOOL2[Web Search]
+        TOOL3[Calendar]
+        TOOL4[Custom Tools]
+    end
+    
+    MCP_SERVER <-->|Execute| TOOLS
+    
+    %% External Agents
+    TOOL_ROUTER <-->|Agent Protocol| AGENTS[External Agents]
+    
+    subgraph EXT_AGENTS[External Agents]
+        OPENCLAW[OpenClaw]
+        AGENT2[Other Agents]
+    end
+    
+    AGENTS <--> EXT_AGENTS
+    
+    %% Output Layer
+    ADAPTER -->|Audio Response| AUDIO_PROC[Audio Processor]
+    AUDIO_PROC -->|Processed Audio| SPEAKER[Speaker]
+    
+    %% Tool Results Flow
+    TOOLS -.->|Results| MCP_SERVER
+    MCP_SERVER -.->|Tool Output| TOOL_ROUTER
+    TOOL_ROUTER -.->|Context Update| ADAPTER
+    
+    %% Styling
+    classDef hardware fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef processing fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef storage fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef models fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef tools fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef agents fill:#e0f2f1,stroke:#004d40,stroke-width:2px
+    
+    class MIC,SPEAKER hardware
+    class VAD,AUDIO_BUF,AUDIO_PROC,SESSION processing
+    class DB,HISTORY storage
+    class ADAPTER,S2S_MODELS,LLAMA_OMNI,MOSHI,ULTRAVOX,LFM models
+    class TOOL_ROUTER,MCP_SERVER,TOOLS,TOOL1,TOOL2,TOOL3,TOOL4 tools
+    class AGENTS,EXT_AGENTS,OPENCLAW,AGENT2 agents
+```
+
+### Component Responsibilities
+
+| Component | Description |
+|-----------|-------------|
+| **Microphone** | Captures raw audio input from the user |
+| **Voice Activity Detector (VAD)** | Detects when the user is speaking vs. silence |
+| **Audio Buffer** | Temporarily stores audio chunks for processing |
+| **Session Manager** | Manages conversation state, context, and user sessions |
+| **S2S Model Adapter** | Abstraction layer for interchangeable S2S models |
+| **S2S Models** | Pluggable speech-to-speech models (LLaMA-Omni, Moshi, etc.) |
+| **Tool Router** | Routes tool calls between the S2S model and available tools |
+| **MCP Server** | Implements Model Context Protocol for tool integration |
+| **Tools** | Various capabilities (file ops, web search, calendar, etc.) |
+| **External Agents** | Integration with external AI agents like OpenClaw |
+| **Audio Processor** | Post-processes audio response before output |
+| **Speaker** | Outputs audio responses to the user |
+| **SQLite Database** | Persists conversation history and user data |
+
+### Data Flow
+
+1. **Input Path**: Microphone → VAD → Audio Buffer → Session Manager → S2S Adapter → Model
+2. **Tool Execution**: Model → Tool Router → MCP Server → Tools → Results back to Model
+3. **Agent Interaction**: Model → Tool Router → External Agents → Results back to Model
+4. **Output Path**: Model → S2S Adapter → Audio Processor → Speaker
+5. **Persistence**: Session Manager ↔ SQLite Database (continuous state management)
+
 ## Available Open Source S2S Models
 
 The following open source Speech-to-Speech models can be run locally:
