@@ -106,7 +106,10 @@ impl AudioCapture {
 
         // Print default device
         if let Some(default_device) = host.default_input_device() {
-            println!("Default input device: {}", default_device.description()?.name());
+            println!(
+                "Default input device: {}",
+                default_device.description()?.name()
+            );
         }
 
         println!("\nAvailable input devices:");
@@ -130,7 +133,12 @@ impl AudioCapture {
                     })
                     .unwrap_or_else(|_| "config unavailable".to_string());
 
-                println!("  [{}] {} ({})", idx, device_description.name(), config_info);
+                println!(
+                    "  [{}] {} ({})",
+                    idx,
+                    device_description.name(),
+                    config_info
+                );
             }
         }
 

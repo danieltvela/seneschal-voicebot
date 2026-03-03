@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rubato::{FftFixedIn, Resampler};
 use tracing::{debug, info};
 
-use crate::audio_capture::AudioChunk;
+use crate::audio::audio_capture::AudioChunk;
 use crate::config::Config;
 
 /// Transformed audio ready to be sent to services

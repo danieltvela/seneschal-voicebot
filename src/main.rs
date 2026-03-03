@@ -1,5 +1,4 @@
-mod audio_capture;
-mod audio_transform;
+mod audio;
 mod config;
 mod websocket_client;
 
@@ -8,8 +7,8 @@ use async_channel::{bounded, Sender};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use audio_capture::{AudioCapture, AudioChunk};
-use audio_transform::{AudioTransformer, TransformedAudio};
+use crate::audio::audio_capture::{AudioCapture, AudioChunk};
+use crate::audio::audio_transform::{AudioTransformer, TransformedAudio};
 use config::Config;
 use websocket_client::WebSocketClient;
 

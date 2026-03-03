@@ -8,7 +8,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
-use crate::audio_transform::TransformedAudio;
+use crate::audio::audio_transform::TransformedAudio;
 
 const RECONNECT_DELAY_MS: u64 = 2000;
 const MAX_RECONNECT_DELAY_MS: u64 = 16000;
