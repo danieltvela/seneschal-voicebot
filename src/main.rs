@@ -44,120 +44,15 @@ async fn main() -> Result<()> {
         source_sample_rate, source_channels
     );
 
-    // Create channels for audio data flow
-    let (raw_tx, raw_rx) = bounded::<AudioChunk>(AUDIO_CHANNEL_CAPACITY);
-    // let (vad_tx, vad_rx) = bounded::<TransformedAudio>(AUDIO_CHANNEL_CAPACITY);
-    let (stt_tx, stt_rx) = bounded::<TransformedAudio>(AUDIO_CHANNEL_CAPACITY);
-    
-    // Create a channel for connection status notification
-    let (connection_status_tx, connection_status_rx) = bounded::<bool>(1);
-
-    // Start audio capture
-    let samples_per_chunk = config.samples_per_chunk();
-    let _stream = audio_capture.start_capture(raw_tx, samples_per_chunk)?;
-    
-    let stt_handle = tokio::spawn(async move {
-        // if let Err(e) = stt_client.run(stt_rx).await {
-        //     error!("STT client error: {}", e);
-        // }
-    });
-    
-    // Spawn audio transformation task - only starts after WebSocket connection succeeds
-    let transform_config = config.clone();
-    let transform_handle = tokio::spawn(async move {
-        run_transformer_after_connection(
-            transform_config, 
-            source_sample_rate, 
-            source_channels, 
-            raw_rx, 
-            stt_tx,
-            connection_status_rx
-        ).await
-    });
+    // TODO: Initialize and run S2S process.
 
     // Handle shutdown signals
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("Received shutdown signal");
         }
-        result = transform_handle => {
-            if let Err(e) = result {
-                error!("Transform task error: {}", e);
-            }
-        }
-        
-        result = stt_handle => {
-            if let Err(e) = result {
-                error!("STT task error: {}", e);
-            }
-        }
     }
 
     info!("Shutting down...");
     Ok(())
-}
-
-async fn run_transformer_after_connection(
-    config: Config,
-    source_sample_rate: u32,
-    source_channels: u16,
-    raw_rx: async_channel::Receiver<AudioChunk>,
-    stt_tx: Sender<TransformedAudio>,
-    connection_status_rx: async_channel::Receiver<bool>,
-) {
-    // Wait for connection to be established first
-    info!("Waiting for WebSocket connection to be established before starting transformer...");
-    
-    match connection_status_rx.recv().await {
-        Ok(true) => {
-            info!("WebSocket connection established, starting audio transformer");
-            run_transformer(config, source_sample_rate, source_channels, raw_rx, stt_tx).await;
-        },
-        Ok(false) => {
-            error!("WebSocket connection failed, not starting audio transformer");
-            return;
-        },
-        Err(e) => {
-            error!("Failed to receive connection status: {}", e);
-            return;
-        }
-    }
-}
-
-async fn run_transformer(
-    config: Config,
-    source_sample_rate: u32,
-    source_channels: u16,
-    raw_rx: async_channel::Receiver<AudioChunk>,
-    stt_tx: Sender<TransformedAudio>,
-) {
-    let mut transformer = match AudioTransformer::new(&config, source_sample_rate, source_channels) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Failed to create audio transformer: {}", e);
-            return;
-        }
-    };
-
-    info!("Audio transformer initialized");
-
-    while let Ok(chunk) = raw_rx.recv().await {
-        match transformer.transform(chunk) {
-            Ok(transformed) => {
-                // Send to both VAD and STT services
-                // Clone the data since we need to send to two destinations
-                // let vad_audio = transformed.clone();
-                let stt_audio = transformed;
-
-                if let Err(e) = stt_tx.try_send(stt_audio) {
-                    error!("Failed to send to STT channel: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("Audio transformation error: {}", e);
-            }
-        }
-    }
-
-    info!("Transformer task exiting");
 }
