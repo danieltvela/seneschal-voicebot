@@ -1,0 +1,6 @@
+mlx-audio
+fastapi>=0.111
+uvicorn[standard]>=0.29
+soundfile>=0.12
+numpy>=1.26
+setuptools<82

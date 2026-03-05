@@ -50,7 +50,7 @@ pub struct ModelConfig {
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            model_type: ModelType::LlamaOmni,
+            model_type: ModelType::LFM,
             model_path: "./models".to_string(),
             sample_rate: 16000,
             max_context_length: 4096,
