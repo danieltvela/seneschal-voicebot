@@ -128,7 +128,6 @@ The following open source Speech-to-Speech models can be run locally:
 ### Production-Ready Models
 
 - **[LFM2.5-Audio](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B)** - LFM2.5-Audio-1.5B is Liquid AI's updated end-to-end audio foundation model. Key improvements include a custom, LFM based audio detokenizer, llama.cpp compatible GGUFs for CPU inference, and better ASR and TTS performance.
-- 
 - **[LLaMA-Omni](https://github.com/ictnlp/llama-omni)** - Low-latency end-to-end speech interaction model built on Llama-3.1-8B-Instruct, aiming for GPT-4o level capabilities
 - **[LLaMA-Omni 2](https://arxiv.org/abs/2505.02625)** - Series of models (0.5B to 14B parameters) with autoregressive streaming speech synthesis, built on Qwen2.5, achieving sub-second response times
 - **[Moshi](https://github.com/kyutai-labs/moshi)** - Real-time voice LLM with full-duplex conversation support (can listen and respond simultaneously), uses dual-stream output architecture

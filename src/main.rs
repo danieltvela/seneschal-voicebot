@@ -111,9 +111,10 @@ async fn main() -> Result<()> {
                                     info!("S2S response text: {}", text);
                                 }
                                 info!(
-                                    "S2S audio response: {} samples @ {}Hz",
+                                    "S2S audio response: {} samples @ {}Hz: {}",
                                     response.audio.len(),
-                                    response.sample_rate
+                                    response.sample_rate,
+                                    response.output_text.unwrap_or("None".to_string())
                                 );
                             }
                             Err(e) => error!("S2S processing error: {}", e),
