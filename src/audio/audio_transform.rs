@@ -53,7 +53,7 @@ impl AudioTransformer {
         Ok(Self {
             target_sample_rate: config.sample_rate,
             target_channels: config.channels,
-            target_bit_depth: config.bit_depth,
+            target_bit_depth: 16,
             resampler,
             source_sample_rate,
             source_channels,

@@ -7,17 +7,11 @@ edition = "2024"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# Audio capture
+# Audio capture / playback
 cpal = "0.17"
 
 # Audio resampling
 rubato = "0.15"
-
-# WebSocket client
-tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
-futures-util = "0.3"
-url = "2.3"
-rand = "0.10.0"
 
 # Environment and configuration
 dotenvy = "0.15"
@@ -30,28 +24,28 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
 
-# Serialization (for potential message framing)
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Async channels
+# Async channels and futures
 async-channel = "2"
-async-trait = "0.1.89"
+async-trait = "0.1"
+futures-util = "0.3"
 
 # DB
-chrono = { version = "0.4.44", features = ["serde"] }
-sqlx = { version = "=0.8.6", features = ["sqlite"] }
-rusqlite = "0.32.1"
-uuid = { version = "1.21.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "=0.8.6", features = ["sqlite", "runtime-tokio-native-tls"] }
+uuid = { version = "1", features = ["v4"] }
 
-# Tools
-sysinfo = "0.38.3"
+# Voice Activity Detection (Silero)
+voice_activity_detector = "0.2"
 
-# Voice Activity Detection
-voice_activity_detector = "0.2.1"
+# HTTP client for LLM streaming (SSE)
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
-# HTTP client for LFM API
-reqwest = { version = "0.12", features = ["json"] }
+# STT — whisper.cpp embedded
+whisper-rs = "0.14"
 
-# Base64 encoding for audio payloads
-base64 = "0.22"
+# Sentence boundary detection for TTS streaming
+regex = "1"
