@@ -26,55 +26,92 @@ cargo test -p voicebot <test_name>
 
 ## Architecture
 
-Voicebot is a mono-user voice AI chatbot in Rust using Speech-to-Speech (S2S) models. Data flows:
+Voicebot is a mono-user voice AI chatbot in Rust using a streaming STT→LLM→TTS pipeline.
+All components run in a single process connected by tokio channels (no inter-service WebSockets).
 
-1. **Input**: `Microphone → AudioCapture (CPAL) → VAD → AudioBuffer → SessionManager → S2SAdapter → Model`
-2. **Tool execution**: `S2S Model → ToolRouter → ToolRegistry | McpServer | AgentManager → result back to model`
-3. **Output**: `Model → AudioTransformer (resampling) → AudioOutput → Speaker`
-4. **Persistence**: `SessionManager ↔ SQLite (sqlx, async, connection pool)`
+### Data flow
+
+```
+Microphone
+  → AudioCapture (CPAL)
+  → VAD (Silero, voice_activity_detector crate)
+  → STT (whisper-rs, embedded whisper.cpp)
+      partial transcripts accumulated in-memory
+  → LLM client (llama.cpp HTTP, streaming SSE, cache_prompt=true)
+      tokens streamed as they arrive
+  → SentenceSplitter (buffer until punctuation boundary)
+  → TTS (piper-rs, embedded Piper ONNX)
+      synthesizes sentence by sentence
+  → AudioOutput (CPAL speaker)
+```
+
+### Key design decisions
+
+- **Single binary**: no inter-service communication; all stages connected by `tokio::sync` channels
+- **STT→LLM latency trick**: partial Whisper transcripts are accumulated in a `String`; when VAD signals end-of-speech the full transcript is sent to llama.cpp with `cache_prompt=true`. The KV-cache already holds previous turns, so only the new user turn needs prefill.
+- **LLM→TTS streaming**: LLM tokens arrive via SSE and are buffered until a sentence boundary (`.`, `!`, `?`, `;`, `:`) — then that sentence is synthesized immediately. While sentence N plays, sentence N+1 is being generated and synthesized.
+- **Language**: Spanish by default, English supported. Configurable via `VOICEBOT_LANGUAGE` env var (`es` or `en`). Affects both Whisper transcription hint and the Piper voice model selected.
+- **LLM backend**: external llama.cpp server (`llama-server`). The voicebot maintains the accumulated prompt string in-memory and passes `slot_id` + `cache_prompt=true` for KV reuse across turns (mirrors `stateful-llm-server.py` from the butler project but in-process).
 
 ### Key Modules
 
-**`src/audio/`** — Audio pipeline
+**`src/audio/`** — Audio pipeline (keep as-is)
 - `audio_capture.rs`: CPAL microphone input; normalizes I16/U16/F32 to f32 (-1.0..1.0)
-- `vad.rs`: Energy-threshold VAD; emits `SpeechStart/Speech/SpeechEnd/Silence` states
+- `vad.rs`: Silero VAD; emits `SpeechStart/Speech/SpeechEnd/Silence`; 8 speech frames to start (~250ms), 48 silence frames to end (~1.5s)
 - `buffer.rs`: Circular VecDeque buffer accumulating samples with duration tracking
-- `audio_transform.rs`: Rubato-based resampling between sample rates
-- `output.rs`: CPAL speaker playback
+- `audio_transform.rs`: Rubato-based resampling (FftFixedIn, 1024-chunk)
+- `output.rs`: CPAL speaker playback with condvar drain (400ms silence tail to avoid CoreAudio cutoff)
 
-**`src/s2s/`** — Speech-to-Speech model layer (Adapter pattern)
-- `adapter.rs`: `S2SAdapter` dispatches to pluggable models via the `S2SModel` trait
-- `models/`: Stubs for LLaMA-Omni, Moshi, Ultravox, LFM2.5-Audio
-- `S2SRequest` carries `audio: Vec<f32>`, `context`, optional `tools`; `S2SResponse` returns audio + optional `tool_calls`
+**`src/stt/`** — Speech-to-Text (to be implemented)
+- `whisper.rs`: whisper-rs FFI wrapper; transcribes f32 mono 16kHz audio; returns text + detected language
+- Language hint passed to whisper for faster decoding when language is known
 
-**`src/tools/`** — Tool execution (Router → Registry pattern)
-- `router.rs`: `ToolRouter` dispatches calls in priority order: Built-in → MCP → Agents
-- `registry.rs`: `ToolRegistry` with `Tool` trait for built-in tools
-- `builtin/`: `FileOperations`, `WebSearch`, `SystemInfo`
+**`src/llm/`** — LLM client (to be implemented)
+- `client.rs`: async HTTP client to llama.cpp `/completion` endpoint
+- `session.rs`: `LlmSession` struct holding `accumulated_prompt: String` and `slot_id: u8`; appends user/assistant turns in ChatML format (`<|im_start|>role\n...<|im_end|>\n`)
+- Streams SSE tokens via `reqwest` with `stream` feature; yields `String` tokens through a tokio channel
 
-**`src/session/`** — Conversation state
-- `manager.rs`: `SessionManager` with UUID-based sessions; persists to DB
-- `context.rs`: `ConversationContext` holding message history; roles: User/Assistant/System/Tool
+**`src/tts/`** — Text-to-Speech (to be implemented)
+- `piper.rs`: piper-rs wrapper; loads ONNX voice model at startup; synthesizes `&str` → `Vec<i16>` PCM at model sample rate (22050 Hz for medium models)
+- `sentence_splitter.rs`: buffers incoming token stream; emits complete sentences on punctuation boundaries (`. ! ? ; :` followed by space or end)
 
-**`src/mcp/`** — Model Context Protocol integration
-- `server.rs`: `McpServer` manages MCP tools separately from built-ins
+**`src/session/`** — Conversation state (simplified)
+- `context.rs`: `ConversationContext` with message history (User/Assistant/System roles)
 
-**`src/agents/`** — External agent integrations
-- `manager.rs`: `AgentManager` (currently supports OpenClaw)
+**`src/config.rs`** — Environment-based config
+- `AUDIO_SAMPLE_RATE` (default 16000), `AUDIO_CHANNELS` (default 1), `AUDIO_DEVICE`, `LIST_AUDIO_DEVICES`
+- `VOICEBOT_LANGUAGE` — `es` (default) or `en`
+- `LLM_URL` — llama.cpp server URL (default `http://localhost:8080`)
+- `LLM_SLOT_ID` — llama.cpp KV-cache slot (default 0)
+- `LLM_MAX_TOKENS` — max tokens per response (default 400)
+- `LLM_SYSTEM_PROMPT` — system prompt text
+- `WHISPER_MODEL` — path to whisper GGML model file
+- `PIPER_MODEL_ES` — path to Spanish Piper ONNX model
+- `PIPER_MODEL_EN` — path to English Piper ONNX model
 
-**`src/db/`** — SQLite persistence (sqlx, max 5 connections, auto-migration on startup)
-- Tables: `sessions`, `messages`, `config`
+### Legacy modules (to be removed or gutted)
 
-**`src/config.rs`** — Environment-based config; key vars: `AUDIO_SAMPLE_RATE` (default 16000), `AUDIO_CHANNELS` (default 1), `AUDIO_DEVICE`, `LIST_AUDIO_DEVICES`
+The following were part of the S2S approach and will be replaced:
+- `src/s2s/` — S2S adapter + LFM model (replaced by `src/stt/` + `src/llm/`)
+- `src/tools/`, `src/mcp/`, `src/agents/` — not needed for MVP
+- `src/db/` — SQLite persistence (conversation state is now in-memory)
+- `src/websocket_client.rs` — no longer needed
+- `provider/` — Python LFM2.5-Audio HTTP server (no longer used)
 
 ### Design Patterns
-- **Adapter pattern** for S2S models — implement `S2SModel` trait to add a new model
-- **Registry + Router** for tools — register via `ToolRegistry`, routing priority: builtin → MCP → agents
 - **`anyhow::Result`** for error propagation with context; `thiserror` for custom error types
 - **`tracing`** for structured logging throughout
+- **tokio channels** (`mpsc`, `broadcast`) for inter-stage communication within the pipeline
+- Cancellation via `CancellationToken` (tokio-util) — barge-in support in future
 
 ### Testing Approach
-- Use in-memory SQLite for DB tests: `"file:memdb?mode=memory&cache=shared"`
 - Generate synthetic audio (sine waves / silence) for VAD and buffer tests
-- Mock the `S2SModel` trait for adapter tests
-- See `testing_strategy.md` for the full 5-layer integration test plan
+- Mock LLM/TTS via trait objects for pipeline integration tests
+- Whisper and Piper tests require model files; skip in CI if not present (`#[ignore]`)
+
+### Reference project
+`/Users/danielvela/projects/ai/butler` — the working Python equivalent.
+Key files to reference:
+- `llm/zosia/stateful-llm-server.py` — stateful LLM session + llama.cpp KV-cache pattern
+- `text-to-speech/main.py` — sentence splitting + Piper streaming pattern
+- `speech-to-text/singleuser/main.py` — faster-whisper + VAD integration pattern
