@@ -6,8 +6,8 @@ servers:
       vllm:
         port: 8005
         token: ""
-        models:
-          - Qwen3.6-27B-FP8
+        models: []
+          # - Qwen3.6-27B-FP8
           # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
@@ -15,8 +15,8 @@ servers:
       llama-server-amd:
         port: 8001
         token: ""
-        models:
-          - Qwen3.6-35B-A3B-UD-IQ4_XS
+        models: []
+          # - Qwen3.6-35B-A3B-UD-IQ4_XS
   macmini:
     host: "http://mac-mini.local"
     location: "mac-mini"
@@ -31,10 +31,16 @@ servers:
       mlx-lm:
         port: 8080
         token: ""
-        models: 
+        models:
           - "mlx-community/gemma-4-26b-a4b-it-4bit"
           # - "mlx-community/Qwen3.6-35B-A3B-4bit" 
           # - "lmstudio-community/GLM-4.7-Flash-MLX-4bit"
+      ollama:
+        port: 11434
+        token: ""
+        models: []
+          # - gemma4:26b-nvfp4
+          # - gemma4:26b-a4b-it-q4_K_M
 
 # Evaluator model used to judge quality benchmark responses.
 # This model scores each fixture response against a rubric and is NOT itself
