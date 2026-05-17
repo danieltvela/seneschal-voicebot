@@ -37,6 +37,7 @@ futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "=0.8.6", features = ["sqlite", "runtime-tokio-native-tls"] }
 uuid = { version = "1", features = ["v4"] }
+dashmap = "6"
 
 # HTTP client for LLM streaming (SSE)
 reqwest = { version = "0.12", features = ["json", "stream"] }

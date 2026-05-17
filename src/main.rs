@@ -54,8 +54,8 @@ use crate::agents::AgentRegistry;
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, WhisperSTTVAD, WhisperSTTVADConfig};
 use crate::tools::{
-    ActiveAcpTask, AcpWriter, ConversationMode, CurrentTimeTool,
-    JsonRpcMessage, McpToolProxy, OpenAppTool, ReadClipboardTool, RunAgentTool, RunShellTool,
+    ActiveTask, AcpWriter, ConversationMode, CurrentTimeTool,
+    McpToolProxy, OpenAppTool, PendingInteractionEntry, ReadClipboardTool, RunAgentTool, RunShellTool,
     SetClipboardTool, SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 use crate::tts::TtsEngine;
@@ -240,22 +240,12 @@ async fn async_main() -> Result<()> {
     let agent_registry = AgentRegistry::from_env();
     let agent_section = agent_registry.system_prompt_section();
 
-    // Per-agent ACP state maps.
-    let mut acp_writers: std::collections::HashMap<String, Arc<tokio::sync::Mutex<Option<AcpWriter>>>> = std::collections::HashMap::new();
-    let mut acp_inbounds: std::collections::HashMap<String, Arc<tokio::sync::Mutex<Option<mpsc::Receiver<JsonRpcMessage>>>>> = std::collections::HashMap::new();
-    let mut active_tasks: std::collections::HashMap<String, Arc<tokio::sync::Mutex<Option<ActiveAcpTask>>>> = std::collections::HashMap::new();
-
     for agent in &agent_registry.agents {
-        let writer_arc: Arc<tokio::sync::Mutex<Option<AcpWriter>>> = Arc::new(tokio::sync::Mutex::new(None));
-        let inbound_arc: Arc<tokio::sync::Mutex<Option<mpsc::Receiver<JsonRpcMessage>>>> = Arc::new(tokio::sync::Mutex::new(None));
-        let task_arc: Arc<tokio::sync::Mutex<Option<ActiveAcpTask>>> = Arc::new(tokio::sync::Mutex::new(None));
-
         info!(target: "voicebot", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
+        let task_map: Arc<dashmap::DashMap<String, ActiveTask>> = Arc::new(dashmap::DashMap::new());
         let mut run_agent_tool = RunAgentTool::new(
             agent.clone(),
-            Arc::clone(&writer_arc),
-            Arc::clone(&inbound_arc),
-            Arc::clone(&task_arc),
+            task_map,
             shared_history.clone(),
             proactive_tx.clone(),
         );
@@ -264,10 +254,6 @@ async fn async_main() -> Result<()> {
             info!(target: "voicebot", "run_{} result synthesis via secondary LLM enabled", agent.name);
         }
         tool_registry.register(run_agent_tool);
-
-        acp_writers.insert(agent.name.clone(), writer_arc);
-        acp_inbounds.insert(agent.name.clone(), inbound_arc);
-        active_tasks.insert(agent.name.clone(), task_arc);
     }
 
     // ── ACP pre-warm (per-agent) ─────────────────────────────────────────────
@@ -277,8 +263,6 @@ async fn async_main() -> Result<()> {
         }
         let agent_name = agent.name.clone();
         let acp_cmd = agent.acp_command.clone();
-        let writer_arc = acp_writers.get(&agent.name).unwrap().clone();
-        let inbound_arc = acp_inbounds.get(&agent.name).unwrap().clone();
 
         tokio::spawn(async move {
             info!(target: "agent", "ACP pre-warm [{}]: spawning {}…", agent_name, acp_cmd);
@@ -294,34 +278,20 @@ async fn async_main() -> Result<()> {
                 Ok(sid) => info!(target: "agent", "ACP pre-warm [{}]: session ready (sid={sid})", agent_name),
                 Err(e)  => { warn!(target: "agent", "ACP pre-warm [{}]: init failed: {e}", agent_name); return; }
             }
-            *writer_arc.lock().await  = Some(writer);
-            *inbound_arc.lock().await = Some(rx);
 
-            let sid = {
-                let w = writer_arc.lock().await;
-                w.as_ref().and_then(|w| w.session_id.clone()).unwrap_or_default()
+            let sid = writer.session_id.as_ref().unwrap().clone();
+            let prompt_id = match writer.send_prompt(&sid, "Responde solo: OK").await {
+                Ok(id) => id,
+                Err(e) => { warn!(target: "agent", "ACP pre-warm [{}]: prompt failed: {e}", agent_name); return; }
             };
-            if sid.is_empty() {
-                return;
-            }
-
-            info!(target: "agent", "ACP pre-warm [{}]: sending warmup prompt…", agent_name);
-            let prompt_id = {
-                let mut w = writer_arc.lock().await;
-                w.as_mut().unwrap().send_prompt(&sid, "Responde solo: OK").await.unwrap_or(0)
-            };
-            let mut taken_rx = inbound_arc.lock().await.take();
-            if let Some(rx) = taken_rx.as_mut() {
-                loop {
-                    match tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await {
-                        Ok(Some(crate::tools::JsonRpcMessage::Response { id, .. })) if id == prompt_id => break,
-                        Ok(None) => { warn!(target: "agent", "ACP pre-warm [{}]: channel closed during warmup", agent_name); return; }
-                        Ok(_) => {}
-                        Err(_) => { warn!(target: "agent", "ACP pre-warm [{}]: warmup timed out", agent_name); return; }
-                    }
+            loop {
+                match tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await {
+                    Ok(Some(crate::tools::JsonRpcMessage::Response { id, .. })) if id == prompt_id => break,
+                    Ok(None) => { warn!(target: "agent", "ACP pre-warm [{}]: channel closed during warmup", agent_name); return; }
+                    Ok(_) => {}
+                    Err(_) => { warn!(target: "agent", "ACP pre-warm [{}]: warmup timed out", agent_name); return; }
                 }
             }
-            *inbound_arc.lock().await = taken_rx;
             info!(target: "agent", "ACP pre-warm [{}]: warmup complete", agent_name);
         });
     }
@@ -650,7 +620,8 @@ async fn async_main() -> Result<()> {
     let mut pending_agent_results: std::collections::VecDeque<(String, String)> =
         std::collections::VecDeque::new();
     let mut current_agent_announcement: Option<(String, String)> = None;
-    let mut pending_agent_question: Option<tokio::sync::oneshot::Sender<String>> = None;
+    let mut pending_agent_questions: std::collections::VecDeque<PendingInteractionEntry> =
+        std::collections::VecDeque::new();
 
     let utterance_epoch = Arc::new(AtomicU64::new(0));
 
@@ -902,7 +873,7 @@ async fn async_main() -> Result<()> {
                                 }
                             }
                             ProactiveEvent::InferenceDaemon { .. } => {}
-                            ProactiveEvent::AgentQuestion { question, options, response_tx } => {
+                            ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
                                 if pipeline_state_rx.borrow().is_busy() {
                                     events.barge_in_tx.send(0).ok();
                                     play_cancel.store(true, Ordering::SeqCst);
@@ -912,10 +883,21 @@ async fn async_main() -> Result<()> {
                                         pending_agent_results.push_front(announcement);
                                     }
                                 }
-                                pending_agent_question = Some(response_tx);
-                                let opts_str = options.join(" / ");
+                                let entry = PendingInteractionEntry {
+                                    task_id,
+                                    agent_name,
+                                    server_request_id: 0,
+                                    question,
+                                    options,
+                                    response_tx,
+                                };
+                                pending_agent_questions.push_back(entry);
+                                let opts_str = match pending_agent_questions.front() {
+                                    Some(entry) => entry.options.join(" / "),
+                                    None => String::new(),
+                                };
                                 let prompt = i18n::get_notification("acp_permission", &config.language)
-                                    .replace("{question}", &question)
+                                    .replace("{question}", &pending_agent_questions.front().map(|e| e.question.clone()).unwrap_or_default())
                                     .replace("{opts_str}", &opts_str);
                                 transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
                             }
@@ -1077,13 +1059,15 @@ async fn async_main() -> Result<()> {
                             let ambient_auto   = mode_snapshot == ConversationMode::Ambient;
                             let wake_word_check = config.wake_word.clone();
 
-                            // ── ACP permission gate ───────────────────────────────
-                            if let Some(resp_tx) = pending_agent_question.take() {
+                            // ── ACP permission gate (FIFO queue) ──────────────────
+                            if let Some(entry) = pending_agent_questions.pop_front() {
                                 let audio_for_task = audio.clone();
                                 let wm = config.whisper_model.clone();
                                 let vm = config.vad_model.clone();
                                 let lang = config.language.clone();
                                 let sms = config.vad_silence_ms;
+
+                                info!(target: "acp", "Answering pending question for task={} agent={}", entry.task_id, entry.agent_name);
 
                                 tokio::spawn(async move {
                                     let t0 = Instant::now();
@@ -1101,7 +1085,7 @@ async fn async_main() -> Result<()> {
                                     info!(target: "acp", "STT for permission question took {}ms", t0.elapsed().as_millis());
                                     let outcome = map_answer_to_outcome(&answer);
                                     info!(target: "acp", "Permission answer: {:?} → {}", answer, outcome);
-                                    let _ = resp_tx.send(outcome);
+                                    let _ = entry.response_tx.send(outcome);
                                 });
                                 continue;
                             }

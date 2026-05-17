@@ -2,11 +2,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use super::Tool;
 use crate::agents::{AgentConfig, ProactiveEvent};
@@ -229,9 +231,7 @@ async fn synthesize_agent_result(
 /// - `run_<name>: status` — reports whether the ACP agent is busy.
 pub struct RunAgentTool {
     config: AgentConfig,
-    acp_writer: Arc<Mutex<Option<AcpWriter>>>,
-    acp_inbound: Arc<Mutex<Option<mpsc::Receiver<JsonRpcMessage>>>>,
-    active_task: Arc<Mutex<Option<ActiveAcpTask>>>,
+    task_map: Arc<DashMap<String, ActiveTask>>,
     history: Arc<RwLock<String>>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     synthesis_client: Option<std::sync::Arc<OpenAIClient>>,
@@ -240,17 +240,13 @@ pub struct RunAgentTool {
 impl RunAgentTool {
     pub fn new(
         config: AgentConfig,
-        acp_writer: Arc<Mutex<Option<AcpWriter>>>,
-        acp_inbound: Arc<Mutex<Option<mpsc::Receiver<JsonRpcMessage>>>>,
-        active_task: Arc<Mutex<Option<ActiveAcpTask>>>,
+        task_map: Arc<DashMap<String, ActiveTask>>,
         history: Arc<RwLock<String>>,
         proactive_tx: mpsc::Sender<ProactiveEvent>,
     ) -> Self {
         Self {
             config,
-            acp_writer,
-            acp_inbound,
-            active_task,
+            task_map,
             history,
             proactive_tx,
             synthesis_client: None,
@@ -265,26 +261,45 @@ impl RunAgentTool {
 
     /// Cancel the in-flight ACP task, if any.
     async fn cancel(&self) -> String {
-        let mut guard = self.active_task.lock().await;
-        if let Some(task) = guard.take() {
-            let _ = task.cancel_tx.send(());
-            let mut w_guard = self.acp_writer.lock().await;
-            if let Some(w) = w_guard.as_mut() {
-                let _ = w.send_cancel(task.prompt_request_id).await;
+        // Clone keys first to avoid holding read lock during remove (deadlock)
+        let keys: Vec<String> = self.task_map.iter().map(|e| e.key().clone()).collect();
+        if keys.len() == 1 {
+            let task_id = keys[0].clone();
+            if let Some((_k, active)) = self.task_map.remove(&task_id) {
+                let _ = active.cancel_handle.send(());
             }
-            "[Tarea del agente cancelada.]".to_string()
+            info!(target: "agent", "RunAgentTool(acp): task cancelled: {}", task_id);
+            "[Tarea cancelada.]".to_string()
+        } else if keys.is_empty() {
+            "[No hay ninguna tarea en curso para cancelar.]".to_string()
         } else {
-            "[No hay ninguna tarea del agente en progreso.]".to_string()
+            format!(
+                "[Hay {} tareas activas: {}. Cancela con el ID específico si es necesario.]",
+                keys.len(),
+                keys.join(", ")
+            )
         }
     }
 
     /// Report whether the ACP agent is currently busy.
     async fn status(&self) -> String {
-        let guard = self.active_task.lock().await;
-        if guard.is_some() {
-            "[El agente está trabajando en una tarea.]".to_string()
-        } else {
+        // Clone data to avoid holding read lock
+        let entries: Vec<(String, std::time::Instant)> = self.task_map
+            .iter()
+            .map(|e| (e.key().clone(), e.value().created_at))
+            .collect();
+        if entries.is_empty() {
             "[El agente no tiene ninguna tarea activa.]".to_string()
+        } else {
+            let tasks: Vec<String> = entries
+                .iter()
+                .map(|(id, created)| format!("- {} ({}s)", id, created.elapsed().as_secs()))
+                .collect();
+            format!(
+                "[El agente tiene {} tarea(s) activa(s):\n{}]",
+                entries.len(),
+                tasks.join("\n")
+            )
         }
     }
 
@@ -315,104 +330,29 @@ impl RunAgentTool {
         "[Tarea delegada al agente. El resultado llegará en breve.]".to_string()
     }
 
-    /// ACP mode: send task to persistent ACP subprocess, deliver result proactively.
+    /// ACP mode: spawn a new ACP process per task, deliver result proactively.
     async fn run_acp(&self, task: String) -> String {
-        info!(target: "agent", "RunAgentTool(acp): task started: {:?}", task);
-        // Refuse if another task is already running.
-        {
-            let guard = self.active_task.lock().await;
-            if guard.is_some() {
-                warn!(target: "agent", "RunAgentTool(acp): rejected — another task already running");
-                return "[El agente ya tiene una tarea en progreso. Usa 'run_agent: cancel' para cancelarla primero.]"
-                    .to_string();
-            }
-        }
+        let task_id = Uuid::new_v4().to_string();
+        let task_id_return = task_id.clone();
+        info!(target: "agent", "RunAgentTool(acp): task started: {:?} (id={})", task, task_id);
 
         let query = build_agent_query(&self.history, &task, &self.config.instructions);
         let task_c = task.clone();
-        let acp_writer = Arc::clone(&self.acp_writer);
-        let acp_inbound = Arc::clone(&self.acp_inbound);
-        let active_task = Arc::clone(&self.active_task);
+        let task_map = Arc::clone(&self.task_map);
         let proactive_tx = self.proactive_tx.clone();
         let acp_command = self.config.acp_command.clone();
         let synthesis_client = self.synthesis_client.clone();
+        let agent_name = self.config.name.clone();
 
         tokio::spawn(async move {
-            // ── Lazily initialize the ACP process ────────────────────────────
-            let session_id = {
-                let mut w_guard = acp_writer.lock().await;
-                if w_guard.is_none() {
-                    match AcpWriter::spawn(&acp_command).await {
-                        Ok((mut writer, mut rx)) => {
-                            let cwd = std::env::current_dir()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            match writer.initialize(&mut rx, &cwd).await {
-                                Ok(sid) => {
-                                    *w_guard = Some(writer);
-                                    let mut rx_guard = acp_inbound.lock().await;
-                                    *rx_guard = Some(rx);
-                                    sid
-                                }
-                                Err(e) => {
-                                    let _ = proactive_tx
-                                        .send(ProactiveEvent::AgentResult {
-                                            task: task_c,
-                                            result: format!("ACP init error: {e}"),
-                                            tool_call_id: None,
-                                        })
-                                        .await;
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let _ = proactive_tx
-                                .send(ProactiveEvent::AgentResult {
-                                    task: task_c,
-                                    result: format!("ACP spawn error: {e}"),
-                                    tool_call_id: None,
-                                })
-                                .await;
-                            return;
-                        }
-                    }
-                } else {
-                    w_guard.as_ref().unwrap().session_id.clone().unwrap_or_default()
-                }
-            };
-
-            // ── Open session in Terminal ──────────────────────────────────────
-            {
-                let w_guard = acp_writer.lock().await;
-                if let Some(ref w) = *w_guard {
-                    w.open_session_in_terminal().await;
-                }
-            }
-
-            // ── Send prompt ───────────────────────────────────────────────────
-            let prompt_request_id = {
-                let mut guard = acp_writer.lock().await;
-                if let Some(w) = guard.as_mut() {
-                    match w.send_prompt(&session_id, &query).await {
-                        Ok(id) => id,
-                        Err(e) => {
-                            let _ = proactive_tx
-                                .send(ProactiveEvent::AgentResult {
-                                    task: task_c,
-                                    result: format!("ACP send error: {e}"),
-                                    tool_call_id: None,
-                                })
-                                .await;
-                            return;
-                        }
-                    }
-                } else {
+            // ── Spawn ACP process ────────────────────────────────────────────
+            let (mut writer, mut rx) = match AcpWriter::spawn(&acp_command).await {
+                Ok(pair) => pair,
+                Err(e) => {
                     let _ = proactive_tx
                         .send(ProactiveEvent::AgentResult {
                             task: task_c,
-                            result: "ACP: writer not initialized.".to_string(),
+                            result: format!("ACP spawn error: {e}"),
                             tool_call_id: None,
                         })
                         .await;
@@ -420,55 +360,101 @@ impl RunAgentTool {
                 }
             };
 
-            // ── Register active task ──────────────────────────────────────────
+            // ── Initialize ───────────────────────────────────────────────────
+            let cwd = std::env::current_dir()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let session_id = match writer.initialize(&mut rx, &cwd).await {
+                Ok(sid) => sid,
+                Err(e) => {
+                    let _ = writer.kill().await;
+                    let _ = proactive_tx
+                        .send(ProactiveEvent::AgentResult {
+                            task: task_c,
+                            result: format!("ACP init error: {e}"),
+                            tool_call_id: None,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // ── Open session in Terminal ──────────────────────────────────────
+            writer.open_session_in_terminal().await;
+
+            // ── Send prompt ───────────────────────────────────────────────────
+            let prompt_request_id = match writer.send_prompt(&session_id, &query).await {
+                Ok(id) => id,
+                Err(e) => {
+                    let _ = writer.kill().await;
+                    let _ = proactive_tx
+                        .send(ProactiveEvent::AgentResult {
+                            task: task_c,
+                            result: format!("ACP send error: {e}"),
+                            tool_call_id: None,
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // ── Register active task in task_map ─────────────────────────────
             let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-            {
-                let mut at = active_task.lock().await;
-                *at = Some(ActiveAcpTask {
-                    session_id: session_id.clone(),
-                    prompt_request_id,
-                    cancel_tx,
-                });
-            }
+            let active = ActiveTask {
+                task_id: task_id.clone(),
+                agent_name: agent_name.clone(),
+                session_id: session_id.clone(),
+                prompt_request_id,
+                task_text: task_c.clone(),
+                state: TaskState::Running,
+                created_at: std::time::Instant::now(),
+                last_progress: None,
+                accumulated_text: String::new(),
+                cancel_handle: cancel_tx,
+            };
+            task_map.insert(task_id.clone(), active);
 
             // ── Collect responses ─────────────────────────────────────────────
-            let mut taken_rx = {
-                let mut rx_guard = acp_inbound.lock().await;
-                rx_guard.take()
-            };
-            let result = if let Some(rx) = taken_rx.as_mut() {
-                collect_acp_response(
-                    Arc::clone(&acp_writer),
-                    rx,
-                    proactive_tx.clone(),
-                    session_id,
-                    prompt_request_id,
-                    cancel_rx,
-                )
-                .await
-            } else {
-                "ACP: inbound channel not initialized.".to_string()
-            };
-            // Return the rx for reuse.
+            let acp_writer_for_collect: Arc<Mutex<Option<AcpWriter>>> = Arc::new(Mutex::new(Some(writer)));
+
+            let result = collect_acp_response(
+                Arc::clone(&acp_writer_for_collect),
+                &mut rx,
+                proactive_tx.clone(),
+                session_id.clone(),
+                prompt_request_id,
+                cancel_rx,
+                task_id.clone(),
+                agent_name.clone(),
+            )
+            .await;
+
+            // ── Cleanup ──────────────────────────────────────────────────────
             {
-                let mut rx_guard = acp_inbound.lock().await;
-                *rx_guard = taken_rx;
+                let mut guard = acp_writer_for_collect.lock().await;
+                if let Some(mut w) = guard.take() {
+                    let _ = w.kill().await;
+                }
             }
 
-            { active_task.lock().await.take(); }
+            if let Some(mut entry) = task_map.get_mut(&task_id) {
+                entry.state = TaskState::Completed;
+            }
+            task_map.remove(&task_id);
 
-            info!(target: "acp", "Agent task complete — sending result ({} chars)", result.len());
+            info!(target: "acp", "Agent task complete [{}] — sending result ({} chars)", task_id, result.len());
             let final_result = synthesize_agent_result(&task_c, result, synthesis_client.as_deref()).await;
             if proactive_tx
                 .send(ProactiveEvent::AgentResult { task: task_c, result: final_result, tool_call_id: None })
                 .await
                 .is_err()
             {
-                warn!(target: "acp", "Failed to deliver agent result: main loop channel closed");
+                warn!("RunAgentTool(acp): failed to deliver agent result: main loop channel closed");
             }
         });
 
-        "[Tarea ACP delegada al agente. El resultado llegará en breve.]".to_string()
+        format!("[Tarea ACP delegada al agente ({}). El resultado llegará en breve.]", task_id_return)
     }
 }
 
@@ -982,6 +968,69 @@ pub struct ActiveAcpTask {
     pub cancel_tx: oneshot::Sender<()>,
 }
 
+// ── Per-task ACP runtime types ────────────────────────────────────────────────
+
+/// Lifecycle state of a delegated agent task.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TaskState {
+    Running,
+    AwaitingUserInput,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+/// Full state for a single delegated task. Each task owns its own ACP process.
+#[derive(Debug)]
+pub struct ActiveTask {
+    pub task_id: String,
+    pub agent_name: String,
+    pub session_id: String,
+    pub prompt_request_id: u64,
+    pub task_text: String,
+    pub state: TaskState,
+    pub created_at: std::time::Instant,
+    pub last_progress: Option<String>,
+    pub accumulated_text: String,
+    pub cancel_handle: oneshot::Sender<()>,
+}
+
+/// Handle returned to the caller when a task is spawned.
+/// Gives the caller access to the task's ACP writer, message receiver, and cancel channel.
+pub struct AgentTaskHandle {
+    pub task_id: String,
+    pub writer: AcpWriter,
+    pub rx: mpsc::Receiver<JsonRpcMessage>,
+    pub session_id: String,
+    pub prompt_request_id: u64,
+    pub state: Arc<std::sync::atomic::AtomicU8>,
+    pub cancel_handle: oneshot::Sender<()>,
+    pub created_at: std::time::Instant,
+}
+
+impl std::fmt::Debug for AgentTaskHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTaskHandle")
+            .field("task_id", &self.task_id)
+            .field("session_id", &self.session_id)
+            .field("prompt_request_id", &self.prompt_request_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Entry for an agent-initiated interaction that requires user input.
+/// Stored until the next user utterance arrives, at which point the answer
+/// is sent back via `response_tx`.
+#[derive(Debug)]
+pub struct PendingInteractionEntry {
+    pub task_id: String,
+    pub agent_name: String,
+    pub server_request_id: u64,
+    pub question: String,
+    pub options: Vec<String>,
+    pub response_tx: tokio::sync::oneshot::Sender<String>,
+}
+
 // ── collect_acp_response ──────────────────────────────────────────────────────
 
 /// Drive the ACP inbound message loop for one task.
@@ -995,6 +1044,8 @@ async fn collect_acp_response(
     _session_id: String,
     prompt_request_id: u64,
     mut cancel_rx: oneshot::Receiver<()>,
+    task_id: String,
+    agent_name: String,
 ) -> String {
     let mut accumulated_text = String::new();
     let mut progress: Vec<String> = Vec::new();
@@ -1093,6 +1144,8 @@ async fn collect_acp_response(
                 let (resp_tx, resp_rx) = oneshot::channel::<String>();
                 let _ = proactive_tx
                     .send(ProactiveEvent::AgentQuestion {
+                        task_id: task_id.clone(),
+                        agent_name: agent_name.clone(),
                         question: description,
                         options: options.clone(),
                         response_tx: resp_tx,
@@ -1170,25 +1223,17 @@ mod tests {
         let config = test_agent_config("hermes", "cli", Some(command.to_string()));
         RunAgentTool::new(
             config,
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
+            Arc::new(DashMap::new()),
             history,
             tx,
         )
     }
 
-    fn cancel_tool(
-        active_task: Arc<Mutex<Option<ActiveAcpTask>>>,
-        acp_writer: Arc<Mutex<Option<AcpWriter>>>,
-        tx: mpsc::Sender<ProactiveEvent>,
-    ) -> RunAgentTool {
+    fn acp_tool(tx: mpsc::Sender<ProactiveEvent>) -> RunAgentTool {
         let config = test_agent_config("hermes", "acp", None);
         RunAgentTool::new(
             config,
-            acp_writer,
-            Arc::new(Mutex::new(None)),
-            active_task,
+            Arc::new(DashMap::new()),
             empty_history(),
             tx,
         )
@@ -1388,9 +1433,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_returns_no_task_when_idle() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
-        let active_task = Arc::new(Mutex::new(None));
-        let acp_writer = Arc::new(Mutex::new(None));
-        let tool = cancel_tool(active_task, acp_writer, tx);
+        let tool = acp_tool(tx);
         let result = tool.run(r#"{"task": "cancel"}"#).await;
         assert!(result.contains("No hay"), "got: {result:?}");
     }
@@ -1398,14 +1441,24 @@ mod tests {
     #[tokio::test]
     async fn cancel_fires_cancel_channel() {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        let active_task = Arc::new(Mutex::new(Some(ActiveAcpTask {
+        let task_map: Arc<DashMap<String, ActiveTask>> = Arc::new(DashMap::new());
+        let active = ActiveTask {
+            task_id: "t1".to_string(),
+            agent_name: "hermes".to_string(),
             session_id: "s1".to_string(),
             prompt_request_id: 2,
-            cancel_tx,
-        })));
-        let acp_writer: Arc<Mutex<Option<AcpWriter>>> = Arc::new(Mutex::new(None));
+            task_text: "test task".to_string(),
+            state: TaskState::Running,
+            created_at: std::time::Instant::now(),
+            last_progress: None,
+            accumulated_text: String::new(),
+            cancel_handle: cancel_tx,
+        };
+        task_map.insert("t1".to_string(), active);
+
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
-        let tool = cancel_tool(active_task, acp_writer, tx);
+        let config = test_agent_config("hermes", "acp", None);
+        let tool = RunAgentTool::new(config, task_map, empty_history(), tx);
         let result = tool.run(r#"{"task": "cancel"}"#).await;
         assert!(result.contains("cancelada"), "got: {result:?}");
         assert!(cancel_rx.try_recv().is_ok(), "cancel channel should have fired");
@@ -1414,9 +1467,7 @@ mod tests {
     #[tokio::test]
     async fn status_returns_idle_when_no_task() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
-        let active_task = Arc::new(Mutex::new(None));
-        let acp_writer = Arc::new(Mutex::new(None));
-        let tool = cancel_tool(active_task, acp_writer, tx);
+        let tool = acp_tool(tx);
         let result = tool.run(r#"{"task": "status"}"#).await;
         assert!(result.contains("no tiene"), "got: {result:?}");
     }
@@ -1643,6 +1694,8 @@ mod integration_tests {
                 session_id,
                 prompt_id,
                 cancel_rx,
+                String::new(),
+                String::new(),
             ),
         )
         .await

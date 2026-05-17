@@ -20,7 +20,7 @@ pub use current_time::CurrentTimeTool;
 pub use mcp_tool::McpToolProxy;
 pub use open_app::OpenAppTool;
 pub use run_agent::{
-    format_history, ActiveAcpTask, AcpWriter, JsonRpcMessage, RunAgentTool,
+    format_history, ActiveTask, AcpWriter, JsonRpcMessage, PendingInteractionEntry, RunAgentTool,
 };
 pub use run_shell::RunShellTool;
 pub use take_screenshot::TakeScreenshotTool;

@@ -23,6 +23,8 @@ pub enum ProactiveEvent {
     /// the question, captures the next user utterance, and routes the answer
     /// back via `response_tx`.
     AgentQuestion {
+        task_id: String,
+        agent_name: String,
         question: String,
         options: Vec<String>,
         /// One-shot channel: send the ACP outcome string ("allow_once" / "reject_once")
@@ -35,8 +37,8 @@ impl std::fmt::Debug for ProactiveEvent {
         match self {
             Self::AgentResult { task, .. } => write!(f, "AgentResult({task:?})"),
             Self::InferenceDaemon { message } => write!(f, "InferenceDaemon({message:?})"),
-            Self::AgentQuestion { question, options, .. } => {
-                write!(f, "AgentQuestion({question:?}, {options:?})")
+            Self::AgentQuestion { task_id, agent_name, question, options, .. } => {
+                write!(f, "AgentQuestion(task={task_id}, agent={agent_name}, q={question:?}, opts={options:?})")
             }
         }
     }
