@@ -56,7 +56,7 @@ use crate::stt::{SpeechEvent, WhisperSTTVAD, WhisperSTTVADConfig};
 use crate::tools::{
     AcpWriter, ActiveTask, ConversationMode, CurrentTimeTool, McpToolProxy, OpenAppTool,
     PendingInteractionEntry, ReadClipboardTool, RunAgentTool, RunShellTool, SetClipboardTool,
-    SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
+    SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool, ReadFileTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -218,6 +218,7 @@ async fn async_main() -> Result<()> {
     let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
 
     tool_registry.register(CurrentTimeTool);
+    tool_registry.register(ReadFileTool);
     tool_registry.register(ReadClipboardTool);
     tool_registry.register(SetClipboardTool);
     tool_registry.register(OpenAppTool);
