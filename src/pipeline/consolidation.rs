@@ -136,10 +136,10 @@ pub async fn run_consolidation_cycle(
             .ok()
             .flatten()
             .unwrap_or(0);
-        if through_id > 0 {
-            if let Err(e) = db.save_summary(session_id, summary_text, through_id).await {
-                warn!(target: "db", "Failed to persist summary: {}", e);
-            }
+        if through_id > 0
+            && let Err(e) = db.save_summary(session_id, summary_text, through_id).await
+        {
+            warn!(target: "db", "Failed to persist summary: {}", e);
         }
     }
 
@@ -232,11 +232,7 @@ pub async fn consolidation_task(
         let (needs, approx_tokens, current_pct, msg_count, effective_threshold) = {
             let s = llm_session.lock().unwrap();
             let approx = s.approx_tokens();
-            let pct = if context_tokens > 0 {
-                approx * 100 / context_tokens
-            } else {
-                0
-            };
+            let pct = (approx * 100).checked_div(context_tokens).unwrap_or(0);
             let effective = if triggered_by_idle {
                 idle_min_context_pct
             } else {

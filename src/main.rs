@@ -55,8 +55,8 @@ use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, WhisperSTTVAD, WhisperSTTVADConfig};
 use crate::tools::{
     AcpWriter, ActiveTask, ConversationMode, CurrentTimeTool, McpToolProxy, OpenAppTool,
-    PendingInteractionEntry, ReadClipboardTool, RunAgentTool, RunShellTool, SetClipboardTool,
-    SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool, ReadFileTool,
+    PendingInteractionEntry, ReadClipboardTool, ReadFileTool, RunAgentTool, RunShellTool,
+    SetClipboardTool, SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;

@@ -61,6 +61,8 @@ jobs:
   build-linux:
     name: Build · ${{ matrix.target }}
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C link-arg=-lgomp"
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +91,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential libssl-dev cmake libclang-dev
+            libasound2-dev espeak-ng pkg-config build-essential libssl-dev cmake libclang-dev libgomp1
 
       # ── aarch64 cross: install `cross` (Dockerfile handles the rest) ──────
       - name: Install cross

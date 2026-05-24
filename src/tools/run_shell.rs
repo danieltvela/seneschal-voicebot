@@ -169,7 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn blocks_rm_rf_root() {
-        let result = tool().run("rm -rf /tmp/../").await;
+        let _result = tool().run("rm -rf /tmp/../").await;
         // doesn't match the denylist literally but close enough — test the actual denylist entry
         let result2 = tool().run("rm -rf /").await;
         assert!(result2.contains("blocked"), "{result2:?}");

@@ -7,7 +7,7 @@
 //! in whisper-cpp-plus, re-implemented here so it can be driven from an async
 //! tokio channel instead of a blocking `Read` source.
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::mpsc;

@@ -383,11 +383,11 @@ impl ControlClient {
                             let event_text = buffer[..pos].to_string();
                             buffer = buffer[pos + 2..].to_string();
 
-                            if let Some(event) = Self::parse_sse_event(&event_text) {
-                                if tx.send(event).await.is_err() {
-                                    trace!(target: "control_client", "Event receiver dropped, closing SSE stream");
-                                    return;
-                                }
+                            if let Some(event) = Self::parse_sse_event(&event_text)
+                                && tx.send(event).await.is_err()
+                            {
+                                trace!(target: "control_client", "Event receiver dropped, closing SSE stream");
+                                return;
                             }
                         }
                     }

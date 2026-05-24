@@ -1107,6 +1107,7 @@ pub struct PendingInteractionEntry {
 ///
 /// Handles streaming session/update notifications, permission requests, and
 /// cancellation. Returns the accumulated text result or an error/cancel string.
+#[allow(clippy::too_many_arguments)]
 async fn collect_acp_response(
     acp_writer: Arc<Mutex<Option<AcpWriter>>>,
     inbound_rx: &mut mpsc::Receiver<JsonRpcMessage>,

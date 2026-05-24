@@ -84,7 +84,7 @@ mod tests {
         let result = CurrentTimeTool.run("").await;
         let after = Local::now();
 
-        let result_time_str = result.splitn(2, ", ").next().unwrap();
+        let result_time_str = result.split(", ").next().unwrap();
         let b = before.format("%H:%M:%S").to_string();
         let a = after.format("%H:%M:%S").to_string();
         assert!(

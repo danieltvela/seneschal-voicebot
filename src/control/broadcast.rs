@@ -35,11 +35,13 @@ pub enum ControlEvent {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct ControlBroadcast {
     pub tx: broadcast::Sender<ControlEvent>,
 }
 
+#[allow(dead_code)]
 impl ControlBroadcast {
     pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);

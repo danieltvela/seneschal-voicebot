@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
                         println!("[Transcript] utterance {}: '{}'", utterance_id, text);
                     }
                     ClientControlEvent::LlmToken {
-                        utterance_id,
+                        utterance_id: _,
                         token,
                     } => {
                         llm_response.push_str(token);

@@ -1,5 +1,5 @@
 use std::time::Duration;
-use voicebot::control_client::{ClientControlEvent, ControlClient, ControlClientError};
+use voicebot::control_client::{ClientControlEvent, ControlClient};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

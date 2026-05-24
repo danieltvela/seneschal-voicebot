@@ -158,13 +158,12 @@ pub async fn llm_task(
         let mut messages = llm_session.lock().unwrap().all_messages_api();
         // Inject fresh analysis context (speaker identity, emotion, video scene) into the
         // system message for this call only — never persisted to the session or DB.
-        if let Some(ctx) = context_lens.lock().unwrap().format_for_llm() {
-            if let Some(sys_msg) = messages.first_mut() {
-                if let Some(content) = sys_msg["content"].as_str() {
-                    let enriched = format!("{}{}", content, ctx);
-                    sys_msg["content"] = serde_json::Value::String(enriched);
-                }
-            }
+        if let Some(ctx) = context_lens.lock().unwrap().format_for_llm()
+            && let Some(sys_msg) = messages.first_mut()
+            && let Some(content) = sys_msg["content"].as_str()
+        {
+            let enriched = format!("{}{}", content, ctx);
+            sys_msg["content"] = serde_json::Value::String(enriched);
         }
         let base_msg_len = messages.len();
         let mut final_response = String::new();
@@ -406,13 +405,12 @@ pub async fn llm_task(
                 let resp_c = final_response.clone();
                 let tool_exchanges_c = messages[base_msg_len..].to_vec();
                 tokio::spawn(async move {
-                    if !tool_exchanges_c.is_empty() {
-                        if let Err(e) = db_c
+                    if !tool_exchanges_c.is_empty()
+                        && let Err(e) = db_c
                             .save_tool_exchanges(session_id, &tool_exchanges_c)
                             .await
-                        {
-                            warn!(target: "db", "Failed to save tool exchanges: {}", e);
-                        }
+                    {
+                        warn!(target: "db", "Failed to save tool exchanges: {}", e);
                     }
                     if let Err(e) = db_c.save_message(session_id, "Assistant", &resp_c).await {
                         warn!(target: "db", "Failed to save assistant message: {}", e);
