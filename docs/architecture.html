@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture - Voicebot</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a href="index.html" class="logo">Voicebot</a>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="install.html">Install</a></li>
+                <li><a href="architecture.html" class="active">Architecture</a></li>
+                <li><a href="https://github.com/danielvela/voicebot" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header class="page-header">
+        <div class="container">
+            <h1>How Voicebot Works</h1>
+            <p>Deep dive into the architecture and design philosophy</p>
+        </div>
+    </header>
+
+    <main>
+        <section class="content">
+            <div class="container">
+                <h2>Design Philosophy</h2>
+                <div class="philosophy">
+                    <blockquote>
+                        "A chatbot answers questions. A butler anticipates needs."
+                    </blockquote>
+                    <p>
+                        Voicebot is intentionally <strong>narrow in scope</strong>: it owns the audio pipeline and 
+                        conversational experience. Complex tasks are delegated to an external agent via stdin/stdout protocol.
+                    </p>
+                    <p>
+                        This separation exists because <strong>response latency matters</strong>. A voice bot that only 
+                        handles conversation responds in under 1 second. Adding shell commands, file access, and calendar 
+                        operations slows it down significantly.
+                    </p>
+                </div>
+
+                <h2>The Pipeline</h2>
+                <p>Voicebot runs as a single binary using a streaming pipeline where every stage is connected by tokio channels:</p>
+                
+                <div class="pipeline-diagram">
+                    <div class="pipeline-layer">
+                        <div class="layer-label">Input</div>
+                        <div class="layer-flow">
+                            <div class="pipe-box">Microphone</div>
+                            <span class="arrow">→</span>
+                            <div class="pipe-box highlight">Audio Capture (CPAL)</div>
+                            <span class="arrow">→</span>
+                            <div class="pipe-box">VAD (Silero)</div>
+                        </div>
+                    </div>
+                    
+                    <div class="pipeline-layer">
+                        <div class="layer-label">Process</div>
+                        <div class="layer-flow">
+                            <div class="pipe-box highlight">Whisper STT</div>
+                            <span class="arrow">→</span>
+                            <div class="pipe-box highlight">LLM (mlx-lm/oMLX)</div>
+                            <span class="arrow">→</span>
+                            <div class="pipe-box">Sentence Splitter</div>
+                        </div>
+                    </div>
+                    
+                    <div class="pipeline-layer">
+                        <div class="layer-label">Output</div>
+                        <div class="layer-flow">
+                            <div class="pipe-box highlight">TTS (AVSpeech/Kokoro)</div>
+                            <span class="arrow">→</span>
+                            <div class="pipe-box">Audio Output (CPAL)</div>
+                            <span class="arrow">→</span>
+                            <div class="pipe-box">Speaker</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="latency-tricks">
+                    <h3>Latency Optimizations</h3>
+                    <div class="trick-grid">
+                        <div class="trick-card">
+                            <h4>STT→LLM Trick</h4>
+                            <p>Accumulate partial Whisper transcripts; send full text when VAD signals end-of-speech. The LLM server maintains KV-cache implicitly across requests.</p>
+                        </div>
+                        <div class="trick-card">
+                            <h4>LLM→TTS Streaming</h4>
+                            <p>Buffer tokens until punctuation (. ! ? ; :), synthesize immediately. While sentence N plays, sentence N+1 is being generated.</p>
+                        </div>
+                        <div class="trick-card">
+                            <h4>GPU/CPU Isolation</h4>
+                            <p>All heavy work runs in <code>tokio::task::spawn_blocking</code> threads so the async event loop stays unblocked.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <h2>System Architecture</h2>
+                <div class="arch-diagram">
+                    <div class="arch-layer primary">
+                        <h3>Voicebot (Fast Layer)</h3>
+                        <div class="arch-components">
+                            <div class="arch-comp">STT → LLM (7B) → TTS</div>
+                            <div class="arch-comp">Barge-in, conversation awareness</div>
+                            <div class="arch-comp">Proactive suggestions (inference daemon)</div>
+                            <div class="arch-comp">Voice-local tools + MCP tool proxy</div>
+                            <div class="arch-comp">EYES: periodic screen capture + vision analysis</div>
+                        </div>
+                        <div class="arch-note">Complex tasks → delegate to AGENT</div>
+                    </div>
+                    
+                    <div class="arch-connector">↓ delegates complex tasks via stdin/stdout</div>
+                    
+                    <div class="arch-layer secondary">
+                        <h3>External Agent (Power Layer)</h3>
+                        <div class="arch-components">
+                            <div class="arch-comp">Full tool suite</div>
+                            <div class="arch-comp">File system, calendar, web, email</div>
+                            <div class="arch-comp">Long-running tasks</div>
+                        </div>
+                    </div>
+                </div>
+
+                <h2>Project Structure</h2>
+                <div class="structure">
+                    <pre><code>src/
+├── main.rs              # Pipeline orchestration, VAD loop
+├── lib.rs               # Library exports
+├── config.rs            # Environment-based configuration
+├── daemon.rs            # InferenceDaemon — proactive suggestions
+├── eyes.rs              # EYES visual awareness daemon
+│
+├── audio/               # CPAL capture, Silero VAD, playback
+│   ├── audio_capture.rs
+│   ├── output.rs
+│   ├── speaker.rs       # Speaker verification (ONNX)
+│   └── ambient_buffer.rs
+│
+├── stt/                 # Whisper-cpp-plus wrapper
+│   └── mod.rs           # Integrated STT+VAD
+│
+├── llm/                 # OpenAI-compatible SSE client
+│   ├── client.rs
+│   ├── session.rs       # Message history management
+│   └── manager.rs
+│
+├── tts/                 # Text-to-speech engines
+│   ├── avspeech.rs      # macOS AVSpeechSynthesizer
+│   ├── kokoro.rs        # ONNX Kokoro (Linux)
+│   └── sentence.rs      # Sentence boundary splitting
+│
+├── pipeline/            # Pipeline state machine
+│   ├── fsm.rs           # State FSM (Idle/Listening/Thinking/Speaking)
+│   └── frames.rs        # PipelineFrame types
+│
+├── tools/               # Built-in tool implementations
+│   ├── mod.rs
+│   └── [tool_name].rs
+│
+├── db/                  # SQLite persistence
+│   └── migrations/
+│
+├── memory/              # Context consolidation
+├── profile/             # User profile extraction
+├── agents/              # Agent delegation (ACP protocol)
+└── remote/              # WebSocket server for remote devices</code></pre>
+                </div>
+
+                <h2>Key Modules</h2>
+                
+                <div class="modules">
+                    <div class="module-card">
+                        <h3>Audio Pipeline</h3>
+                        <p><strong>CPAL</strong> handles cross-platform audio I/O. The pipeline uses a pre-roll buffer so when VAD detects speech, the preceding audio is included for complete transcription.</p>
+                        <ul>
+                            <li><code>audio_capture.rs</code> — Microphone input with device selection</li>
+                            <li><code>audio_transform.rs</code> — Rubato resampling to 16kHz</li>
+                            <li><code>buffer.rs</code> — Circular VecDeque for audio buffering</li>
+                            <li><code>output.rs</code> — Speaker playback</li>
+                        </ul>
+                    </div>
+
+                    <div class="module-card">
+                        <h3>Speech-to-Text</h3>
+                        <p><strong>whisper-cpp-plus</strong> provides true streaming Whisper.cpp bindings with integrated VAD support. Uses Metal GPU on macOS, with optional CoreML Neural Engine fallback.</p>
+                        <ul>
+                            <li>State cached across utterances for faster repeated recognition</li>
+                            <li>Language hinting based on <code>VOICEBOT_LANGUAGE</code> setting</li>
+                            <li>Accumulates partial transcripts until VAD silence threshold</li>
+                        </ul>
+                    </div>
+
+                    <div class="module-card">
+                        <h3>LLM Integration</h3>
+                        <p>OpenAI-compatible streaming client with session management and automatic context consolidation.</p>
+                        <ul>
+                            <li><code>client.rs</code> — SSE streaming to /v1/chat/completions</li>
+                            <li><code>session.rs</code> — Message history with summarization</li>
+                            <li>Auto-consolidation at configurable context threshold (default 90%)</li>
+                            <li>Idle consolidation after inactivity (default 30 min)</li>
+                        </ul>
+                    </div>
+
+                    <div class="module-card">
+                        <h3>Text-to-Speech</h3>
+                        <p>Sentence-by-sentence synthesis with overlapping playback for natural conversation flow.</p>
+                        <ul>
+                            <li><strong>AVSpeech</strong> — macOS native, zero setup</li>
+                            <li><strong>Kokoro</strong> — High-quality ONNX, requires <code>--features kokoro</code></li>
+                            <li><code>sentence.rs</code> — Buffers tokens, emits on punctuation boundaries</li>
+                        </ul>
+                    </div>
+
+                    <div class="module-card">
+                        <h3>Memory & Context</h3>
+                        <p>Persistent storage via SQLite with intelligent consolidation.</p>
+                        <ul>
+                            <li><strong>Active consolidation:</strong> Announces memory reorganization, extracts profile facts and memories, summarizes old turns</li>
+                            <li><strong>Silent consolidation:</strong> Runs transparently during idle periods</li>
+                            <li>Memories and profile persist across sessions</li>
+                        </ul>
+                    </div>
+
+                    <div class="module-card">
+                        <h3>Tools & Integrations</h3>
+                        <p>Extensible tool system with built-in and dynamic MCP support.</p>
+                        <ul>
+                            <li>Built-in: time, files, clipboard, screenshots, apps, shell, web search</li>
+                            <li><strong>MCP:</strong> Dynamically registers tools from any MCP stdio server</li>
+                            <li><strong>Agent delegation:</strong> Complex tasks via stdin/stdout subprocess</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h2>Conversation Modes</h2>
+                <div class="modes">
+                    <div class="mode-card">
+                        <h3>Active Mode</h3>
+                        <p class="mode-badge">Default</p>
+                        <p>Responds to all detected speech. Best for dedicated interaction sessions.</p>
+                    </div>
+                    <div class="mode-card">
+                        <h3>Ambient Mode</h3>
+                        <p class="mode-badge">Wake-word triggered</p>
+                        <p>Responds only after wake word detection (default: "jarvis"). Auto-switches when non-enrolled speaker is detected.</p>
+                    </div>
+                </div>
+
+                <h2>Control API</h2>
+                <p>Enable with <code>CONTROL_PORT=9001 cargo run --features control</code></p>
+                
+                <div class="api-endpoints">
+                    <div class="endpoint">
+                        <span class="method get">GET</span>
+                        <code>/control/events</code>
+                        <span class="desc">SSE stream of live pipeline events</span>
+                    </div>
+                    <div class="endpoint">
+                        <span class="method get">GET</span>
+                        <code>/control/state</code>
+                        <span class="desc">Current pipeline state (listening/thinking/speaking/idle)</span>
+                    </div>
+                    <div class="endpoint">
+                        <span class="method get">GET</span>
+                        <code>/control/history</code>
+                        <span class="desc">Full conversation message history</span>
+                    </div>
+                    <div class="endpoint">
+                        <span class="method post">POST</span>
+                        <code>/control/mute</code>
+                        <span class="desc">Mute/unmute TTS (body: {"muted": true|false})</span>
+                    </div>
+                    <div class="endpoint">
+                        <span class="method post">POST</span>
+                        <code>/control/barge_in</code>
+                        <span class="desc">Interrupt current TTS playback</span>
+                    </div>
+                    <div class="endpoint">
+                        <span class="method post">POST</span>
+                        <code>/control/input</code>
+                        <span class="desc">Inject text as user input (body: {"text": "..."})</span>
+                    </div>
+                </div>
+
+                <div class="back-link">
+                    <a href="index.html">← Back to Home</a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>Built with ❤️ by Daniel and the Voicebot Team</p>
+            <p>Licensed under MIT with commercialization restrictions. <a href="https://github.com/danielvela/voicebot/blob/master/LICENSE-VOICEBOT.md" target="_blank">View License</a></p>
+            <p class="trademark">Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project.</p>
+        </div>
+    </footer>
+</body>
+</html>
