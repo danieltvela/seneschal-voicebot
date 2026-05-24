@@ -8,7 +8,9 @@
 #
 # We add:
 #   - libasound2-dev:arm64   — CPAL audio (linked at build time)
-#   - libssl-dev:arm64       — reqwest TLS
+#   - libasound2-dev         — CPAL audio (host headers for build.rs)
+#   - libssl-dev:arm64       — reqwest TLS (target)
+#   - libssl-dev             — reqwest TLS (host headers for build.rs)
 #
 # Note: espeak-ng is NOT installed here — espeak-rs-sys compiles it from
 # bundled source using the cross-compiler, so no system package is needed.
@@ -21,7 +23,9 @@ RUN dpkg --add-architecture arm64 \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
         libasound2-dev:arm64 \
+        libasound2-dev \
         libssl-dev:arm64 \
+        libssl-dev \
         pkg-config \
         curl \
  && rm -rf /var/lib/apt/lists/*
