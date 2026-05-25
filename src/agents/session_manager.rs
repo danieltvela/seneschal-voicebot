@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -221,6 +221,22 @@ impl AcpSessionManager {
     /// Convenience method so callers (e.g. `main.rs`) only need this type.
     pub async fn prewarm_agent(&self, config: &AgentConfig) -> Result<String> {
         self.get_or_create_session(config).await.map(|e| e.session_id)
+    }
+
+    /// Remove all sessions idle longer than `timeout`.
+    /// Returns the number of sessions removed.
+    pub fn cleanup_idle_sessions(&self, timeout: Duration) -> usize {
+        let cutoff = Instant::now().checked_sub(timeout).unwrap_or(Instant::now());
+        let mut removed = 0usize;
+        self.sessions.retain(|_, v| {
+            if v.last_used <= cutoff {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        removed
     }
 }
 
@@ -584,5 +600,175 @@ mod tests {
         let removed = mgr.close_session("nonexistent-sid");
         assert!(removed.is_empty(), "closing unknown session yields no removed tasks (silent warning)");
         assert!(mgr.list_sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_removes_expired_sessions() {
+        let mgr = AcpSessionManager::new();
+        let mut entry = make_dummy_entry("expired-1", "hermes");
+        entry.last_used = Instant::now() - Duration::from_secs(100);
+        mgr.sessions.insert("hermes".into(), entry);
+
+        let removed = mgr.cleanup_idle_sessions(Duration::from_secs(60));
+        assert_eq!(removed, 1);
+        assert!(mgr.list_sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_keeps_recent_sessions() {
+        let mgr = AcpSessionManager::new();
+        let entry = make_dummy_entry("recent-1", "hermes");
+        mgr.sessions.insert("hermes".into(), entry);
+
+        let removed = mgr.cleanup_idle_sessions(Duration::from_secs(60));
+        assert_eq!(removed, 0);
+        assert_eq!(mgr.list_sessions().len(), 1);
+    }
+
+    #[test]
+    fn idle_timeout_selectively_removes_old_sessions() {
+        let mgr = AcpSessionManager::new();
+
+        let mut old_entry = make_dummy_entry("old-1", "hermes");
+        old_entry.last_used = Instant::now() - Duration::from_secs(120);
+        mgr.sessions.insert("hermes".into(), old_entry);
+
+        let fresh_entry = make_dummy_entry("fresh-1", "oracle");
+        mgr.sessions.insert("oracle".into(), fresh_entry);
+
+        let removed = mgr.cleanup_idle_sessions(Duration::from_secs(60));
+        assert_eq!(removed, 1);
+        assert_eq!(mgr.list_sessions().len(), 1);
+        assert_eq!(mgr.list_sessions()[0].agent_name, "oracle");
+    }
+
+    #[test]
+    fn idle_timeout_zero_duration_removes_all() {
+        let mgr = AcpSessionManager::new();
+        mgr.sessions.insert("a".into(), make_dummy_entry("a-1", "a"));
+        mgr.sessions.insert("b".into(), make_dummy_entry("b-1", "b"));
+
+        let removed = mgr.cleanup_idle_sessions(Duration::from_secs(0));
+        assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn idle_timeout_no_effect_on_empty_manager() {
+        let mgr = AcpSessionManager::new();
+        let removed = mgr.cleanup_idle_sessions(Duration::from_secs(300));
+        assert_eq!(removed, 0);
+    }
+
+    #[tokio::test]
+    async fn concurrency_multiple_tasks_share_session() {
+        let mgr = Arc::new(AcpSessionManager::new());
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("shared-sess", "hermes"));
+
+        let n_tasks = 8;
+        let handles: Vec<_> = (0..n_tasks)
+            .map(|i| {
+                let m = Arc::clone(&mgr);
+                let task_id = format!("conc-task-{i}");
+                tokio::spawn(async move {
+                    m.add_task("hermes", &task_id);
+                    tokio::task::yield_now().await;
+                    task_id
+                })
+            })
+            .collect();
+
+        let joined: Vec<Result<String, tokio::task::JoinError>> = futures_util::future::join_all(handles).await;
+        let collected: Vec<String> = joined.into_iter().map(|r| r.expect("task join")).collect();
+        let stored = mgr.get_all_task_ids();
+
+        for tid in &collected {
+            assert!(stored.contains(tid.as_str()), "task {tid} should be visible");
+        }
+        assert_eq!(stored.len(), n_tasks, "all {n_tasks} tasks should be stored");
+        assert_eq!(mgr.list_sessions().len(), 1, "should still be one session");
+    }
+
+    #[tokio::test]
+    async fn concurrency_concurrent_add_remove_integrity() {
+        let mgr = Arc::new(AcpSessionManager::new());
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("integrity-sess", "hermes"));
+
+        let n_pairs = 10;
+        let handles: Vec<_> = (0..n_pairs)
+            .map(|i| {
+                let m = Arc::clone(&mgr);
+                let add_id = format!("add-{i}");
+                let remove_id = format!("remove-{i}");
+                tokio::spawn(async move {
+                    m.add_task("hermes", &add_id);
+                    m.add_task("hermes", &remove_id);
+                    tokio::task::yield_now().await;
+                    m.remove_task("hermes", &remove_id);
+                    tokio::task::yield_now().await;
+                    (add_id, remove_id)
+                })
+            })
+            .collect();
+
+        let joined: Vec<Result<(String, String), tokio::task::JoinError>> = futures_util::future::join_all(handles).await;
+        let pairs: Vec<(String, String)> = joined.into_iter().map(|r| r.expect("task join")).collect();
+        let stored = mgr.get_all_task_ids();
+
+        for (add_id, remove_id) in &pairs {
+            assert!(
+                stored.contains(add_id.as_str()),
+                "added task {add_id} should remain"
+            );
+            assert!(
+                !stored.contains(remove_id.as_str()),
+                "removed task {remove_id} should be gone"
+            );
+        }
+        assert_eq!(
+            stored.len(),
+            n_pairs,
+            "exactly {} tasks should remain (adds minus removes)",
+            n_pairs
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrency_concurrent_close_preserves_other_sessions() {
+        let mgr = Arc::new(AcpSessionManager::new());
+
+        let mut entry_a = make_dummy_entry("sess-a", "hermes");
+        entry_a.task_ids.insert("a-1".to_string());
+        entry_a.task_ids.insert("a-2".to_string());
+        mgr.sessions.insert("hermes".into(), entry_a);
+
+        let mut entry_b = make_dummy_entry("sess-b", "oracle");
+        entry_b.task_ids.insert("b-1".to_string());
+        entry_b.task_ids.insert("b-2".to_string());
+        mgr.sessions.insert("oracle".into(), entry_b);
+
+        let m1 = Arc::clone(&mgr);
+        let m2 = Arc::clone(&mgr);
+
+        let h1 = tokio::spawn(async move { m1.close_session("sess-a") });
+        let h2 = tokio::spawn(async move {
+            m2.add_task("oracle", "b-3");
+        });
+
+        let (removed_a_result, _) = tokio::join!(h1, h2);
+
+        let removed_a = removed_a_result.expect("close_session task");
+        assert!(removed_a.contains("a-1"));
+        assert!(removed_a.contains("a-2"));
+        assert_eq!(mgr.list_sessions().len(), 1);
+        assert_eq!(mgr.list_sessions()[0].session_id, "sess-b");
+
+        let remaining = mgr.get_all_task_ids();
+        assert!(remaining.contains("b-1"));
+        assert!(remaining.contains("b-2"));
+        assert!(remaining.contains("b-3"));
+        assert!(!remaining.contains("a-1"));
+        assert!(!remaining.contains("a-2"));
     }
 }

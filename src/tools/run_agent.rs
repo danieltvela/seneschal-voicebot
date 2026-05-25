@@ -341,6 +341,7 @@ impl RunAgentTool {
                     task,
                     result,
                     tool_call_id: None,
+                    correlation_id: String::new(),
                 })
                 .await
                 .is_err()
@@ -385,6 +386,7 @@ impl RunAgentTool {
                                 task: task_c,
                                 result: format!("ACP session error: {e}"),
                                 tool_call_id: None,
+                                correlation_id: String::new(),
                             })
                             .await;
                         return;
@@ -403,6 +405,7 @@ impl RunAgentTool {
                                 task: task_c,
                                 result: format!("ACP spawn error: {e}"),
                                 tool_call_id: None,
+                                correlation_id: String::new(),
                             })
                             .await;
                         return;
@@ -422,6 +425,7 @@ impl RunAgentTool {
                                 task: task_c,
                                 result: format!("ACP init error: {e}"),
                                 tool_call_id: None,
+                                correlation_id: String::new(),
                             })
                             .await;
                         return;
@@ -455,6 +459,7 @@ impl RunAgentTool {
                             task: task_c,
                             result: format!("ACP send error: {e}"),
                             tool_call_id: None,
+                            correlation_id: String::new(),
                         })
                         .await;
                     return;
@@ -517,6 +522,7 @@ impl RunAgentTool {
                     task: task_c,
                     result: final_result,
                     tool_call_id: None,
+                    correlation_id: String::new(),
                 })
                 .await
                 .is_err()

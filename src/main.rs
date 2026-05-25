@@ -935,7 +935,7 @@ async fn async_main() -> Result<()> {
                     },
                     Some(event) = proactive_rx.recv() => {
                         match event {
-                            ProactiveEvent::AgentResult { task, result, tool_call_id } => {
+                            ProactiveEvent::AgentResult { task, result, tool_call_id, .. } => {
                                 if let Some(id) = tool_call_id {
                                     let payload = format!(
                                         "[Resultado de la tarea en segundo plano '{task}']\n{result}"

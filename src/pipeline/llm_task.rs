@@ -338,6 +338,7 @@ pub async fn llm_task(
                                         task: name_c,
                                         result,
                                         tool_call_id: Some(tc_id_c),
+                                        correlation_id: String::new(),
                                     })
                                     .await
                                     .ok();
