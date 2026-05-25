@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::Tool;
 use crate::agents::{AcpSessionManager, AgentConfig, ProactiveEvent};
+use crate::config::HermesSessionViewerMode;
 use crate::llm::{Message, OpenAIClient};
 
 // ── History formatting ────────────────────────────────────────────────────────
@@ -229,6 +230,9 @@ pub struct RunAgentTool {
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     synthesis_client: Option<std::sync::Arc<OpenAIClient>>,
     session_manager: Option<Arc<AcpSessionManager>>,
+    /// Hermes session viewer mode from app config.
+    hermes_viewer_mode: HermesSessionViewerMode,
+    hermes_viewer_auto_open: bool,
 }
 
 impl RunAgentTool {
@@ -245,7 +249,19 @@ impl RunAgentTool {
             proactive_tx,
             synthesis_client: None,
             session_manager: None,
+            hermes_viewer_mode: HermesSessionViewerMode::Off,
+            hermes_viewer_auto_open: false,
         }
+    }
+
+    pub fn with_hermes_viewer(
+        mut self,
+        mode: HermesSessionViewerMode,
+        auto_open: bool,
+    ) -> Self {
+        self.hermes_viewer_mode = mode;
+        self.hermes_viewer_auto_open = auto_open;
+        self
     }
 
     /// Attach an optional session manager for persistent ACP sessions.
@@ -353,6 +369,8 @@ impl RunAgentTool {
         let agent_name = self.config.name.clone();
         let config = self.config.clone();
         let session_mgr = self.session_manager.clone();
+        let viewer_mode = self.hermes_viewer_mode;
+        let auto_open = self.hermes_viewer_auto_open;
 
         tokio::spawn(async move {
             let writer_arc: Arc<Mutex<AcpWriter>>;
@@ -418,7 +436,7 @@ impl RunAgentTool {
             let session_id = &session_id_owned;
             {
                 let w = writer_arc.lock().await;
-                w.open_session_in_terminal().await;
+                w.open_if_configured(viewer_mode, auto_open);
             }
 
             // ── Send prompt ───────────────────────────────────────────────────
@@ -859,7 +877,7 @@ impl AcpWriter {
     /// they are process-local. Instead, this method queries the shared SQLite
     /// session store (`~/.hermes/state.db`) every 2 seconds, colorizing output
     /// by role (user / assistant / tool).
-    pub async fn open_session_in_terminal(&self) {
+    pub fn open_session_in_terminal(&self) {
         let sid = match &self.session_id {
             Some(s) => s,
             None => {
@@ -1012,6 +1030,17 @@ echo "Session viewer closed."
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let _ = std::fs::remove_file(&sp);
         });
+    }
+
+    pub fn open_if_configured(
+        &self,
+        viewer_mode: HermesSessionViewerMode,
+        auto_open: bool,
+    ) {
+        if viewer_mode != HermesSessionViewerMode::Terminal || !auto_open {
+            return;
+        }
+        self.open_session_in_terminal();
     }
 
     /// Create a new session (without re-initializing the process).
@@ -1784,6 +1813,56 @@ mod tests {
         let result = serde_json::json!({"outcome": "cancelled"});
         let msg = serde_json::json!({"jsonrpc": "2.0", "id": 5, "result": result});
         assert_eq!(msg["result"]["outcome"], "cancelled");
+    }
+
+    // ── open_if_configured ────────────────────────────────────────────────────
+
+    #[test]
+    fn open_if_configured_terminal_and_auto_open_is_true_delegates_to_terminal() {
+        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
+        let tool = acp_tool(tx);
+        assert_eq!(
+            tool.hermes_viewer_mode,
+            HermesSessionViewerMode::Off
+        );
+        assert!(!tool.hermes_viewer_auto_open);
+
+        let tool = tool.with_hermes_viewer(
+            HermesSessionViewerMode::Terminal,
+            true,
+        );
+        assert_eq!(
+            tool.hermes_viewer_mode,
+            HermesSessionViewerMode::Terminal
+        );
+        assert!(tool.hermes_viewer_auto_open);
+    }
+
+    #[test]
+    fn open_if_configured_off_does_not_open() {
+        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
+        let _tool = acp_tool(tx).with_hermes_viewer(
+            HermesSessionViewerMode::Off,
+            true,
+        );
+    }
+
+    #[test]
+    fn open_if_configured_auto_open_false_does_not_open() {
+        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
+        let _tool = acp_tool(tx).with_hermes_viewer(
+            HermesSessionViewerMode::Terminal,
+            false,
+        );
+    }
+
+    #[test]
+    fn open_if_configured_tui_does_not_open_terminal() {
+        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
+        let _tool = acp_tool(tx).with_hermes_viewer(
+            HermesSessionViewerMode::Tui,
+            true,
+        );
     }
 }
 
