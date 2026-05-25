@@ -1,8 +1,10 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use chrono::Local;
+use regex::Regex;
 
 use super::session_events::{AcpSessionEvent, SessionEventRx};
 
@@ -47,31 +49,64 @@ impl SessionDisplayWorker {
 
         while let Some(event) = self.rx.recv().await {
             let line = format_event(&event);
+            let line = redact_sensitive(&line);
             writeln!(file, "{line}").ok();
             flush_file(&mut file);
         }
     }
 }
 
+/// Compiled regex patterns for sensitive data redaction.
+static REDACTION_PATTERNS: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
+    vec![
+        (Regex::new(r"(Bearer\s+)\S+").unwrap(), "${1}[REDACTED]"),
+        (Regex::new(r"\bsk-[A-Za-z0-9_-]+").unwrap(), "[API_KEY_REDACTED]"),
+        (Regex::new(r"\bgh_[A-Za-z0-9_]{36,}").unwrap(), "[GH_TOKEN_REDACTED]"),
+        (Regex::new(r"(token\s*:\s*\S+)").unwrap(), "token: [TOKEN_REDACTED]"),
+        (Regex::new(r"(password\s*:\s*\S+)").unwrap(), "password: [PASSWORD_REDACTED]"),
+        (Regex::new(r"(secret\s*:\s*\S+)").unwrap(), "secret: [SECRET_REDACTED]"),
+        // Email addresses
+        (
+            Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+                .unwrap(),
+            "[EMAIL_REDACTED]",
+        ),
+        // Long hex strings (hashes, fingerprints)
+        (Regex::new(r"\b[a-fA-F0-9]{40,}\b").unwrap(), "[HASH_REDACTED]"),
+        // UUIDs
+        (Regex::new(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b").unwrap(), "[UUID_REDACTED]"),
+    ]
+});
+
+/// Redacts sensitive data patterns from a log line.
+pub fn redact_sensitive(line: &str) -> String {
+    let mut result = line.to_string();
+    for (pattern, replacement) in REDACTION_PATTERNS.iter() {
+        result = pattern.replace(&result, *replacement).to_string();
+    }
+    result
+}
+
 /// Format an event into a colored log line: `[HH:MM:SS] [TYPE] content`.
 fn format_event(event: &AcpSessionEvent) -> String {
     let ts = Local::now().format("%H:%M:%S");
     match event {
-        AcpSessionEvent::AgentMessageChunk(text) => {
+        AcpSessionEvent::AgentMessageChunk { text, .. } => {
             format!("[\033[36m{ts}\033[0m] [\033[32mAGENT\033[0m] {text}")
         }
-        AcpSessionEvent::AgentThoughtChunk(text) => {
+        AcpSessionEvent::AgentThoughtChunk { text, .. } => {
             format!("[\033[36m{ts}\033[0m] [\033[33mTHINK\033[0m] {text}")
         }
-        AcpSessionEvent::ToolCall { name } => {
+        AcpSessionEvent::ToolCall { name, .. } => {
             format!("[\033[36m{ts}\033[0m] [\033[34mTOOL\033[0m] {name}: started")
         }
-        AcpSessionEvent::ToolCallUpdate { name, status } => {
+        AcpSessionEvent::ToolCallUpdate { name, status, .. } => {
             format!("[\033[36m{ts}\033[0m] [\033[34mTOOL\033[0m] {name}: {status}")
         }
         AcpSessionEvent::PermissionRequest {
             description,
             options,
+            ..
         } => {
             let opts = options.join(", ");
             format!("[\033[36m{ts}\033[0m] [\033[31mPERM\033[0m] {description}? [{opts}]")
@@ -94,7 +129,10 @@ mod tests {
 
     #[test]
     fn test_format_agent_message() {
-        let event = AcpSessionEvent::AgentMessageChunk("hello".to_string());
+        let event = AcpSessionEvent::AgentMessageChunk {
+            text: "hello".to_string(),
+            correlation_id: "".to_string(),
+        };
         let line = format_event(&event);
         assert!(line.contains("AGENT"));
         assert!(line.contains("hello"));
@@ -104,6 +142,7 @@ mod tests {
     fn test_format_tool_call() {
         let event = AcpSessionEvent::ToolCall {
             name: "web_search".to_string(),
+            correlation_id: "".to_string(),
         };
         let line = format_event(&event);
         assert!(line.contains("TOOL"));
@@ -113,7 +152,10 @@ mod tests {
 
     #[test]
     fn test_format_thought() {
-        let event = AcpSessionEvent::AgentThoughtChunk("reasoning".to_string());
+        let event = AcpSessionEvent::AgentThoughtChunk {
+            text: "reasoning".to_string(),
+            correlation_id: "".to_string(),
+        };
         let line = format_event(&event);
         assert!(line.contains("THINK"));
         assert!(line.contains("reasoning"));
@@ -124,6 +166,7 @@ mod tests {
         let event = AcpSessionEvent::PermissionRequest {
             description: "Allow?".to_string(),
             options: vec!["yes".to_string(), "no".to_string()],
+            correlation_id: "".to_string(),
         };
         let line = format_event(&event);
         assert!(line.contains("PERM"));
@@ -143,7 +186,10 @@ mod tests {
         let path = log_dir.join(format!("{session_id}.log"));
 
         let (tx, mut rx) = mpsc::channel::<AcpSessionEvent>(16);
-        tx.blocking_send(AcpSessionEvent::AgentMessageChunk("test event".into()))
+        tx.blocking_send(AcpSessionEvent::AgentMessageChunk {
+            text: "test event".into(),
+            correlation_id: "".to_string(),
+        })
             .unwrap();
         drop(tx);
 
@@ -166,7 +212,10 @@ mod tests {
 
     #[test]
     fn test_format_includes_timestamp() {
-        let event = AcpSessionEvent::AgentMessageChunk("x".to_string());
+        let event = AcpSessionEvent::AgentMessageChunk {
+            text: "x".to_string(),
+            correlation_id: "".to_string(),
+        };
         let line = format_event(&event);
         let stripped = strip_ansi(&line);
         assert!(stripped.starts_with('['));
@@ -186,6 +235,68 @@ mod tests {
     fn test_log_path_creates_file() {
         let path = session_log_path("abc123");
         assert_eq!(path.to_string_lossy(), "/tmp/voicebot_sessions/abc123.log");
+    }
+
+    #[test]
+    fn test_redact_api_key() {
+        let line = "[12:00:00] [AGENT] Using key sk-abc123xyz for auth";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[API_KEY_REDACTED]"));
+        assert!(!redacted.contains("sk-abc123xyz"));
+    }
+
+    #[test]
+    fn test_redact_email() {
+        let line = "[12:00:00] [AGENT] Contact user@example.com";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[EMAIL_REDACTED]"));
+        assert!(!redacted.contains("user@example.com"));
+    }
+
+    #[test]
+    fn test_redact_password() {
+        let line = "[12:00:00] [AGENT] password: SuperSecret123!";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[PASSWORD_REDACTED]"));
+        assert!(!redacted.contains("SuperSecret123"));
+    }
+
+    #[test]
+    fn test_redact_uuid() {
+        let line = "[12:00:00] [AGENT] Session 550e8400-e29a-41d4-a716-446655440000";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[UUID_REDACTED]"));
+        assert!(!redacted.contains("550e8400"));
+    }
+
+    #[test]
+    fn test_redact_hash() {
+        let line = "[12:00:00] [AGENT] Hash a]bc123e4f5d6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[HASH_REDACTED]"));
+    }
+
+    #[test]
+    fn test_redact_preserves_normal_text() {
+        let line = "[12:00:00] [AGENT] Hello world, no secrets here";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("Hello world"));
+        assert!(!redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_redact_bearer_token() {
+        let line = "[12:00:00] [AGENT] Auth: Bearer eyJhbGciOiJIUzI1NiJ9.test.signature";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(!redacted.contains("eyJhbGci"));
+    }
+
+    #[test]
+    fn test_redact_github_token() {
+        let line = "[12:00:00] [AGENT] Token gh_abcdef1234567890abcdef1234567890abcd done";
+        let redacted = redact_sensitive(line);
+        assert!(redacted.contains("[GH_TOKEN_REDACTED]"));
     }
 
     // ── Latency tests ──────────────────────────────────────────────────────────
@@ -222,9 +333,10 @@ mod tests {
 
         let start = Instant::now();
         for i in 0..n_events {
-            tx.send(AcpSessionEvent::AgentMessageChunk(
-                format!("event-{i}"),
-            ))
+            tx.send(AcpSessionEvent::AgentMessageChunk {
+                text: format!("event-{i}"),
+                correlation_id: "".into(),
+            })
             .await
             .unwrap();
         }
