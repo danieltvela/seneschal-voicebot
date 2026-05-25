@@ -458,8 +458,7 @@ impl RunAgentTool {
             task_map.insert(task_id.clone(), active);
 
             // ── Collect responses ─────────────────────────────────────────────
-            let acp_writer_for_collect: Arc<Mutex<Option<AcpWriter>>> =
-                Arc::new(Mutex::new(None));
+            let acp_writer_for_collect: Arc<Mutex<Option<AcpWriter>>> = Arc::new(Mutex::new(None));
 
             let mut rx_guard = inbound_rx.lock().await;
             let result = collect_acp_response(
