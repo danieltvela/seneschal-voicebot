@@ -166,8 +166,10 @@ mod tests {
         mgr.sessions.insert("hermes".into(), make_dummy_entry("lifecyc-1", "hermes"));
         assert_eq!(mgr.list_sessions().len(), 1);
 
-        let guard = mgr.sessions.get("hermes").unwrap();
-        assert_eq!(guard.session_id, "lifecyc-1");
+        {
+            let guard = mgr.sessions.get("hermes").unwrap();
+            assert_eq!(guard.session_id, "lifecyc-1");
+        } // Drop guard BEFORE close_session (DashMap deadlock prevention)
 
         mgr.close_session("lifecyc-1");
         assert!(mgr.list_sessions().is_empty());
