@@ -636,10 +636,12 @@ pub struct AcpWriter {
     pub session_id: Option<String>,
     stdin: ChildStdin,
     #[allow(dead_code)]
-    child: Child,
+    child: std::mem::ManuallyDrop<Child>,
     next_id: u64,
     /// When true, raw JSON-RPC messages are printed to stderr.
     pub verbose: Arc<AtomicBool>,
+    /// Cached PID for synchronous SIGKILL in `Drop`.
+    child_pid: Option<libc::pid_t>,
 }
 
 /// Backward-compat alias. Renamed from `HermesAcpWriter` → `AcpWriter`.
@@ -657,12 +659,18 @@ impl AcpWriter {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("failed to spawn /bin/cat for AcpWriter::dummy");
+        let pid = child.id().unwrap_or(0);
+        let mut man = std::mem::ManuallyDrop::new(child);
         Self {
             session_id: None,
-            stdin: child.stdin.take().expect("no stdin"),
-            child,
+            stdin: man
+                .stdin
+                .take()
+                .expect("no stdin"),
+            child: man,
             next_id: 0,
             verbose: Arc::new(AtomicBool::new(false)),
+            child_pid: Some(pid as libc::pid_t),
         }
     }
 
@@ -734,13 +742,15 @@ impl AcpWriter {
             debug!(target: "acp", "ACP reader task ended");
         });
 
+        let pid = child.id().unwrap_or(0);
         Ok((
             Self {
                 session_id: None,
                 stdin,
-                child,
+                child: std::mem::ManuallyDrop::new(child),
                 next_id: 0,
                 verbose,
+                child_pid: Some(pid as libc::pid_t),
             },
             rx,
         ))
@@ -1232,10 +1242,20 @@ echo "Session viewer closed."
         .await
     }
 
-    /// Kill the subprocess.
+    /// Kill the subprocess (async).
     #[allow(dead_code)]
     pub async fn kill(&mut self) {
         let _ = self.child.kill().await;
+    }
+}
+
+impl Drop for AcpWriter {
+    fn drop(&mut self) {
+        if let Some(pid) = self.child_pid.take() {
+            unsafe {
+                let _ = libc::kill(pid, libc::SIGKILL);
+            }
+        }
     }
 }
 
