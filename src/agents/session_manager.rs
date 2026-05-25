@@ -164,6 +164,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_close_session_removes_from_map() {
+        let mgr = AcpSessionManager::new();
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("cs-1", "hermes"));
+        assert_eq!(mgr.list_sessions().len(), 1);
+        mgr.close_session("cs-1");
+        assert!(mgr.list_sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_closed_session_yields_new_instance() {
+        let mgr = AcpSessionManager::new();
+        let original = make_dummy_entry("orig-1", "hermes");
+        mgr.sessions.insert("hermes".into(), original.clone());
+
+        mgr.close_session("orig-1");
+        assert!(mgr.list_sessions().is_empty());
+
+        let newer = make_dummy_entry("new-1", "hermes");
+        mgr.sessions.insert("hermes".into(), newer.clone());
+        let list = mgr.list_sessions();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].session_id, "new-1");
+        assert_ne!(original.session_id, list[0].session_id);
+    }
+
+    #[tokio::test]
     async fn close_session_removes_matching_id() {
         let mgr = AcpSessionManager::new();
         mgr.sessions
