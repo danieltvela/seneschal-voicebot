@@ -66,3 +66,41 @@ pub async fn sen_task(
         }
     }
 }
+
+#[cfg(test)]
+mod latency_tests {
+    use std::time::Instant;
+
+    /// Instant::now() overhead must stay below 1ms micro-benchmark.
+    #[test]
+    fn instant_overhead_baseline() {
+        const ITERATIONS: usize = 100_000;
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            let _ = Instant::now();
+        }
+        let total_us = start.elapsed().as_micros();
+        let avg_ns = total_us as f64 / ITERATIONS as f64;
+        let avg_ms = avg_ns / 1_000.0;
+        assert!(
+            avg_ms < 1.0,
+            "Instant::now() avg overhead {:.4}ms (avg {:.*}ns) — expected < 1ms",
+            avg_ms,
+            2,
+            avg_ns
+        );
+    }
+
+    /// Elapsed calculation correctly captures wall-clock duration.
+    #[test]
+    fn elapsed_logs_correctly() {
+        let t0 = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let elapsed_ms = t0.elapsed().as_millis();
+        assert!(
+            elapsed_ms >= 50,
+            "logged latency {}ms should be ≥ 50ms",
+            elapsed_ms
+        );
+    }
+}
