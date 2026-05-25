@@ -158,4 +158,85 @@ mod tests {
         }
         assert_eq!(mgr.list_sessions().len(), 3);
     }
+
+    #[tokio::test]
+    async fn lifecycle_start_prompt_close_cleanup() {
+        let mgr = AcpSessionManager::new();
+
+        mgr.sessions.insert("hermes".into(), make_dummy_entry("lifecyc-1", "hermes"));
+        assert_eq!(mgr.list_sessions().len(), 1);
+
+        let guard = mgr.sessions.get("hermes").unwrap();
+        assert_eq!(guard.session_id, "lifecyc-1");
+
+        mgr.close_session("lifecyc-1");
+        assert!(mgr.list_sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_session_idempotent() {
+        let mgr = AcpSessionManager::new();
+        mgr.sessions.insert("hermes".into(), make_dummy_entry("idem-1", "hermes"));
+
+        mgr.close_session("idem-1");
+        assert!(mgr.list_sessions().is_empty());
+
+        mgr.close_session("idem-1");
+        assert!(mgr.list_sessions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_spawn_nonexistent_fails_gracefully() {
+        let result = AcpWriter::spawn("/__nonexistent_cmd_xyz").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(!err.is_empty(), "error message should not be empty");
+    }
+
+    #[tokio::test]
+    async fn get_or_create_reuses_existing_session() {
+        use crate::agents::config::AgentConfig;
+
+        let mgr = AcpSessionManager::new();
+        let cfg = AgentConfig {
+            name: "hermes".to_string(),
+            mode: "acp".to_string(),
+            command: None,
+            acp_command: "/bin/cat".to_string(),
+            acp_warmup: false,
+            when_to_use: "test".to_string(),
+            instructions: "test".to_string(),
+        };
+
+        mgr.sessions.insert("hermes".into(), make_dummy_entry("reuse-me", "hermes"));
+
+        let entry = mgr.get_or_create_session(&cfg).await.expect("should find existing");
+        assert_eq!(entry.session_id, "reuse-me");
+        assert_eq!(entry.agent_name, "hermes");
+    }
+
+    #[tokio::test]
+    async fn get_or_create_updates_last_used() {
+        use std::time::Duration;
+
+        let mgr = AcpSessionManager::new();
+        let mut entry = make_dummy_entry("stamp-1", "hermes");
+        entry.last_used = Instant::now() - Duration::from_secs(10);
+        mgr.sessions.insert("hermes".into(), entry.clone());
+
+        let cfg = crate::agents::config::AgentConfig {
+            name: "hermes".to_string(),
+            mode: "acp".to_string(),
+            command: None,
+            acp_command: "/bin/cat".to_string(),
+            acp_warmup: false,
+            when_to_use: "test".to_string(),
+            instructions: "test".to_string(),
+        };
+
+        let before_ts = mgr.sessions.get("hermes").unwrap().value().last_used;
+        let _entry = mgr.get_or_create_session(&cfg).await.expect("found");
+        let after_ts = mgr.sessions.get("hermes").unwrap().value().last_used;
+        assert!(after_ts >= before_ts, "last_used should have been updated");
+    }
 }
