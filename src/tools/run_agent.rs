@@ -439,6 +439,8 @@ impl RunAgentTool {
                 w.open_if_configured(viewer_mode, auto_open);
             }
 
+            let latency_start = std::time::Instant::now();
+
             // ── Send prompt ───────────────────────────────────────────────────
             let prompt_request_id = match {
                 let mut w = writer_arc.lock().await;
@@ -490,6 +492,8 @@ impl RunAgentTool {
                 agent_name.clone(),
             )
             .await;
+            let latency_ms = latency_start.elapsed().as_millis();
+            info!(target: "acp", latency_ms, task_id, "ACP round-trip complete");
             drop(rx_guard);
 
             // ── Cleanup ──────────────────────────────────────────────────────
