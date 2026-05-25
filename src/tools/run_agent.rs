@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::Tool;
 use crate::agents::{AcpSessionManager, AgentConfig, ProactiveEvent};
-use crate::config::HermesSessionViewerMode;
+
 use crate::llm::{Message, OpenAIClient};
 
 // ── History formatting ────────────────────────────────────────────────────────
@@ -230,9 +230,7 @@ pub struct RunAgentTool {
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     synthesis_client: Option<std::sync::Arc<OpenAIClient>>,
     session_manager: Option<Arc<AcpSessionManager>>,
-    /// Hermes session viewer mode from app config.
-    hermes_viewer_mode: HermesSessionViewerMode,
-    hermes_viewer_auto_open: bool,
+
 }
 
 impl RunAgentTool {
@@ -249,19 +247,8 @@ impl RunAgentTool {
             proactive_tx,
             synthesis_client: None,
             session_manager: None,
-            hermes_viewer_mode: HermesSessionViewerMode::Off,
-            hermes_viewer_auto_open: false,
-        }
-    }
 
-    pub fn with_hermes_viewer(
-        mut self,
-        mode: HermesSessionViewerMode,
-        auto_open: bool,
-    ) -> Self {
-        self.hermes_viewer_mode = mode;
-        self.hermes_viewer_auto_open = auto_open;
-        self
+        }
     }
 
     /// Attach an optional session manager for persistent ACP sessions.
@@ -370,13 +357,11 @@ impl RunAgentTool {
         let agent_name = self.config.name.clone();
         let config = self.config.clone();
         let session_mgr = self.session_manager.clone();
-        let viewer_mode = self.hermes_viewer_mode;
-        let auto_open = self.hermes_viewer_auto_open;
 
         tokio::spawn(async move {
             let writer_arc: Arc<Mutex<AcpWriter>>;
             let inbound_rx: Arc<Mutex<mpsc::Receiver<JsonRpcMessage>>>;
-            let session_id_owned: String;
+            let session_id: String;
             let owned_process = if let Some(mgr) = session_mgr {
                 let sess = match mgr.get_or_create_session(&config).await {
                     Ok(e) => e,
@@ -394,7 +379,7 @@ impl RunAgentTool {
                 };
                 writer_arc = sess.writer;
                 inbound_rx = sess.inbound_rx;
-                session_id_owned = sess.session_id;
+                session_id = sess.session_id;
                 false
             } else {
                 let (mut writer, mut rx) = match AcpWriter::spawn(&acp_command).await {
@@ -433,22 +418,16 @@ impl RunAgentTool {
                 };
                 writer_arc = Arc::new(Mutex::new(writer));
                 inbound_rx = Arc::new(Mutex::new(rx));
-                session_id_owned = sid;
+                session_id = sid;
                 true
             };
-
-            let session_id = &session_id_owned;
-            {
-                let w = writer_arc.lock().await;
-                w.open_if_configured(viewer_mode, auto_open);
-            }
 
             let latency_start = std::time::Instant::now();
 
             // ── Send prompt ───────────────────────────────────────────────────
             let prompt_request_id = match {
                 let mut w = writer_arc.lock().await;
-                w.send_prompt(session_id, &query).await
+                w.send_prompt(&session_id, &query).await
             } {
                 Ok(id) => id,
                 Err(e) => {
@@ -471,7 +450,7 @@ impl RunAgentTool {
             let active = ActiveTask {
                 task_id: task_id.clone(),
                 agent_name: agent_name.clone(),
-                session_id: session_id.clone(),
+                session_id: session_id.to_string(),
                 prompt_request_id,
                 task_text: task_c.clone(),
                 state: TaskState::Running,
@@ -490,7 +469,7 @@ impl RunAgentTool {
                 Arc::clone(&acp_writer_for_collect),
                 &mut *rx_guard,
                 proactive_tx.clone(),
-                session_id_owned.clone(),
+                session_id.clone(),
                 prompt_request_id,
                 cancel_rx,
                 task_id.clone(),
@@ -888,181 +867,6 @@ impl AcpWriter {
             }),
         )
         .await
-    }
-
-    /// Open a live Terminal window that polls Hermes' SQLite database for the
-    /// current ACP session, displaying messages and tool calls as they arrive.
-    ///
-    /// `hermes --resume {sid}` does not work for active ACP sessions because
-    /// they are process-local. Instead, this method queries the shared SQLite
-    /// session store (`~/.hermes/state.db`) every 2 seconds, colorizing output
-    /// by role (user / assistant / tool).
-    pub fn open_session_in_terminal(&self) {
-        let sid = match &self.session_id {
-            Some(s) => s,
-            None => {
-                warn!(target: "agent", "Cannot open session viewer: session_id not yet set");
-                return;
-            }
-        };
-
-        // Locate Hermes state.db via HERMES_HOME
-        let hermes_home = std::env::var("HERMES_HOME").ok().unwrap_or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| format!("{h}/.hermes"))
-                .unwrap_or_default()
-        });
-        let db_path = format!("{}/state.db", hermes_home);
-        if !std::path::Path::new(&db_path).exists() {
-            warn!(target: "agent", "Hermes state.db not found at {db_path}; cannot open session viewer");
-            return;
-        }
-
-        // Write a self-contained bash polling script to a temp file.
-        // Using a file avoids the nightmare of escaping complex bash for osascript.
-        // Use placeholders __DB__ and __SID__ to avoid Rust format! interpreting ${} as args.
-        let script = r#"#!/usr/bin/env bash
-# Live Hermes session viewer — polls SQLite for messages
-set -euo pipefail
-DB="__DB__"
-SID="__SID__"
-
-while true; do
-    clear
-
-    printf '\033[1;36m'
-    echo "=================================================="
-    echo "  Hermes Session: ${SID}"
-    echo "  $(date '+%H:%M:%S')"
-    echo "=================================================="
-    printf '\033[0m'
-
-    # Format: role|tool_name|content (content last so IFS='|' remainder goes to it safely).
-    # Newlines in content are collapsed to spaces so each message is one line.
-    last_tool=""  # carry forward from preceding assistant turn
-    sqlite3 "$DB" \
-      "SELECT role
-             || '|' ||
-             COALESCE(json_extract(tool_calls, '\$[0].function.name'),
-                     json_extract(tool_calls, '\$.function.name'),
-                     '')
-             || '|' ||
-             replace(replace(COALESCE(content, ''), char(10), ' '), char(13), '')
-       FROM messages
-       WHERE session_id = '\${SID}'
-       ORDER BY timestamp, rowid;" | \
-    while IFS='|' read -r role tool_name content; do
-
-        case "$role" in
-            user)
-                last_tool=""
-                printf '\033[1;31m[USER]\033[0m\n'
-                [ -n "$content" ] && printf '  %s\n' "$content"
-                ;;
-            assistant)
-                if [ -n "$tool_name" ]; then
-                    last_tool="$tool_name"
-                    printf '\033[1;32m[ASSISTANT] → %s\033[0m\n' "$tool_name"
-                else
-                    last_tool=""
-                    printf '\033[1;32m[ASSISTANT]\033[0m\n'
-                fi
-                [ -n "$content" ] && printf '  %s\n' "$content"
-                ;;
-            tool)
-                printf '\033[1;33m[TOOL: %s]\033[0m\n' "${last_tool:-(unknown)}"
-                # Truncate long tool output (often large JSON blobs)
-                if [ ${#content} -gt 200 ]; then
-                    printf '  %s...\n' "${content:0:200}"
-                elif [ -n "$content" ]; then
-                    printf '  %s\n' "$content"
-                fi
-                ;;
-            *)
-                printf '\033[1;36m[%s]\033[0m\n' "$role"
-                [ -n "$content" ] && printf '  %s\n' "$content"
-                ;;
-        esac
-        echo "───────────────────────────────────"
-    done
-
-    echo ""
-
-    # Check if session has ended (ended_at is set)
-    ended_at=$(sqlite3 "$DB" "SELECT ended_at FROM sessions WHERE id='${SID}' LIMIT 1;" 2>/dev/null || true)
-    if [ -n "$ended_at" ]; then
-        printf '\033[1;32mSession completed.\033[0m  (press Ctrl+C to close this window)\n'
-        break
-    fi
-
-    printf '\033[0;2m(polling… press Ctrl+C to close)\033[0m\n'
-
-    if ! sleep 2; then
-        break  # handle Ctrl+C gracefully
-    fi
-done
-
-echo ""
-echo "Session viewer closed."
-"#
-        .replace("__DB__", &db_path)
-        .replace("__SID__", sid);
-
-        // Write script to a unique temp file
-        let tmp_dir: std::path::PathBuf = std::env::temp_dir();
-        let script_path = tmp_dir.join(format!(".voicebot_session_{}.sh", sid));
-        if let Err(e) = std::fs::write(&script_path, &script) {
-            warn!(target: "agent", "Failed to write session viewer script: {e}");
-            return;
-        }
-        // Make executable (not strictly required for `bash ...`, but good practice)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(mut perms) = std::fs::metadata(&script_path).map(|m| m.permissions()) {
-                perms.set_mode(0o755);
-                let _ = std::fs::set_permissions(&script_path, perms);
-            }
-        }
-
-        // Launch Terminal with the script
-        let bash_cmd = format!("bash {}", script_path.display());
-        let osacmd = format!(r#"tell application "Terminal" to do script "{bash_cmd}""#);
-
-        match std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(osacmd)
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(_) => {
-                info!(target: "agent", "Opened live session viewer for {} in Terminal", sid);
-            }
-            Err(e) => {
-                warn!(target: "agent", "Failed to open Terminal session viewer for {}: {e}", sid);
-            }
-        }
-
-        // Clean up the temp script after a brief delay ( Terminal has already read it)
-        let sp = script_path.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let _ = std::fs::remove_file(&sp);
-        });
-    }
-
-    pub fn open_if_configured(
-        &self,
-        viewer_mode: HermesSessionViewerMode,
-        auto_open: bool,
-    ) {
-        if !auto_open {
-            return;
-        }
-        if viewer_mode == HermesSessionViewerMode::Terminal {
-            self.open_session_in_terminal();
-        }
     }
 
     /// Create a new session (without re-initializing the process).
@@ -1847,55 +1651,6 @@ mod tests {
         assert_eq!(msg["result"]["outcome"], "cancelled");
     }
 
-    // ── open_if_configured ────────────────────────────────────────────────────
-
-    #[test]
-    fn open_if_configured_terminal_and_auto_open_is_true_delegates_to_terminal() {
-        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
-        let tool = acp_tool(tx);
-        assert_eq!(
-            tool.hermes_viewer_mode,
-            HermesSessionViewerMode::Off
-        );
-        assert!(!tool.hermes_viewer_auto_open);
-
-        let tool = tool.with_hermes_viewer(
-            HermesSessionViewerMode::Terminal,
-            true,
-        );
-        assert_eq!(
-            tool.hermes_viewer_mode,
-            HermesSessionViewerMode::Terminal
-        );
-        assert!(tool.hermes_viewer_auto_open);
-    }
-
-    #[test]
-    fn open_if_configured_off_does_not_open() {
-        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
-        let _tool = acp_tool(tx).with_hermes_viewer(
-            HermesSessionViewerMode::Off,
-            true,
-        );
-    }
-
-    #[test]
-    fn open_if_configured_auto_open_false_does_not_open() {
-        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
-        let _tool = acp_tool(tx).with_hermes_viewer(
-            HermesSessionViewerMode::Terminal,
-            false,
-        );
-    }
-
-    #[test]
-    fn open_if_configured_tui_does_not_open_terminal() {
-        let (tx, _) = mpsc::channel::<ProactiveEvent>(16);
-        let _tool = acp_tool(tx).with_hermes_viewer(
-            HermesSessionViewerMode::Tui,
-            true,
-        );
-    }
 }
 
 // ── Integration tests (require running `hermes acp`) ──────────────────────────

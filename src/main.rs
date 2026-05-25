@@ -269,10 +269,6 @@ async fn async_main() -> Result<()> {
         }
         if agent.mode == "acp" {
             run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
-            run_agent_tool = run_agent_tool.with_hermes_viewer(
-                config.hermes_session_viewer,
-                config.hermes_session_viewer_auto_open,
-            );
         }
         tool_registry.register(run_agent_tool);
     }
