@@ -1,6 +1,6 @@
 #!/bin/sh
 # Voicebot installer
-# Usage: curl -fsSL https://github.com/danielvela/voicebot/releases/latest/download/install.sh | sh
+# Usage: curl -fsSL https://github.com/madcato/voicebot/releases/latest/download/install.sh | sh
 #
 # Environment overrides:
 #   GITHUB_REPO    — GitHub owner/repo (default: set at release time)

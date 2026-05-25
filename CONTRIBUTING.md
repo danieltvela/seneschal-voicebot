@@ -45,7 +45,7 @@ Voicebot follows a simple code of conduct:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone the repository
-git clone https://github.com/danielvela/voicebot.git
+git clone https://github.com/madcato/voicebot.git
 cd voicebot
 
 # Set up your environment variables

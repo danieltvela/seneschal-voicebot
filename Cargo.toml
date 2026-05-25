@@ -2,9 +2,9 @@
 name = "voicebot"
 version = "0.1.0"
 edition = "2024"
-repository = "https://github.com/danielvela/voicebot"
-homepage = "https://github.com/danielvela/voicebot"
-documentation = "https://github.com/danielvela/voicebot"
+repository = "https://github.com/madcato/voicebot"
+homepage = "https://github.com/madcato/voicebot"
+documentation = "https://github.com/madcato/voicebot"
 
 [dependencies]
 # Async runtime
