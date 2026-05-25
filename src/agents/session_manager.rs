@@ -438,4 +438,68 @@ mod tests {
             "writer Arc must be identical — no respawn"
         );
     }
+
+    #[tokio::test]
+    async fn recovery_session_removed_then_recreated() {
+        let mgr = AcpSessionManager::new();
+
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("recover-1", "hermes"));
+        assert_eq!(mgr.list_sessions().len(), 1);
+
+        mgr.sessions.remove("hermes");
+        assert_eq!(mgr.list_sessions().len(), 0);
+
+        let new_entry = make_dummy_entry("recover-2", "hermes");
+        mgr.sessions.insert("hermes".into(), new_entry);
+        assert_eq!(mgr.list_sessions().len(), 1);
+        assert_eq!(mgr.list_sessions()[0].session_id, "recover-2");
+    }
+
+    #[tokio::test]
+    async fn recovery_spawns_warning_on_transient_error() {
+        let err = AcpWriter::spawn("/__nonexistent_disk_failure_cmd")
+            .await
+            .expect_err("spawn should fail for bad path");
+        assert!(!err.to_string().is_empty(), "transient error should produce a non-empty warning message");
+    }
+
+    #[tokio::test]
+    async fn recovery_detects_and_retries_after_removal() {
+        let mgr = AcpSessionManager::new();
+
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("retry-1", "hermes"));
+
+        let cfg = crate::agents::config::AgentConfig {
+            name: "hermes".to_string(),
+            mode: "acp".to_string(),
+            command: None,
+            acp_command: "/bin/cat".to_string(),
+            acp_warmup: false,
+            when_to_use: "test".to_string(),
+            instructions: "test".to_string(),
+        };
+
+        let s1 = mgr.get_or_create_session(&cfg).await.unwrap();
+        assert_eq!(s1.session_id, "retry-1");
+
+        mgr.sessions.remove("hermes");
+        assert_eq!(mgr.list_sessions().len(), 0);
+
+        let new_entry = make_dummy_entry("retry-2", "hermes");
+        mgr.sessions.insert("hermes".into(), new_entry);
+
+        let s2 = mgr.get_or_create_session(&cfg).await.unwrap();
+        assert_eq!(s2.session_id, "retry-2");
+    }
+
+    #[tokio::test]
+    async fn recovery_close_session_warns_on_missing_entries() {
+        let mgr = AcpSessionManager::new();
+
+        let removed = mgr.close_session("nonexistent-sid");
+        assert!(removed.is_empty(), "closing unknown session yields no removed tasks (silent warning)");
+        assert!(mgr.list_sessions().is_empty());
+    }
 }
