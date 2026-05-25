@@ -1,6 +1,29 @@
 use anyhow::{Context, Result};
 use std::env;
 
+/// Mode for the Hermes session viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
+pub enum HermesSessionViewerMode {
+    #[default]
+    Off,
+    Terminal,
+    Tui,
+}
+
+impl std::str::FromStr for HermesSessionViewerMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "off" | "0" | "false" => Ok(Self::Off),
+            "terminal" | "term" => Ok(Self::Terminal),
+            "tui" => Ok(Self::Tui),
+            _ => Err(format!("Invalid HermesSessionViewerMode: {s}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Config {
@@ -216,6 +239,14 @@ pub struct Config {
 
     // ── Persistence ───────────────────────────────────────────────────────────
     pub db_path: String,
+
+    // ── Hermes session viewer ──────────────────────────────────────────────────
+    /// Session viewer mode: "off", "terminal", or "tui".
+    pub hermes_session_viewer: HermesSessionViewerMode,
+    /// Auto-open the session viewer when a session starts.
+    pub hermes_session_viewer_auto_open: bool,
+    /// Idle timeout in seconds before the session viewer closes.
+    pub hermes_session_idle_timeout_secs: u64,
 }
 
 impl Config {
@@ -480,6 +511,19 @@ impl Config {
 
             // DB
             db_path: env::var("DB_PATH").unwrap_or_else(|_| "data/voicebot.db".to_string()),
+
+            // Hermes session viewer
+            hermes_session_viewer: env::var("HERMES_SESSION_VIEWER")
+                .ok()
+                .and_then(|v| v.parse::<HermesSessionViewerMode>().ok())
+                .unwrap_or(HermesSessionViewerMode::Off),
+            hermes_session_viewer_auto_open: env::var("HERMES_SESSION_VIEWER_AUTO_OPEN")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(false),
+            hermes_session_idle_timeout_secs: env::var("HERMES_SESSION_IDLE_TIMEOUT_SECS")
+                .unwrap_or_else(|_| "300".to_string())
+                .parse()
+                .context("Invalid HERMES_SESSION_IDLE_TIMEOUT_SECS")?,
         };
 
         if config.llm_self_managed && config.llm_command.is_none() {
@@ -648,6 +692,82 @@ mod tests {
                 msgs[0]
                     .content
                     .contains("Resumen de la conversación anterior.")
+            );
+        });
+    }
+
+    // ── HermesSessionViewerMode ──────────────────────────────────────────────
+
+    #[test]
+    fn hermes_session_viewer_parses_terminal() {
+        temp_env::with_var("HERMES_SESSION_VIEWER", Some("terminal"), || {
+            assert_eq!(
+                Config::from_env().unwrap().hermes_session_viewer,
+                HermesSessionViewerMode::Terminal
+            );
+        });
+    }
+
+    #[test]
+    fn hermes_session_viewer_parses_tui() {
+        temp_env::with_var("HERMES_SESSION_VIEWER", Some("tui"), || {
+            assert_eq!(
+                Config::from_env().unwrap().hermes_session_viewer,
+                HermesSessionViewerMode::Tui
+            );
+        });
+    }
+
+    #[test]
+    fn hermes_session_viewer_defaults_to_off() {
+        temp_env::with_var("HERMES_SESSION_VIEWER", None::<&str>, || {
+            assert_eq!(
+                Config::from_env().unwrap().hermes_session_viewer,
+                HermesSessionViewerMode::Off
+            );
+        });
+    }
+
+    #[test]
+    fn hermes_session_viewer_invalid_falls_back_to_off() {
+        temp_env::with_var("HERMES_SESSION_VIEWER", Some("invalid_value"), || {
+            assert_eq!(
+                Config::from_env().unwrap().hermes_session_viewer,
+                HermesSessionViewerMode::Off
+            );
+        });
+    }
+
+    #[test]
+    fn hermes_session_viewer_auto_open_parses_true() {
+        temp_env::with_var("HERMES_SESSION_VIEWER_AUTO_OPEN", Some("1"), || {
+            assert!(Config::from_env().unwrap().hermes_session_viewer_auto_open);
+        });
+    }
+
+    #[test]
+    fn hermes_session_viewer_auto_open_defaults_to_false() {
+        temp_env::with_var("HERMES_SESSION_VIEWER_AUTO_OPEN", None::<&str>, || {
+            assert!(!Config::from_env().unwrap().hermes_session_viewer_auto_open);
+        });
+    }
+
+    #[test]
+    fn hermes_session_idle_timeout_defaults_to_300() {
+        temp_env::with_var("HERMES_SESSION_IDLE_TIMEOUT_SECS", None::<&str>, || {
+            assert_eq!(
+                Config::from_env().unwrap().hermes_session_idle_timeout_secs,
+                300
+            );
+        });
+    }
+
+    #[test]
+    fn hermes_session_idle_timeout_parses_custom() {
+        temp_env::with_var("HERMES_SESSION_IDLE_TIMEOUT_SECS", Some("600"), || {
+            assert_eq!(
+                Config::from_env().unwrap().hermes_session_idle_timeout_secs,
+                600
             );
         });
     }
