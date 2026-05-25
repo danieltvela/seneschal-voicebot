@@ -625,8 +625,8 @@ mod tests {
         assert_eq!(mgr.list_sessions().len(), 1);
     }
 
-    #[test]
-    fn idle_timeout_selectively_removes_old_sessions() {
+    #[tokio::test]
+    async fn idle_timeout_selectively_removes_old_sessions() {
         let mgr = AcpSessionManager::new();
 
         let mut old_entry = make_dummy_entry("old-1", "hermes");
@@ -642,8 +642,8 @@ mod tests {
         assert_eq!(mgr.list_sessions()[0].agent_name, "oracle");
     }
 
-    #[test]
-    fn idle_timeout_zero_duration_removes_all() {
+    #[tokio::test]
+    async fn idle_timeout_zero_duration_removes_all() {
         let mgr = AcpSessionManager::new();
         mgr.sessions.insert("a".into(), make_dummy_entry("a-1", "a"));
         mgr.sessions.insert("b".into(), make_dummy_entry("b-1", "b"));
