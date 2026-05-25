@@ -4582,6 +4582,7 @@ dependencies = [
  "futures-util",
  "hound",
  "kokorox",
+ "libc",
  "objc2",
  "objc2-avf-audio",
  "objc2-foundation",
