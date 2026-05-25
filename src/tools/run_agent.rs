@@ -560,6 +560,7 @@ fn parse_task(args: &str) -> String {
 ///
 /// Reads are served by a background reader task that forwards parsed
 /// `JsonRpcMessage` messages on an `mpsc` channel returned from `spawn()`.
+#[derive(Debug)]
 pub struct AcpWriter {
     pub session_id: Option<String>,
     stdin: ChildStdin,
@@ -575,6 +576,25 @@ pub struct AcpWriter {
 pub type HermesAcpWriter = AcpWriter;
 
 impl AcpWriter {
+    /// Create a dummy writer backed by a `/bin/cat` process.
+    /// Used exclusively in unit tests to avoid requiring a real Hermes binary.
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        let mut child = Command::new("/bin/cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn /bin/cat for AcpWriter::dummy");
+        Self {
+            session_id: None,
+            stdin: child.stdin.take().expect("no stdin"),
+            child,
+            next_id: 0,
+            verbose: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     /// Spawn the ACP process and start the reader task.
     ///
     /// Returns `(writer, inbound_rx)`. The caller owns `inbound_rx`; it should

@@ -1,6 +1,8 @@
 pub mod config;
+pub mod session_manager;
 
 pub use config::{AgentConfig, AgentRegistry};
+pub use session_manager::{AcpSessionManager, SessionEntry, SessionInfo};
 
 /// Events that trigger proactive speech from Jarvis without a user utterance.
 pub enum ProactiveEvent {
