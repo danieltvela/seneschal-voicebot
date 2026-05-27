@@ -79,16 +79,24 @@ pub async fn tts_task(
         control_broadcast.send(crate::control::broadcast::ControlEvent::TtsStart { utterance_id });
 
         // Ensure previous playback fully stops before starting next sentence.
-        if let Some(h) = play_handle.take() {
-            let cancelled = tokio::select! {
-                result = h => {
-                    if let Ok(Err(e)) = result {
-                        error!(target: "audio", "Playback error: {}", e);
+        if let Some(mut h) = play_handle.take() {
+            let mut cancelled = false;
+            loop {
+                tokio::select! {
+                    result = &mut h => {
+                        if let Ok(Err(e)) = result {
+                            error!(target: "audio", "Playback error: {}", e);
+                        }
+                        break;
+                    },
+                    _ = cancel_rx.recv() => {
+                        play_cancel.store(true, Ordering::SeqCst);
+                        cancelled = true;
+                        // Keep awaiting the playback task until CPAL callback sees
+                        // play_cancel and the task actually finishes.
                     }
-                    false
-                },
-                _ = cancel_rx.recv() => true,
-            };
+                }
+            }
             if cancelled {
                 handle_barge_in(
                     &play_cancel,
