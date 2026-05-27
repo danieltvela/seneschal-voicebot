@@ -78,7 +78,7 @@ transcript_tx ──► llm_task ──► llm_tx ──► sen_task ──► s
 Communication primitives:
 - **mpsc channels**: transcript → llm → sen → tts (per-utterance data)
 - **watch channel**: `PipelineState` (FSM, shared across tasks)
-- **broadcast channel**: `events.cancel_tx` (barge-in cancellation, 16 slots)
+- **broadcast channel**: `events.barge_in_tx` (barge-in cancellation, 16 slots)
 - **AtomicBool**: `play_cancel` (TTS playback interruption), `tts_muted`
 
 ---

@@ -319,12 +319,16 @@ SpeechEnd(transcript)
 ### Barge-in
 
 When `SpeechStart` fires while a pipeline is playing:
-1. `cancel.store(true)` — CPAL callback sees this and stops playback
-2. `pipeline_handle.abort()` — cancels the async task wrapper
-3. `cancel.store(false)` in `SpeechEnd` after a 25ms grace period
+1. `events.barge_in_tx.send(utterance_id)` — broadcast to all pipeline tasks via `tokio::sync::broadcast`
+2. Each task's `cancel_rx.recv()` triggers inside its `tokio::select!` loop
+3. **LLM task**: aborts the HTTP stream handle, drops the token receiver, breaks the tool loop
+4. **SEN task**: drains remaining tokens from `llm_rx`, resets the `SentenceSplitter`, flushes buffered state
+5. **TTS task**: sets `play_cancel.store(true, SeqCst)` so the CPAL callback sees it and stops writing audio, then awaits the `play_handle` until the playback task actually exits before calling `handle_barge_in` to drain queued sentences and reset `play_cancel` back to `false`
 
-> Note: `spawn_blocking` threads cannot be preempted by `abort()`. They check
-> `cancel` on each CPAL callback (~10ms period) and stop themselves.
+> Note: `play_cancel` must stay `true` until the CPAL callback has had time to see it. The
+> TTS task now uses a looped `select!` that keeps awaiting the `JoinHandle` after setting
+> `play_cancel`, rather than dropping the handle when `cancel_rx` fires. This prevents a
+> race where the handle was abandoned but the CPAL callback continued producing audio.
 
 ---
 
@@ -339,7 +343,7 @@ When `SpeechStart` fires while a pipeline is playing:
 | `TtsEngine` enum | Zero-cost dispatch; each variant owns its state; easy to add variants |
 | Pipeline FSM | Clear state tracking per utterance; enables TUI, Control API, and external observers |
 | SQLite for history | Survives restarts; restored to `LlmSession` on startup |
-| `cancel: Arc<AtomicBool>` | Single barge-in flag shared between async tasks and blocking threads |
+| `play_cancel: Arc<AtomicBool>` | Single barge-in flag shared between async tasks and CPAL blocking playback thread |
 
 ---
 
