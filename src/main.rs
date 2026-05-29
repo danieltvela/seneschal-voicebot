@@ -359,7 +359,7 @@ async fn async_main() -> Result<()> {
     }
 
     // ── LLM session ───────────────────────────────────────────────────────────
-    let tool_section = tools.system_prompt_section(&agent_section);
+    let tool_section = tools.system_prompt_section();
     let system_prompt = build_system_prompt(
         &config.llm_system_prompt,
         &profile_facts,

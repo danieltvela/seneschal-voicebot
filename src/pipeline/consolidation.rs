@@ -62,7 +62,9 @@ pub fn build_routing_section() -> &'static str {
 
 /// Assemble the full system prompt from its components.
 ///
-/// Order: base prompt → [USER PROFILE] → [MEMORIES] → [ROUTING] → [AGENTS] → tool instructions.
+/// Order: base prompt → tool instructions → [USER PROFILE] → [MEMORIES] → [ROUTING] → [AGENTS].
+/// Tool instructions are placed immediately after the base prompt so the model sees them
+/// early and cannot ignore them, even when the rest of the prompt is very long.
 pub fn build_system_prompt(
     base_prompt: &str,
     profile_facts: &[ProfileFact],
@@ -73,11 +75,11 @@ pub fn build_system_prompt(
     format!(
         "{}{}{}{}{}{}",
         base_prompt,
+        tool_section,
         build_profile_context(profile_facts),
         build_memory_context(memories),
         build_routing_section(),
         agent_section,
-        tool_section,
     )
 }
 

@@ -6,7 +6,8 @@ servers:
       vllm:
         port: 8005
         token: ""
-        models: []
+        models: 
+          - LiquidAI/L
           # - Qwen3.6-27B
           # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
