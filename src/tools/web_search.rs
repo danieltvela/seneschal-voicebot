@@ -6,7 +6,7 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use super::Tool;
-use crate::llm::{Message, OpenAIClient};
+use crate::llm::{LlmProvider, Message};
 
 /// Hard timeout for SearXNG HTTP requests.
 const SEARCH_TIMEOUT_SECS: u64 = 10;
@@ -48,7 +48,7 @@ pub struct WebSearchTool {
     client: reqwest::Client,
     /// When set, the secondary LLM synthesizes raw SearXNG results into a
     /// concise voice-ready summary before returning to the primary LLM.
-    synthesis_client: Option<Arc<OpenAIClient>>,
+    synthesis_client: Option<Arc<dyn LlmProvider>>,
 }
 
 impl WebSearchTool {
@@ -66,7 +66,7 @@ impl WebSearchTool {
     }
 
     /// Attach a secondary LLM client for result synthesis.
-    pub fn with_synthesis(mut self, client: Arc<OpenAIClient>) -> Self {
+    pub fn with_synthesis(mut self, client: Arc<dyn LlmProvider>) -> Self {
         self.synthesis_client = Some(client);
         self
     }

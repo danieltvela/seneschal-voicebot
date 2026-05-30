@@ -8,7 +8,7 @@ use super::fsm::{PauseReason, PipelineState};
 use super::state::PipelineEvents;
 use crate::db::{Database, Memory};
 use crate::i18n;
-use crate::llm::{LlmSession, OpenAIClient};
+use crate::llm::{LlmProvider, LlmSession};
 use crate::memory::{build_memory_context, extract_memories};
 use crate::profile::{ProfileFact, build_profile_context, extract_facts};
 
@@ -90,7 +90,7 @@ pub fn build_system_prompt(
 /// context already exceeds `LLM_IDLE_MIN_CONTEXT_PCT`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_consolidation_cycle(
-    background_client: &OpenAIClient,
+    background_client: &dyn LlmProvider,
     db: &Database,
     session_id: uuid::Uuid,
     llm_session: &Arc<Mutex<LlmSession>>,
@@ -236,7 +236,7 @@ pub async fn consolidation_task(
     mut pipeline_state_rx: watch::Receiver<PipelineState>,
     transcript_tx: mpsc::Sender<PipelineFrame>,
     llm_session: Arc<Mutex<LlmSession>>,
-    background_client: OpenAIClient,
+    background_client: Arc<dyn LlmProvider>,
     db: Database,
     session_id: uuid::Uuid,
     context_tokens: usize,
@@ -341,7 +341,7 @@ pub async fn consolidation_task(
         }
 
         run_consolidation_cycle(
-            &background_client,
+            background_client.as_ref(),
             &db,
             session_id,
             &llm_session,

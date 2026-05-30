@@ -50,6 +50,9 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 # Base64 encoding (screenshot → vision model)
 base64 = "0.22"
 
+# Text encoding for llama.cpp token decoding
+encoding_rs = "0.8"
+
 # STT — whisper-cpp-plus (true streaming audio-to-text with VAD support)
 # On macOS: enable Metal GPU acceleration for whisper-cpp-plus
 [target.'cfg(target_os = "macos")'.dependencies.whisper-cpp-plus]
@@ -79,6 +82,12 @@ optional = true
 # STT — NVIDIA Parakeet via ONNX (optional, enable with: cargo build --features parakeet)
 [dependencies.parakeet-rs]
 version = "0.3.5"
+optional = true
+
+# Local LLM inference via llama.cpp (optional, enable with: cargo build --features llama-cpp)
+# Supports GGUF models (e.g. Gemma 4) with Metal/CUDA offload.
+[dependencies.llama-cpp-2]
+version = "0.1.146"
 optional = true
 
 # TUI — terminal user interface (optional, enable with: cargo build --features tui)
@@ -126,6 +135,7 @@ avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-au
 tui = ["dep:ratatui", "dep:crossterm"]
 remote = ["dep:axum", "dep:tower"]
 control = ["dep:axum", "dep:tower"]
+llama-cpp = ["dep:llama-cpp-2"]
 
 [[bin]]
 name = "voicebot"

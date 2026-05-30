@@ -15,8 +15,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use std::sync::Arc;
+
 use crate::agents::ProactiveEvent;
-use crate::llm::OpenAIClient;
+use crate::llm::LlmProvider;
 
 const EYES_PROMPT: &str = "\
 You are a background visual monitor for a voice assistant called Jarvis. \
@@ -38,7 +40,7 @@ warn_user: false";
 
 pub struct EyesDaemon {
     pub interval_secs: u64,
-    pub vision_client: OpenAIClient,
+    pub vision_client: Arc<dyn LlmProvider>,
     pub proactive_tx: mpsc::Sender<ProactiveEvent>,
 }
 

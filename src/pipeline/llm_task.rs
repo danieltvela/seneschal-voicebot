@@ -10,7 +10,7 @@ use super::state::PipelineEvents;
 use crate::agents::ProactiveEvent;
 use crate::analysis::ContextLens;
 use crate::db::Database;
-use crate::llm::{LlmSession, OpenAIClient, StreamToken};
+use crate::llm::{LlmProvider, LlmSession, StreamToken};
 use crate::tools::{ToolRegistry, format_history};
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
@@ -30,7 +30,7 @@ pub async fn llm_task(
     mut transcript_rx: mpsc::Receiver<PipelineFrame>,
     t_llm_post_send: Arc<Mutex<Option<Instant>>>,
     llm_session: Arc<Mutex<LlmSession>>,
-    llm_client: OpenAIClient,
+    llm_client: Arc<dyn LlmProvider>,
     db: Database,
     session_id: uuid::Uuid,
     tools: Arc<ToolRegistry>,
