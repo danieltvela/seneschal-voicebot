@@ -1,14 +1,14 @@
 # Voicebot — Agent Instructions
 
-## ⚠️ Legal & Naming
+## Legal & Naming
 
 - **Jarvis®** is a trademark of Marvel Studios/Disney. This is an independent fan project.
-- Refer to this project as **"Voicebot"**. Never "Jarvis", "Hive" or just "Voicebot".
+- Refer to this project as **"Voicebot"**. Never "Jarvis" or "Hive".
 - See `LICENSE-VOICEBOT.md` for full details.
 
 ---
 
-## Commands (exact)
+## Commands
 
 ```bash
 cargo build --release      # Release build
@@ -39,44 +39,64 @@ cargo test -p voicebot <test_name>
 
 Mono-user voice AI chatbot in Rust. Streaming STT→LLM→TTS pipeline, single process, tokio channels.
 
+### Data Flow
+
 ```
-Microphone → VAD (Silero) → STT (whisper-cpp-plus or parakeet-rs) → LLM (mlx-lm/oMLX SSE) → SentenceSplitter → TTS (AVSpeech/Kokoro) → AudioOutput
+Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero VAD)
+      partial transcripts accumulated in-memory
+→ LLM client (OpenAI-compatible /v1/chat/completions, streaming SSE)
+      tokens streamed as they arrive
+→ SentenceSplitter (buffer until punctuation boundary)
+→ TTS (macOS AVSpeechSynthesizer or Kokoro ONNX)
+      synthesizes sentence by sentence
+→ AudioOutput (CPAL speaker)
 ```
 
 ### Key Design Decisions
 
-- **STT→LLM latency trick**: Accumulate partial transcripts; send full text when VAD signals end-of-speech. LLM server maintains KV-cache implicitly across requests.
-- **LLM→TTS streaming**: Buffer tokens until punctuation (`. ! ? ; :`), synthesize immediately. While sentence N plays, sentence N+1 is being generated.
-- **Language**: Spanish default (`VOICEBOT_LANGUAGE=es`), English supported. Affects Whisper hint and TTS voice. Parakeet auto-detects 25 languages.
-- **Barge-in**: User speech cancels active pipeline via `CancellationToken` (tokio-util).
+- **Single binary**: no inter-service communication; all stages connected by `tokio::sync` channels
+- **STT→LLM latency trick**: partial Whisper transcripts are accumulated in a `String`; when VAD signals end-of-speech the full transcript is sent to the LLM server. The server maintains its own KV-cache implicitly across requests within a session.
+- **LLM→TTS streaming**: LLM tokens arrive via SSE and are buffered until a sentence boundary (`.`, `!`, `?`, `;`, `:`) — then that sentence is synthesized immediately. While sentence N plays, sentence N+1 is being generated and synthesized.
+- **Language**: Spanish by default (`VOICEBOT_LANGUAGE=es`), English supported. Affects Whisper hint and TTS voice. Parakeet auto-detects 25 languages.
+- **Barge-in**: Implemented via `CancellationToken` (tokio-util). User speech cancels the active pipeline.
 - **Pluggable STT**: Provider trait abstracts Whisper (whisper-cpp-plus) and Parakeet (ONNX). Both share Silero VAD. Select via `STT_PROVIDER` env var.
+- **Agent delegation**: Complex tasks can be delegated to external AI agents via the ACP protocol over stdio.
 
 ---
 
 ## Module Boundaries
 
-| Directory | Purpose | Public exports (lib.rs) |
-|-----------|---------|------------------------|
-| `src/audio/` | CPAL capture, Silero VAD, resampling (rubato), playback | `AudioBuffer`, `AudioOutput`, `VoiceActivityDetector` |
-| `src/stt/` | Provider trait (`SttProvider`) + Whisper (`WhisperSttProvider`) + Parakeet (`ParakeetSttProvider`, gated) implementations. 16kHz f32 mono. | `SttProvider`, `WhisperSttProvider`, `SpeechEvent`, `create_provider` |
-| `src/llm/` | HTTP client to `/v1/chat/completions`, session management | `OpenAIClient`, `LlmSession` |
-| `src/tts/` | `avspeech.rs` (macOS AVSpeechSynthesizer), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX) | `SentenceSplitter` |
-| `src/db/` | SQLite persistence: sessions, messages, user_profile, memories | `Database` |
-| `src/config.rs` | Environment-based config (`Config::from_env()`) | `Config` |
-| `src/memory/` | Extract persistent notes from conversation, archive outdated | Injects `[MEMORIES]` block into system prompt |
-| `src/profile/` | User profile facts extraction | Startup greeting, name recognition |
-| `src/tools/` | Tool implementations: time, screenshot, notifications, clipboard, open_app, web_search | SearXNG-backed web search |
-| `src/agents/` | Agent delegation for complex tasks | ACP protocol via stdio |
-| `src/remote/` | WebSocket server for remote audio streaming | Binary PCM i16 LE 16kHz + JSON control |
-| `src/tui/` | Terminal UI (ratatui) | Enable with `--features tui` |
+| Directory | Purpose | Key Files |
+|-----------|---------|-----------|
+| `src/audio/` | Audio pipeline: capture, VAD, resampling, playback | `audio_capture.rs`, `vad.rs`, `buffer.rs`, `audio_transform.rs`, `output.rs`, `speaker.rs`, `ambient_buffer.rs` |
+| `src/stt/` | Provider trait + Whisper + Parakeet implementations. 16kHz f32 mono. | `mod.rs` (WhisperSTTVAD), `whisper.rs` (DEPRECATED), `parakeet.rs` |
+| `src/llm/` | HTTP client to `/v1/chat/completions`, session management | `client.rs` (OpenAIClient), `session.rs` (LlmSession), `manager.rs` |
+| `src/tts/` | `avspeech.rs` (macOS AVSpeech), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX) | `avspeech.rs`, `kokoro.rs`, `sentence.rs`, `piper.rs` (reference) |
+| `src/pipeline/` | Pipeline orchestration with FSM | `mod.rs`, `fsm.rs` (PipelineState), `llm_task.rs`, `tts_task.rs`, `sen_task.rs`, `frames.rs`, `state.rs`, `consolidation.rs` |
+| `src/daemon.rs` | InferenceDaemon — main inference lifecycle | Loops: listen VAD → STT → LLM → TTS |
+| `src/eyes.rs` | EyesDaemon — visual/status monitoring | Periodically observes system state |
+| `src/control/` | Control API (HTTP/WebSocket) | `api.rs`, `state.rs`, `broadcast.rs`, `client.rs`, `mod.rs` |
+| `src/mcp/` | Model Context Protocol integration | `mod.rs` (McpClient, McpToolDef, call_tool) |
+| `src/tools/` | Tool implementations: time, screenshot, notifications, clipboard, open_app, web_search | `clipboard.rs`, `current_time.rs`, `open_app.rs`, `web_search.rs`, etc. |
+| `src/agents/` | Agent delegation for complex tasks | `mod.rs`, `config.rs`, `session_manager.rs`, `session_events.rs` |
+| `src/analysis/` | Identity analysis | `mod.rs`, `identity.rs` |
+| `src/db/` | SQLite persistence: sessions, messages, user_profile, memories | `database.rs`, `mod.rs` |
+| `src/config.rs` | Environment-based config | `Config::from_env()` |
+| `src/memory/` | Extract persistent notes from conversation, archive outdated | `mod.rs` (extract_memories, build_memory_context) |
+| `src/profile/` | User profile facts extraction | `mod.rs` |
+| `src/i18n.rs` | Internationalization support | Language-specific strings |
+| `src/remote/` | WebSocket server for remote audio streaming | `mod.rs`, `server.rs`, `protocol.rs` |
+| `src/tui/` | Terminal UI (ratatui) | `app.rs`, `events.rs`, `input.rs`, `mod.rs`, `ui.rs` |
 | `src/bin/acp_agent_chat.rs` | Debug/test TUI chat with ACP agent via JSON-RPC 2.0 over stdio | Run: `cargo run --bin acp_agent_chat` |
 | `src/bin/test_stt_plus.rs` | Test binary for whisper-cpp-plus streaming functionality | Run: `cargo run --bin test_stt_plus --release` |
+| `src/e2e_tests.rs` | End-to-end pipeline tests | Integration tests |
 
 ### Legacy Modules (do not extend)
 
+- `src/stt/whisper.rs` — **DEPRECATED** — legacy whisper-rs wrapper; replaced by `whisper-cpp-plus` in `src/stt/mod.rs`
 - `src/websocket_client.rs` — No longer needed
 - `provider/` — Python LFM2.5-Audio server (not used)
-- `src/stt/whisper_plus.rs` — Replaced by provider abstraction; use `src/stt/whisper.rs` (WhisperSttProvider)
+- `src/tts/piper.rs` — Piper subprocess wrapper (kept for reference, not active)
 
 **Do not extend legacy modules.** If you find code there, flag it for removal.
 
@@ -86,37 +106,73 @@ Microphone → VAD (Silero) → STT (whisper-cpp-plus or parakeet-rs) → LLM (m
 
 Read from `.env` (dotenvy loads automatically):
 
-```bash
-# Audio
-AUDIO_SAMPLE_RATE=16000
-AUDIO_CHANNELS=1
-VOICEBOT_LANGUAGE=es          # es (default) or en
-
-# STT Provider
-STT_PROVIDER=whisper          # whisper (default) or parakeet
-WHISPER_MODEL=models/ggml-large-v3-turbo.bin
-WHISPER_THREADS=0             # auto
-PARAKEET_MODEL_DIR=           # required when STT_PROVIDER=parakeet
-                              # Download ONNX export from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
-
-# LLM
-LLM_URL=http://127.0.0.1:8000 # mlx-lm default; oMLX is 8001
-LLM_MAX_TOKENS=1024
-LLM_CONTEXT_TOKENS=8192
-LLM_CONSOLIDATION_THRESHOLD_PCT=80
-LLM_SUMMARY_KEEP_TURNS=6
-
-# Web search
-SEARXNG_URL=https://searxng.example.com
-SEARXNG_SECRET=<bearer_token>
-
-# Remote
-WS_PORT=9090                    # Enable WebSocket server
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
+| `AUDIO_CHANNELS` | `1` | Audio channels |
+| `VOICEBOT_LANGUAGE` | `es` | Language (`es` or `en`) |
+| `STT_PROVIDER` | `whisper` | `whisper` (default) or `parakeet` |
+| `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
+| `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
+| `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
+| `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
+| `LLM_MAX_TOKENS` | `1024` | Max tokens per response |
+| `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
+| `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
+| `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |
+| `AVSPEECH_VOICE` | `"Jorge (Enhanced)"` | macOS AVSpeech voice name |
+| `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |
+| `SEARXNG_URL` | — | SearXNG base URL (enables web_search) |
+| `SEARXNG_SECRET` | — | SearXNG bearer token |
+| `WS_PORT` | `9090` | WebSocket server port |
 
 ---
 
-## Testing Quirks
+## Build Features & Dependencies
+
+| Feature | Enables | Extra deps | Requirements |
+|---------|---------|------------|--------------|
+| (none) | Core pipeline | whisper-cpp-plus, reqwest, sqlx | — |
+| `parakeet` | NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
+| `kokoro` | Kokoro ONNX TTS | kokorox | `brew install espeak-ng` |
+| `tui` | Terminal UI | ratatui, crossterm | — |
+| `remote` | WebSocket server | axum, tower | — |
+| `speaker` | Speaker verification | sherpa-rs | `models/speaker_embedding.onnx` |
+| `avspeech` | macOS AVSpeechSynthesizer | objc2*, block2 | macOS only |
+
+**On macOS**: whisper-cpp-plus uses Metal by default (faster STT via metal feature). Model files: `models/ggml-large-v3-turbo.bin` + `models/*-encoder.mlmodelc` for CoreML encoder fallback.
+
+---
+
+## Code Style & Patterns
+
+- **Error handling**: `anyhow::Result` with context strings; `thiserror` for custom types.
+- **Logging**: `tracing` throughout (no println!); logs → `voicebot.log` when TUI active.
+- **Async**: tokio runtime + channels (`mpsc`, `broadcast`) for inter-stage comms.
+- **Cancellation**: `CancellationToken` (tokio-util) for barge-in support.
+- **Serialization**: serde + serde_json.
+- **Tool calling**: LLM uses `<tool_name: args>` syntax; parsed by ToolRegistry.
+
+### When Adding Tools
+
+1. Define tool schema in `src/tools/mod.rs` or dedicated module.
+2. Implement handler returning `Result<String, Error>`.
+3. Register in main pipeline's tool map.
+4. Add doc comment explaining use case and limitations.
+
+### Database Migrations
+
+Use sqlx migrations:
+```bash
+sqlx migrate add <migration_name>
+sqlx migrate run
+```
+
+Migrations live in `src/db/migrations/`.
+
+---
+
+## Testing
 
 - **VAD/audio tests**: Use synthetic sine waves / silence (see `src/audio/` tests).
 - **STT tests**: Skip if model file missing (`#[ignore]`). Uses `whisper-cpp-plus`.
@@ -135,48 +191,6 @@ The `test_stt_plus` binary provides standalone STT testing without full pipeline
 ```bash
 cargo run --bin test_stt_plus --release
 ```
-
----
-
-## Build Features & Dependencies
-
-| Feature | Enables | Extra deps | Requirements |
-|---------|---------|------------|--------------|
-| (none) | Core pipeline | whisper-cpp-plus, reqwest, sqlx | — |
-| `parakeet` | NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
-| `kokoro` | Kokoro ONNX TTS | kokorox | `brew install espeak-ng` |
-| `tui` | Terminal UI | ratatui, crossterm | — |
-| `remote` | WebSocket server | axum, tower | — |
-| `speaker` | Speaker verification | sherpa-rs | `models/speaker_embedding.onnx` |
-| `avspeech` | macOS AVSpeechSynthesizer | objc2*, block2 | macOS only |
-
-**On macOS**: whisper-cpp-plus uses Metal by default (faster STT via whisper-cpp-plus metal feature). Model files: `models/ggml-large-v3-turbo.bin` + `models/*-encoder.mlmodelc` for CoreML encoder fallback.
-
----
-
-## Code Style & Patterns
-
-- **Error handling**: `anyhow::Result` with context strings; `thiserror` for custom types.
-- **Logging**: `tracing` throughout (no println!); logs → `voicebot.log` when TUI active.
-- **Async**: tokio runtime + channels (`mpsc`, `broadcast`) for inter-stage comms.
-- **Serialization**: serde + serde_json.
-
-### When Adding Tools
-
-1. Define tool schema in `src/tools/mod.rs` or dedicated module.
-2. Implement handler returning `Result<String, Error>`.
-3. Register in main pipeline's tool map.
-4. Add doc comment explaining use case and limitations.
-
-### Database Migrations
-
-Use sqlx migrations:
-```bash
-sqlx migrate add <migration_name>
-sqlx migrate run
-```
-
-Migrations live in `src/db/migrations/`.
 
 ---
 
@@ -203,15 +217,50 @@ Migrations live in `src/db/migrations/`.
 - Never auto-commit to main without explicit user instruction.
 
 ### Gitea Issues
-- Issues live on Gitea (`tesla.local:3000`).
-- Use the `tea` CLI for all issue operations (never `gh` or raw `curl`).
-- When asked to "Resolve/Open/Plan issue #N", the agent should:
-  1. Fetch issue details with `tea issue view N`.
-  2. Write a plan as a comment on the issue.
-  3. Execute the work.
-  4. Leave final results as a comment on the issue.
-- Labels exist but no issue templates — the agent handles formatting naturally.
-- Always reference the issue number in commit messages when work is issue-driven: `fix: address issue #11 — fix VAD timeout`
+
+Issues live on Gitea (`tesla.local:3000`). Use the `tea` CLI for all issue operations (never `gh` or raw `curl`).
+
+#### Documenting Work as Issue Comments
+
+Every time an agent completes an analysis, plan, or finishes work on a Gitea issue, it **must** leave the results as a comment on that issue. This creates an auditable trail and lets the user review work without checking commits.
+
+**When posting comments:**
+
+| Trigger | What to include |
+|---------|----------------|
+| Starting analysis | Brief scope statement + what you'll investigate |
+| Completing a plan | Numbered steps, affected files/modules, estimated complexity |
+| Finishing implementation | Summary of changes, files touched, commands run, test results |
+| Fixing a bug | Root cause, fix applied, verification steps |
+| Research/spike | Findings, options considered, recommendation |
+
+**Comment format:**
+
+```markdown
+## Analysis / Plan / Results
+
+[Brief description of the work performed]
+
+### Changes
+- File/module affected: what changed and why
+
+### Verification
+- `cargo test` result
+- `cargo clippy` clean
+- Manual testing notes (if applicable)
+
+### Related
+- Commands run: `cargo run --features tui`
+```
+
+**Workflow for issue-driven work:**
+1. Fetch issue details: `tea issue view N`
+2. Post initial comment with scope/plan
+3. Execute the work
+4. Post final comment with results (mandatory)
+5. Reference the issue number in commit messages: `fix: address issue #11 — fix VAD timeout`
+
+Labels exist but no issue templates — the agent handles formatting naturally.
 
 ### Versioning
 - Semver with pre-release state: `v<major>.<minor>.<patch>-<state><number>`
@@ -238,7 +287,7 @@ cargo run --features tui --release
 
 ### Adding a New Feature
 
-1. Read relevant section of `CLAUDE.md` first (architecture guidance).
+1. Read this file first (architecture guidance).
 2. Check existing tools/agents to avoid duplication.
 3. If feature affects multiple modules, create integration test in `e2e_tests.rs`.
 4. Update this file if you discover new conventions.
@@ -259,7 +308,7 @@ Log with `RUST_LOG=trace cargo run` for detailed timing.
 
 ## References
 
-- `CLAUDE.md`: Detailed architecture (keep synced with this file).
-- `readme.md`: User-facing documentation.
-- `CONTRIBUTING.md`: Contributor guidelines.
-- `secondary-agent.md`: Secondary LLM orchestration design (Spanish).
+- `LICENSE-VOICEBOT.md`: Trademark information
+- `readme.md`: User-facing documentation
+- `CONTRIBUTING.md`: Contributor guidelines
+- `secondary-agent.md`: Secondary LLM orchestration design (Spanish)
