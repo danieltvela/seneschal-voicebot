@@ -16,7 +16,7 @@ use super::Tool;
 use crate::agents::{AcpSessionManager, AgentConfig, ProactiveEvent};
 use crate::config::HermesSessionViewerMode;
 
-use crate::llm::{Message, OpenAIClient};
+use crate::llm::{LlmProvider, Message};
 
 // ── History formatting ────────────────────────────────────────────────────────
 
@@ -193,7 +193,7 @@ fn parse_jsonrpc(v: &Value) -> Option<JsonRpcMessage> {
 /// Ask the secondary LLM to summarize a raw agent result into a concise,
 /// voice-ready response. Falls back to `raw` if synthesis fails or is not
 /// configured.
-async fn synthesize_agent_result(task: &str, raw: String, client: Option<&OpenAIClient>) -> String {
+async fn synthesize_agent_result(task: &str, raw: String, client: Option<&dyn LlmProvider>) -> String {
     let Some(client) = client else { return raw };
     if raw.is_empty() || raw.starts_with("Agent error:") || raw.starts_with("ACP") {
         return raw;
@@ -231,7 +231,7 @@ pub struct RunAgentTool {
     task_map: Arc<DashMap<String, ActiveTask>>,
     history: Arc<RwLock<String>>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
-    synthesis_client: Option<std::sync::Arc<OpenAIClient>>,
+    synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
     hermes_viewer_mode: HermesSessionViewerMode,
 }
@@ -266,7 +266,7 @@ impl RunAgentTool {
     }
 
     /// Attach a secondary LLM client for result synthesis.
-    pub fn with_synthesis(mut self, client: std::sync::Arc<OpenAIClient>) -> Self {
+    pub fn with_synthesis(mut self, client: Arc<dyn LlmProvider>) -> Self {
         self.synthesis_client = Some(client);
         self
     }

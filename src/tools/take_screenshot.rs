@@ -1,24 +1,26 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tracing::{info, warn};
 
-use crate::llm::OpenAIClient;
+use crate::llm::LlmProvider;
 
 use super::Tool;
 
 /// Tool that takes a screenshot and describes it using a vision model.
 ///
 /// Enabled when `SECONDARY_LLM_URL` is set. Delegates HTTP to the shared
-/// secondary `OpenAIClient` so the vision call never evicts the main
+/// secondary LLM provider so the vision call never evicts the main
 /// conversation KV-cache.
 ///
 /// macOS only: uses `screencapture -x -t png` for a silent capture.
 pub struct TakeScreenshotTool {
-    client: OpenAIClient,
+    client: Arc<dyn LlmProvider>,
 }
 
 impl TakeScreenshotTool {
-    pub fn new(client: OpenAIClient) -> Self {
+    pub fn new(client: Arc<dyn LlmProvider>) -> Self {
         Self { client }
     }
 
@@ -114,13 +116,21 @@ impl Tool for TakeScreenshotTool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use crate::llm::OpenAiLlmProvider;
 
     fn tool(base_url: &str) -> TakeScreenshotTool {
-        TakeScreenshotTool::new(OpenAIClient::new(base_url, "test-vision-model", 512, 0.0))
+        TakeScreenshotTool::new(Arc::new(OpenAiLlmProvider::new(
+            base_url,
+            "test-vision-model",
+            512,
+            0.0,
+        )))
     }
 
     #[test]

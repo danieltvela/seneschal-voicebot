@@ -33,7 +33,7 @@ use crate::analysis::ContextLens;
 use crate::audio::output::AudioOutput;
 use crate::config::Config;
 use crate::db::Database;
-use crate::llm::{LlmSession, OpenAIClient};
+use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
 use crate::tools::ToolRegistry;
 use crate::tts::{TtsEngine, mock_tts::MockTts};
@@ -62,7 +62,7 @@ fn make_sse(text: &str) -> String {
 
 struct E2eHarness {
     pub server: MockServer,
-    pub llm_client: OpenAIClient,
+    pub llm_client: Arc<dyn LlmProvider>,
     pub llm_session: Arc<Mutex<LlmSession>>,
     pub tts: Arc<TtsEngine>,
     /// Accumulates every sentence sent to TTS.
@@ -87,12 +87,12 @@ impl E2eHarness {
 
     async fn with_system_prompt(system_prompt: &str) -> Self {
         let server = MockServer::start().await;
-        let llm_client = OpenAIClient::new(
+        let llm_client: Arc<dyn LlmProvider> = Arc::new(OpenAiLlmProvider::new(
             &server.uri(),
             "test-model",
             400, // max_tokens
             0.0, // temperature — deterministic
-        );
+        ));
         let llm_session = Arc::new(Mutex::new(LlmSession::new(system_prompt)));
 
         let (mock_tts, captured) = MockTts::new();

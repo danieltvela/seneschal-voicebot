@@ -45,7 +45,7 @@ use crate::audio::output::AudioOutput;
 use crate::audio::speaker::SpeakerVerifier;
 use crate::config::Config;
 use crate::db::{Database, Memory};
-use crate::llm::{LlmSession, OpenAIClient};
+use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{
     PipelineEvents, PipelineFrame, PipelineState, build_system_prompt, consolidation_task,
     llm_task, run_consolidation_cycle, sen_task, tts_task,
@@ -191,16 +191,20 @@ async fn async_main() -> Result<()> {
     let (proactive_tx, proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
 
     // ── Secondary LLM client ─────────────────────────────────────────────────
-    let secondary_llm_client: Option<OpenAIClient> = config.secondary_llm_url.as_ref().map(|url| {
-        OpenAIClient::new(
-            url,
-            &config.secondary_llm_model,
-            config.secondary_llm_max_tokens,
-            0.3,
-        )
-        .with_api_key(&config.secondary_llm_api_key)
-        .with_thinking(config.secondary_llm_thinking)
-    });
+    let secondary_llm_client: Option<Arc<dyn LlmProvider>> =
+        config.secondary_llm_url.as_ref().map(|url| {
+            let client: Arc<dyn LlmProvider> = Arc::new(
+                OpenAiLlmProvider::new(
+                    url,
+                    &config.secondary_llm_model,
+                    config.secondary_llm_max_tokens,
+                    0.3,
+                )
+                .with_api_key(&config.secondary_llm_api_key)
+                .with_thinking(config.secondary_llm_thinking),
+            );
+            client
+        });
     if secondary_llm_client.is_some() {
         info!(
             target: "llm",
@@ -242,7 +246,7 @@ async fn async_main() -> Result<()> {
     {
         let mut wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
         if let Some(ref sec) = secondary_llm_client {
-            wst = wst.with_synthesis(std::sync::Arc::new(sec.clone()));
+            wst = wst.with_synthesis(sec.clone());
             info!(target: "voicebot", "web_search synthesis via secondary LLM enabled");
         }
         tool_registry.register(wst);
@@ -264,7 +268,7 @@ async fn async_main() -> Result<()> {
             proactive_tx.clone(),
         );
         if let Some(ref sec) = secondary_llm_client {
-            run_agent_tool = run_agent_tool.with_synthesis(std::sync::Arc::new(sec.clone()));
+            run_agent_tool = run_agent_tool.with_synthesis(sec.clone());
             info!(target: "voicebot", "run_{} result synthesis via secondary LLM enabled", agent.name);
         }
         if agent.mode == "acp" {
@@ -391,13 +395,7 @@ async fn async_main() -> Result<()> {
     }
 
     // ── LLM client ────────────────────────────────────────────────────────────
-    let llm_client = OpenAIClient::new(
-        &config.llm_url,
-        &config.llm_model,
-        config.llm_max_tokens,
-        config.llm_temperature,
-    )
-    .with_api_key(&config.llm_api_key);
+    let llm_client = crate::llm::create_provider(&config)?;
     info!(target: "llm", "LLM endpoint: {}", config.llm_url);
 
     let background_client = secondary_llm_client
@@ -867,7 +865,7 @@ async fn async_main() -> Result<()> {
         if needs {
             info!(target: "memory", "Startup: context exceeds idle threshold — running silent consolidation before greeting");
             run_consolidation_cycle(
-                &background_client,
+                background_client.as_ref(),
                 &db,
                 session_id,
                 &llm_session,
@@ -1253,6 +1251,9 @@ fn map_answer_to_outcome(transcript: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::llm::LlmProvider;
 
     /// Integration test for summarization using a real LLM server.
     ///
@@ -1278,8 +1279,10 @@ mod tests {
             std::env::var("LLM_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
         let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
         let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
-        let llm_client = crate::llm::OpenAIClient::new(&llm_url, &llm_model, 400, 0.3)
-            .with_api_key(&llm_api_key);
+        let llm_client: Arc<dyn LlmProvider> = Arc::new(
+            crate::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
+                .with_api_key(&llm_api_key),
+        );
 
         let system_prompt = "You are a helpful assistant.";
         let mut session = crate::llm::LlmSession::new(system_prompt);
@@ -1378,8 +1381,10 @@ mod tests {
             std::env::var("LLM_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
         let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
         let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
-        let llm_client = crate::llm::OpenAIClient::new(&llm_url, &llm_model, 400, 0.3)
-            .with_api_key(&llm_api_key);
+        let llm_client: Arc<dyn LlmProvider> = Arc::new(
+            crate::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
+                .with_api_key(&llm_api_key),
+        );
 
         let db_dir = tempfile::TempDir::new().unwrap();
         let db_path = db_dir.path().join("bench_kv.db");
