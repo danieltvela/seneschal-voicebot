@@ -6,9 +6,9 @@ servers:
       vllm:
         port: 8005
         token: ""
-        models: []
+        models:
           # - Step-3.7-Flash
-          # - Qwen3.6-27B
+          - Qwen3.6-27B
           # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
@@ -39,10 +39,10 @@ servers:
       llama-server:
         port: 8000
         token: "asdf"
-        models:
+        models: []
           # - LFM2.5-8B-A1B-Q8_0
-          - gemma-4-26B-A4B-it-UD-Q4_K_XL
-          - gemma-4-26B-A4B-it-UD-Q8_K_XL
+          # - gemma-4-26B-A4B-it-UD-Q4_K_XL
+          # - gemma-4-26B-A4B-it-UD-Q8_K_XL
       omlx:
         port: 8001
         token: "asdf"
@@ -54,19 +54,19 @@ servers:
       mlx-lm:
         port: 8080
         token: ""
-        models:
+        models: []
           # - LiquidAI/LFM2.5-8B-A1B-MLX-4bit
           # - LiquidAI/LFM2.5-8B-A1B-MLX-8bit
-          - mlx-community/gemma-4-26b-a4b-it-4bit
+          # - mlx-community/gemma-4-26b-a4b-it-4bit
           # - zecanard/gemma-4-26B-A4B-it-uncensored-abliterix-MLX-4bit-nvfp4
           # - culturerevolt/gemma-4-26B-A4B-it-ultra-uncensored-heretic-mlx-4Bit
       ollama:
         port: 11434
         token: ""
-        models:
+        models: []
           # - maternion/lfm2.5:8b
           # - gemma4:26b-nvfp4
-          - gemma4:26b-a4b-it-q4_K_M
+          # - gemma4:26b-a4b-it-q4_K_M
 
 # Evaluator model used to judge quality benchmark responses.
 # This model scores each fixture response against a rubric and is NOT itself

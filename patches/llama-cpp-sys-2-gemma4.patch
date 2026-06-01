@@ -1,0 +1,10 @@
+diff --git a/llama.cpp/src/llama-context.cpp b/llama.cpp/src/llama-context.cpp
+index 1234567..abcdefg 100644
+--- a/llama.cpp/src/llama-context.cpp
++++ b/llama.cpp/src/llama-context.cpp
+@@ -2072,7 +2072,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+-    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
++    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_GEMMA4) {
+         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+     }
+     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());

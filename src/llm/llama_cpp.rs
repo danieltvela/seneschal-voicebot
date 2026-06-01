@@ -16,8 +16,12 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
+use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+
+/// Shared llama.cpp backend — `LlamaBackend::init()` is once-per-process and
+/// its `Drop` calls `llama_backend_free()`, so manual construction is unsound.
+static LLAMA_BACKEND: Mutex<Option<Arc<LlamaBackend>>> = Mutex::new(None);
 
 /// Local LLM provider backed by `llama-cpp-2`.
 ///
@@ -52,7 +56,18 @@ impl LlamaCppLlmProvider {
 
         info!(target: "llm", "Loading local model from {}", model_path);
 
-        let backend = LlamaBackend::init()?;
+        let backend = {
+            let mut guard = LLAMA_BACKEND.lock().unwrap();
+            if let Some(backend) = guard.as_ref() {
+                backend.clone()
+            } else {
+                let backend = LlamaBackend::init()
+                    .map_err(|e| anyhow::anyhow!("Failed to initialize llama backend: {e}"))?;
+                let arc = Arc::new(backend);
+                *guard = Some(arc.clone());
+                arc
+            }
+        };
 
         let model_params = LlamaModelParams::default()
             .with_n_gpu_layers(config.llama_n_gpu_layers);
@@ -68,7 +83,7 @@ impl LlamaCppLlmProvider {
         );
 
         Ok(Self {
-            backend: Arc::new(backend),
+            backend,
             model: Arc::new(model),
             n_ctx: config.llama_context_size,
             n_threads: config.llama_n_threads,
@@ -77,9 +92,9 @@ impl LlamaCppLlmProvider {
     }
 
     /// Build a formatted prompt from messages using the model's built-in chat template.
+    /// Falls back to ChatML when the model template is missing or not recognised by
+    /// llama.cpp (ApplyChatTemplateError::FfiError(-1)).
     fn build_prompt(&self, messages: &[serde_json::Value]) -> Result<String> {
-        let template = self.model.chat_template(None)?;
-
         let chat_messages: Vec<LlamaChatMessage> = messages
             .iter()
             .filter_map(|m| {
@@ -89,8 +104,28 @@ impl LlamaCppLlmProvider {
             })
             .collect();
 
-        let prompt = self.model.apply_chat_template(&template, &chat_messages, true)?;
-        Ok(prompt)
+        let template_result = match self.model.chat_template(None) {
+            Ok(t) => Ok(t),
+            Err(llama_cpp_2::ChatTemplateError::MissingTemplate) => {
+                LlamaChatTemplate::new("chatml")
+                    .map_err(|e| anyhow::anyhow!("Invalid fallback template: {e}"))
+            }
+            Err(e) => Err(e.into()),
+        };
+        let template = template_result?;
+
+        match self.model.apply_chat_template(&template, &chat_messages, true) {
+            Ok(prompt) => Ok(prompt),
+            Err(llama_cpp_2::ApplyChatTemplateError::FfiError(-1)) => {
+                // Template not recognised by llama.cpp; fall back to ChatML.
+                let fallback = LlamaChatTemplate::new("chatml")
+                    .map_err(|e| anyhow::anyhow!("Invalid fallback template: {e}"))?;
+                self.model
+                    .apply_chat_template(&fallback, &chat_messages, true)
+                    .map_err(|e| anyhow::anyhow!("Failed to apply fallback chat template: {e}"))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Run inference and return the full generated text.
