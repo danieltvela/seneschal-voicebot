@@ -1,0 +1,39 @@
+name: Install Test (Linux)
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  install-test-linux:
+    name: Install · Linux (clean Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the test image
+        run: docker build --tag voicebot-install-test:latest --file .gitea/install-test/Dockerfile .
+
+      - name: Run the smoke test
+        run: docker run --rm voicebot-install-test:latest
+
+      - name: Re-run with host audio (best-effort)
+        run: |
+          if [ -d /dev/snd ]; then
+              echo "Host /dev/snd available — re-running with audio passthrough"
+              docker run --rm \
+                  --device /dev/snd:/dev/snd \
+                  voicebot-install-test:latest
+          else
+              echo "No /dev/snd on host (headless runner) — single run only"
+          fi
+        continue-on-error: true
