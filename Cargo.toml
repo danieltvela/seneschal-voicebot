@@ -148,6 +148,14 @@ path = "src/bin/acp_agent_chat.rs"
 [dependencies.hound]
 version = "3"
 
+[patch.crates-io]
+# Patch llama-cpp-sys-2 to fix Gemma 4 context creation crash.
+# Upstream bug: graph_max_nodes() underestimates the compute graph size for
+# Gemma 4 MoE models, causing the scheduler hash table to overflow and abort.
+# Patch adds LLM_ARCH_GEMMA4 to the high-node-count special-case list.
+# See: https://github.com/ggml-org/llama.cpp/issues (Gemma 4 MoE support)
+llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }
+
 [dev-dependencies]
 # Mock HTTP server for LLM client integration tests
 wiremock = "0.6"
