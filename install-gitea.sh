@@ -1,388 +1,49 @@
 #!/bin/sh
-# Voicebot installer — Gitea edition (local network)
+# Voicebot installer — Gitea (local) edition
 # Usage: curl -fsSL http://tesla.local:3000/danielvela/voicebot/releases/latest/download/install-gitea.sh | sh
 #
-# Or pin a specific release:
-#   VOICEBOT_VERSION=v1.2.0 curl -fsSL .../install-gitea.sh | sh
-#
 # Environment overrides:
-#   GITEA_URL        — Gitea base URL      (default: http://tesla.local:3000)
-#   GITEA_REPO       — owner/repo          (default: danielvela/voicebot)
-#   VOICEBOT_HOME    — install home dir    (default: ~/.voicebot)
-#   BIN_DIR          — launcher directory  (default: ~/.local/bin)
-#   VOICEBOT_VERSION — pin a release tag   (default: latest)
+#   GITEA_URL         — Gitea base URL      (default: http://tesla.local:3000)
+#   GITEA_REPO        — owner/repo          (default: danielvela/voicebot)
+#   VOICEBOT_HOME     — install home dir    (default: ~/.voicebot)
+#   BIN_DIR           — launcher directory  (default: ~/.local/bin)
+#   VOICEBOT_VERSION  — pin a release tag   (default: latest)
+#
+# All installer logic (download, dependencies, model selection, voice picker,
+# LLM probe, smoke test) lives in scripts/lib-installer-common.sh.
 set -e
 
-# ── Configurable defaults ─────────────────────────────────────────────────────
 GITEA_URL="${GITEA_URL:-http://tesla.local:3000}"
 GITEA_REPO="${GITEA_REPO:-danielvela/voicebot}"
-VOICEBOT_HOME="${VOICEBOT_HOME:-$HOME/.voicebot}"
-BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-VOICEBOT_VERSION="${VOICEBOT_VERSION:-}"   # empty = resolve from API
+VOICEBOT_VERSION="${VOICEBOT_VERSION:-latest}"
 
-# Model download URLs (all overrideable via env vars)
-WHISPER_MODEL_URL="${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin}"
-KOKORO_MODEL_URL="${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}"
-KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
-VAD_MODEL_URL="${VAD_MODEL_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx}"
-
-# ── Output helpers ────────────────────────────────────────────────────────────
-if [ -t 1 ]; then
-    _GREEN='\033[0;32m'; _YELLOW='\033[1;33m'; _RED='\033[0;31m'; _NC='\033[0m'
-else
-    _GREEN=''; _YELLOW=''; _RED=''; _NC=''
+if [ -z "$VOICEBOT_VERSION" ]; then
+    # Resolve latest via the Gitea API; curl mock in tests serves a fixture here.
+    VOICEBOT_VERSION=$(curl -fsSL "${GITEA_URL}/api/v1/repos/${GITEA_REPO}/releases/latest" \
+        | sed -n 's/.*"tag_name":"\([^"]*\)".*/\1/p')
 fi
 
-info()  { printf "${_GREEN}[voicebot]${_NC} %s\n" "$1"; }
-warn()  { printf "${_YELLOW}[voicebot]${_NC} %s\n" "$1"; }
-error() { printf "${_RED}[voicebot] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
-step()  { printf "\n${_GREEN}▶ %s${_NC}\n" "$1"; }
+RELEASE_BASE="${GITEA_URL}/${GITEA_REPO}/releases/download/${VOICEBOT_VERSION}"
 
-# ── Platform detection ────────────────────────────────────────────────────────
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-
-case "$OS" in
-    Darwin) OS_NAME="macOS" ;;
-    Linux)  OS_NAME="Linux" ;;
-    *)      error "Unsupported OS: $OS" ;;
-esac
-
-case "$ARCH" in
-    x86_64)          ARCH_TRIPLE="x86_64" ;;
-    arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
-    *)               error "Unsupported architecture: $ARCH" ;;
-esac
-
-case "$OS" in
+case "$(uname -s)" in
     Darwin) PLATFORM="apple-darwin" ;;
     Linux)  PLATFORM="unknown-linux-gnu" ;;
+    *)      PLATFORM="apple-darwin" ;;
 esac
+case "$(uname -m)" in
+    x86_64)          ARCH_TRIPLE="x86_64" ;;
+    arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
+    *)               ARCH_TRIPLE="aarch64" ;;
+esac
+TARBALL="voicebot-${ARCH_TRIPLE}-${PLATFORM}.tar.gz"
 
-TARGET="${ARCH_TRIPLE}-${PLATFORM}"
-TARBALL="voicebot-${TARGET}.tar.gz"
+DEFAULT_TTS_PROVIDER="avspeech"
+DEFAULT_TTS_VOICE="Marisol (Enhanced)"
+DEFAULT_KOKORO_VOICE="es_xb"
+DEFAULT_KOKORO_LANG="es"
 
-# Derived paths
-VOICEBOT_BIN_DIR="$VOICEBOT_HOME/bin"
-VOICEBOT_MODELS_DIR="$VOICEBOT_HOME/models"
-VOICEBOT_DATA_DIR="$VOICEBOT_HOME/data"
-VOICEBOT_ENV="$VOICEBOT_HOME/.env"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib-installer-common.sh
+. "$SCRIPT_DIR/scripts/lib-installer-common.sh"
 
-# ── Utility: download a URL to a file ────────────────────────────────────────
-download() {
-    local url="$1" dest="$2" label="$3"
-    info "  Downloading: $label"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --progress-bar -o "$dest" "$url" 2>&1 || {
-            rm -f "$dest"
-            error "Download failed: $url"
-        }
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$dest" "$url" 2>&1 || {
-            rm -f "$dest"
-            error "Download failed: $url"
-        }
-    else
-        error "Neither curl nor wget found. Please install one and re-run."
-    fi
-}
-
-# ── Utility: fetch text from a URL (no file) ─────────────────────────────────
-fetch() {
-    local url="$1"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url"
-    else
-        wget -qO- "$url"
-    fi
-}
-
-# ── Step 0: Resolve the release version ──────────────────────────────────────
-resolve_version() {
-    step "Resolving release version"
-
-    if [ -n "$VOICEBOT_VERSION" ]; then
-        info "  Pinned version: $VOICEBOT_VERSION"
-        return
-    fi
-
-    # Ask the Gitea API for the latest non-pre-release
-    local api_url="${GITEA_URL}/api/v1/repos/${GITEA_REPO}/releases/latest"
-    info "  Querying: $api_url"
-
-    local response
-    response="$(fetch "$api_url")" || error "Cannot reach Gitea at $GITEA_URL — are you on the local network?"
-
-    # Extract tag_name with sed (no jq dependency)
-    VOICEBOT_VERSION="$(printf '%s' "$response" | \
-        sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-
-    if [ -z "$VOICEBOT_VERSION" ]; then
-        error "Could not parse release tag from Gitea API response. Make sure at least one release exists."
-    fi
-
-    info "  Latest release: $VOICEBOT_VERSION"
-}
-
-# ── Step 1: System dependency check ──────────────────────────────────────────
-check_dependencies() {
-    step "Checking system dependencies"
-
-    if [ "$OS" = "Linux" ]; then
-        local missing=""
-
-        if ! ldconfig -p 2>/dev/null | grep -q "libasound\.so" && \
-           ! find /usr/lib /usr/local/lib 2>/dev/null | grep -q "libasound"; then
-            missing="$missing libasound2"
-        fi
-
-        if ! command -v espeak-ng >/dev/null 2>&1; then
-            missing="$missing espeak-ng"
-        fi
-
-        if [ -n "$missing" ]; then
-            warn "Missing runtime dependencies:$missing"
-            warn ""
-            warn "  Debian/Ubuntu:  sudo apt-get install -y$missing"
-            warn "  Fedora/RHEL:    sudo dnf install -y$missing"
-            warn "  Arch Linux:     sudo pacman -S$missing"
-            warn ""
-            warn "Installation will continue, but voicebot may fail to start."
-        else
-            info "  All Linux runtime dependencies found."
-        fi
-    fi
-
-    if [ "$OS" = "Darwin" ]; then
-        info "  macOS — TTS: AVSpeechSynthesizer (built-in, no extra deps)."
-        info "  Microphone access will be requested on first run."
-    fi
-}
-
-# ── Step 2: Create directory layout ──────────────────────────────────────────
-setup_directories() {
-    step "Setting up directories"
-    mkdir -p "$VOICEBOT_BIN_DIR" "$VOICEBOT_MODELS_DIR" "$VOICEBOT_DATA_DIR" "$BIN_DIR"
-    info "  Install home : $VOICEBOT_HOME"
-    info "  Launcher dir : $BIN_DIR"
-}
-
-# ── Step 3: Download binary from Gitea releases ───────────────────────────────
-install_binary() {
-    step "Downloading voicebot binary ($TARGET)"
-
-    local release_url="${GITEA_URL}/${GITEA_REPO}/releases/download/${VOICEBOT_VERSION}/${TARBALL}"
-
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    # shellcheck disable=SC2064
-    trap "rm -rf '$tmp_dir'" EXIT
-
-    download "$release_url" "$tmp_dir/$TARBALL" "voicebot $VOICEBOT_VERSION ($TARGET)"
-
-    info "  Extracting binary..."
-    tar -xzf "$tmp_dir/$TARBALL" -C "$tmp_dir"
-
-    if [ ! -f "$tmp_dir/voicebot" ]; then
-        error "Binary not found in tarball. Expected a file named 'voicebot'."
-    fi
-
-    mv "$tmp_dir/voicebot" "$VOICEBOT_BIN_DIR/voicebot"
-    chmod +x "$VOICEBOT_BIN_DIR/voicebot"
-    info "  Binary installed: $VOICEBOT_BIN_DIR/voicebot"
-}
-
-# ── Step 4: Whisper STT model ─────────────────────────────────────────────────
-install_whisper_model() {
-    step "Installing Whisper STT model"
-    local dest="$VOICEBOT_MODELS_DIR/ggml-large-v3-turbo.bin"
-
-    if [ -f "$dest" ]; then
-        info "  Already present — skipping (delete to re-download)."
-        return
-    fi
-
-    warn "  Downloading ggml-large-v3-turbo.bin (~1.6 GB). This may take several minutes..."
-    download "$WHISPER_MODEL_URL" "$dest" "Whisper large-v3-turbo"
-    info "  Whisper model installed."
-}
-
-# ── Step 5: Kokoro TTS models (Linux only) ────────────────────────────────────
-install_kokoro_models() {
-    step "Installing Kokoro TTS models (Linux)"
-
-    local kokoro_model="$VOICEBOT_MODELS_DIR/kokoro-v1.0.onnx"
-    local kokoro_voices="$VOICEBOT_MODELS_DIR/voices-v1.0.bin"
-
-    if [ -f "$kokoro_model" ]; then
-        info "  kokoro-v1.0.onnx already present — skipping."
-    else
-        warn "  Downloading kokoro-v1.0.onnx (~305 MB)..."
-        download "$KOKORO_MODEL_URL" "$kokoro_model" "Kokoro ONNX model"
-        info "  Kokoro model installed."
-    fi
-
-    if [ -f "$kokoro_voices" ]; then
-        info "  voices-v1.0.bin already present — skipping."
-    else
-        warn "  Downloading voices-v1.0.bin (~28 MB)..."
-        download "$KOKORO_VOICES_URL" "$kokoro_voices" "Kokoro voice embeddings"
-        info "  Kokoro voices installed."
-    fi
-}
-
-# ── Step 5.5: Silero VAD model ────────────────────────────────────────────────
-install_vad_model() {
-    step "Installing Silero VAD model"
-    local dest="$VOICEBOT_MODELS_DIR/ggml-silero-vad.bin"
-
-    if [ -f "$dest" ]; then
-        info "  Already present — skipping (delete to re-download)."
-        return
-    fi
-
-    warn "  Downloading Silero VAD model (~10 MB)..."
-    download "$VAD_MODEL_URL" "$dest" "Silero VAD"
-    info "  VAD model installed."
-}
-
-# ── Step 6: Default .env ──────────────────────────────────────────────────────
-create_default_env() {
-    step "Writing default configuration"
-
-    if [ -f "$VOICEBOT_ENV" ]; then
-        info "  Config already exists at $VOICEBOT_ENV — skipping."
-        return
-    fi
-
-    if [ "$OS" = "Darwin" ]; then
-        TTS_PROVIDER_DEFAULT="avspeech"
-        TTS_VOICE_LINE="AVSPEECH_VOICE=Marisol (Enhanced)"
-        TTS_RATE_LINE="AVSPEECH_RATE=0.55"
-    else
-        TTS_PROVIDER_DEFAULT="kokoro"
-        TTS_VOICE_LINE="KOKORO_VOICE=es_xb"
-        TTS_RATE_LINE="KOKORO_LANGUAGE=es"
-    fi
-
-    cat > "$VOICEBOT_ENV" << ENVEOF
-# ── Voicebot configuration ────────────────────────────────────────────────────
-# Installed from: ${GITEA_URL}/${GITEA_REPO}  version: ${VOICEBOT_VERSION}
-# Edit this file to customize your setup.
-
-VOICEBOT_LANGUAGE=es
-
-# ── LLM server ────────────────────────────────────────────────────────────────
-LLM_URL=http://localhost:8080
-LLM_MAX_TOKENS=400
-LLM_TEMPERATURE=0.3
-# LLM_SYSTEM_PROMPT=You are a helpful voice assistant.
-# LLM_MODEL=local-model
-
-# ── TTS ───────────────────────────────────────────────────────────────────────
-TTS_PROVIDER=$TTS_PROVIDER_DEFAULT
-$TTS_VOICE_LINE
-$TTS_RATE_LINE
-
-# ── Audio devices ─────────────────────────────────────────────────────────────
-# Run: voicebot --list-devices  to see available devices.
-# AUDIO_INPUT_DEVICE=
-# AUDIO_OUTPUT_DEVICE=
-ENVEOF
-
-    info "  Config written: $VOICEBOT_ENV"
-}
-
-# ── Step 7: Install launcher wrapper ─────────────────────────────────────────
-install_launcher() {
-    step "Installing launcher"
-
-    local launcher="$BIN_DIR/voicebot"
-
-    if [ "$OS" = "Darwin" ]; then
-        DEFAULT_TTS="avspeech"
-    else
-        DEFAULT_TTS="kokoro"
-    fi
-
-    cat > "$launcher" << LAUNCHEOF
-#!/bin/sh
-# voicebot launcher — installed from ${GITEA_URL}/${GITEA_REPO} ${VOICEBOT_VERSION}
-VOICEBOT_HOME="\${VOICEBOT_HOME:-$VOICEBOT_HOME}"
-
-export WHISPER_MODEL="\${WHISPER_MODEL:-\$VOICEBOT_HOME/models/ggml-large-v3-turbo.bin}"
-export DB_PATH="\${DB_PATH:-\$VOICEBOT_HOME/data/voicebot.db}"
-export KOKORO_MODEL="\${KOKORO_MODEL:-\$VOICEBOT_HOME/models/kokoro-v1.0.onnx}"
-export KOKORO_VOICES="\${KOKORO_VOICES:-\$VOICEBOT_HOME/models/voices-v1.0.bin}"
-export VAD_MODEL="\${VAD_MODEL:-\$VOICEBOT_HOME/models/ggml-silero-vad.bin}"
-export TTS_PROVIDER="\${TTS_PROVIDER:-$DEFAULT_TTS}"
-
-if [ -f "\$VOICEBOT_HOME/.env" ]; then
-    set -a
-    # shellcheck source=/dev/null
-    . "\$VOICEBOT_HOME/.env"
-    set +a
-fi
-
-exec "\$VOICEBOT_HOME/bin/voicebot" "\$@"
-LAUNCHEOF
-
-    chmod +x "$launcher"
-    info "  Launcher installed: $launcher"
-}
-
-# ── Step 8: PATH check ────────────────────────────────────────────────────────
-check_path() {
-    case ":$PATH:" in
-        *":$BIN_DIR:"*) ;;
-        *)
-            warn ""
-            warn "  $BIN_DIR is not in your PATH."
-            warn "  Add to your shell config (~/.bashrc, ~/.zshrc):"
-            warn ""
-            warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-            warn ""
-            warn "  Then reload: source ~/.bashrc  (or restart your terminal)"
-            ;;
-    esac
-}
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-printf "\n"
-info "╔══════════════════════════════════════════════╗"
-info "║       Voicebot Installer (Gitea)             ║"
-info "╚══════════════════════════════════════════════╝"
-printf "\n"
-info "Source   : ${GITEA_URL}/${GITEA_REPO}"
-info "Platform : $OS_NAME ($TARGET)"
-info "Home     : $VOICEBOT_HOME"
-info "Launcher : $BIN_DIR/voicebot"
-printf "\n"
-
-resolve_version
-check_dependencies
-setup_directories
-install_binary
-install_whisper_model
-install_vad_model
-
-if [ "$OS" = "Linux" ]; then
-    install_kokoro_models
-fi
-
-create_default_env
-install_launcher
-check_path
-
-printf "\n"
-info "══════════════════════════════════════════════════"
-info "  Installation complete!  (${VOICEBOT_VERSION})"
-info "══════════════════════════════════════════════════"
-printf "\n"
-info "Start your LLM server first:"
-info "  mlx_lm.server --model mlx-community/Qwen3-8B-4bit --port 8000"
-printf "\n"
-info "Configure:  \$EDITOR $VOICEBOT_ENV"
-info "Run:        voicebot"
-info "Devices:    voicebot --list-devices"
-printf "\n"
+main "$@"
