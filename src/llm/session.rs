@@ -51,6 +51,11 @@ pub struct LlmSession {
     summary: Option<String>,
     /// Conversation turns in OpenAI JSON format (user, assistant, tool messages).
     pub messages: Vec<serde_json::Value>,
+    /// True when the most recent turn is a user turn that has not yet been
+    /// followed by an assistant response. Lets the pipeline know whether a
+    /// new user transcript should be appended (barge-in while Thinking) or
+    /// pushed as a new turn.
+    pub is_user_message_pending: bool,
 }
 
 impl LlmSession {
@@ -81,6 +86,7 @@ impl LlmSession {
             original_system_prompt: system_prompt.to_string(),
             summary: None,
             messages: Vec::new(),
+            is_user_message_pending: false,
         }
     }
 
@@ -97,6 +103,7 @@ impl LlmSession {
             original_system_prompt: system_prompt.to_string(),
             summary: summary.map(String::from),
             messages: Vec::new(),
+            is_user_message_pending: false,
         };
         for (role, content) in history {
             match role.as_str() {
@@ -147,12 +154,14 @@ impl LlmSession {
     pub fn add_user_turn(&mut self, text: &str) {
         self.messages
             .push(serde_json::json!({"role": "user", "content": text}));
+        self.is_user_message_pending = true;
     }
 
     /// Append an in-conversation system turn.
     ///
     /// Used to deliver background task results and out-of-band notifications
-    /// to the model without impersonating the user.
+    /// to the model without impersonating the user. System turns do not
+    /// "consume" a pending user turn — the flag is left untouched.
     pub fn add_system_turn(&mut self, text: &str) {
         self.messages
             .push(serde_json::json!({"role": "system", "content": text}));
@@ -162,6 +171,7 @@ impl LlmSession {
     pub fn add_assistant_turn(&mut self, text: &str) {
         self.messages
             .push(serde_json::json!({"role": "assistant", "content": text}));
+        self.is_user_message_pending = false;
     }
 
     /// Persist tool call exchanges from a completed pipeline turn.
@@ -170,8 +180,10 @@ impl LlmSession {
     /// messages that were built during the turn's tool loop. Storing them in the
     /// session ensures future LLM calls see that tool calls were made here,
     /// preventing the model from learning to respond verbally without calling tools.
+    /// Tool exchanges come from an assistant turn, so the pending flag is cleared.
     pub fn add_tool_exchange(&mut self, exchanges: Vec<serde_json::Value>) {
         self.messages.extend(exchanges);
+        self.is_user_message_pending = false;
     }
 
     /// Inject a tool call + result into the message list (OpenAI format).
@@ -191,6 +203,24 @@ impl LlmSession {
             "tool_call_id": tool_call_id,
             "content": result
         }));
+        self.is_user_message_pending = false;
+    }
+
+    /// Append `extra` to the content of the last user turn if the pending flag
+    /// is set. Returns true on success, false if no appendable user turn exists
+    /// (caller should fall back to `add_user_turn`).
+    pub fn update_last_user_turn(&mut self, extra: &str) -> bool {
+        if !self.is_user_message_pending {
+            return false;
+        }
+        if let Some(last) = self.messages.last_mut()
+            && last["role"].as_str() == Some("user")
+        {
+            let current = last["content"].as_str().unwrap_or("").to_string();
+            last["content"] = serde_json::Value::String(format!("{}{}", current, extra));
+            return true;
+        }
+        false
     }
 
     // ── Summarization ──────────────────────────────────────────────────────────
@@ -587,5 +617,31 @@ mod tests {
         assert!(msgs[0].content.starts_with("New base."));
         assert!(msgs[0].content.contains("[CONVERSATION SUMMARY]"));
         assert!(msgs[0].content.contains("Summary text."));
+    }
+
+    // ── update_last_user_turn (issue #33 barge-in append) ─────────────────────
+
+    #[test]
+    fn update_last_user_turn_appends_when_pending() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("foo");
+        assert!(s.update_last_user_turn(" bar"));
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.messages[0]["content"].as_str(), Some("foo bar"));
+        assert!(s.is_user_message_pending);
+    }
+
+    #[test]
+    fn update_last_user_turn_returns_false_after_assistant() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("foo");
+        s.add_assistant_turn("ok");
+        assert!(!s.is_user_message_pending);
+        assert!(!s.update_last_user_turn(" bar"));
+        // The new transcript is NOT appended; caller must call add_user_turn
+        // explicitly. (This test does not exercise that contract; it only
+        // verifies the flag.)
+        s.add_user_turn("bar");
+        assert_eq!(s.messages.len(), 3);
     }
 }

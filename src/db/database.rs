@@ -327,6 +327,29 @@ impl Database {
         Ok(())
     }
 
+    /// Overwrite a previously-inserted user-turn row with new content.
+    ///
+    /// Used by the LLM task on assistant-commit to reconcile a SQLite row that
+    /// was speculatively inserted by a barge-in transcript and has since been
+    /// appended to.
+    pub async fn update_user_message_content(
+        &self,
+        session_id: Uuid,
+        old_content: &str,
+        new_content: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE messages SET content = ? \
+             WHERE session_id = ? AND role = 'User' AND content = ?",
+        )
+        .bind(new_content)
+        .bind(session_id.to_string())
+        .bind(old_content)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub async fn close_session(&self, session_id: Uuid) -> Result<()> {
         let now = Utc::now().to_rfc3339();
