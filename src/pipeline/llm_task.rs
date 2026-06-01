@@ -452,14 +452,6 @@ pub async fn llm_task(
             );
         }
 
-        let _ = pipeline_state_tx.send(PipelineState::Idle);
-        #[cfg(feature = "tui")]
-        tui_tx
-            .send(crate::tui::events::TuiEvent::StateChange(
-                crate::tui::events::PipelineState::Idle,
-            ))
-            .ok();
-
         while cancel_rx.try_recv().is_ok() {}
     }
 }
