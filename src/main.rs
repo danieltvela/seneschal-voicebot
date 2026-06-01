@@ -731,6 +731,7 @@ async fn async_main() -> Result<()> {
     }
     {
         let events_c = Arc::clone(&events);
+        let pipeline_state_tx_c = Arc::clone(&pipeline_state_tx);
         let t_vad_end_c = Arc::clone(&t_vad_end);
         let tts_c = Arc::clone(&tts);
         let audio_out_c = Arc::clone(&audio_output);
@@ -745,6 +746,7 @@ async fn async_main() -> Result<()> {
         tokio::spawn(async move {
             tts_task(
                 events_c,
+                pipeline_state_tx_c,
                 t_vad_end_c,
                 sentences_rx,
                 tts_c,
