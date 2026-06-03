@@ -255,10 +255,13 @@ Every time an agent completes an analysis, plan, or finishes work on a Gitea iss
 
 **Workflow for issue-driven work:**
 1. Fetch issue details: `tea issue view N`
-2. Post initial comment with scope/plan
-3. Execute the work
-4. Post final comment with results (mandatory)
-5. Reference the issue number in commit messages: `fix: address issue #11 — fix VAD timeout`
+2. Mark issue as in progress by adding label `ongoing`.
+3. Establish isolation: Initialize worktree in `/Users/danielvela/projects/ai/voicebot-ai` on a new branch `feature/issue-N`.
+4. Post initial comment with scope/plan.
+5. Execute the work in the AI worktree.
+6. Post final comment with results (mandatory).
+7. Push changes, open a **Pull Request (PR)** targeting `main`, and reference the issue.
+8. Reference the issue number in commit messages: `fix: address issue #11 — fix VAD timeout`
 
 Labels exist but no issue templates — the agent handles formatting naturally.
 
@@ -268,9 +271,13 @@ Labels exist but no issue templates — the agent handles formatting naturally.
 - Example: `v0.1.13-alpha01`, `v0.1.0-beta.1`
 - Tag on main after validated merge.
 
-### Git Worktrees
-- `oh-my-openagent` (plugin for OpenCode, usable with other agents) uses git worktrees for isolated agent sessions.
-- Each worktree gets its own branch for feature work to avoid dirty main state.
+### Git Worktrees (Isolated Binary Model)
+To avoid context switching for the human and resource collisions, use an isolated binary model:
+- **Human Zone:** `/Users/danielvela/projects/ai/voicebot` (Main stable context). Validates and merges PRs.
+- **AI Zone:** `/Users/danielvela/projects/ai/voicebot-ai` (Autonomous cycle zone). 
+  - Agents MUST perform all work here.
+  - Each issue requires its own worktree/branch: `git worktree add -b feature/issue-N /Users/danielvela/projects/ai/voicebot-ai`.
+  - When a task is completed and a PR is opened, the worktree is cleared or moved to the next task.
 
 ---
 
