@@ -1,0 +1,1507 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 600 600"
+   width="600"
+   height="600"
+   role="img"
+   aria-label="Holographic compass icon"
+   version="1.1"
+   id="svg164"
+   sodipodi:docname="voicebot-holographic-compass.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   inkscape:export-filename="voicebot-holographic-compass.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview164"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="1.1980565"
+     inkscape:cx="275.86346"
+     inkscape:cy="290.88779"
+     inkscape:window-width="1702"
+     inkscape:window-height="1016"
+     inkscape:window-x="0"
+     inkscape:window-y="34"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg164" />
+  <title
+     id="title1">Voicebot — Holographic Compass</title>
+  <defs
+     id="defs11">
+    <!-- Sphere translucent radial gradient -->
+    <radialGradient
+       id="sphereGrad"
+       cx="-33.195001"
+       cy="-39.834002"
+       r="172.61399"
+       fx="-33.195001"
+       fy="-39.834002"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0%"
+         stop-color="#22C2D2"
+         stop-opacity="0.45"
+         id="stop1" />
+      <stop
+         offset="45%"
+         stop-color="#22C2D2"
+         stop-opacity="0.20"
+         id="stop2" />
+      <stop
+         offset="85%"
+         stop-color="#22C2D2"
+         stop-opacity="0.08"
+         id="stop3" />
+      <stop
+         offset="100%"
+         stop-color="#22C2D2"
+         stop-opacity="0.02"
+         id="stop4" />
+    </radialGradient>
+    <!-- Inner glow for sphere core -->
+    <radialGradient
+       id="coreGlow"
+       cx="0"
+       cy="0"
+       r="30"
+       fx="0"
+       fy="0"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0%"
+         stop-color="#22C2D2"
+         stop-opacity="0.85"
+         id="stop5" />
+      <stop
+         offset="60%"
+         stop-color="#22C2D2"
+         stop-opacity="0.15"
+         id="stop6" />
+      <stop
+         offset="100%"
+         stop-color="#22C2D2"
+         stop-opacity="0"
+         id="stop7" />
+    </radialGradient>
+    <!-- Vignette to focus eye -->
+    <radialGradient
+       id="vignette"
+       cx="50%"
+       cy="55%"
+       r="65%">
+      <stop
+         offset="0%"
+         stop-color="#000"
+         stop-opacity="0"
+         id="stop8" />
+      <stop
+         offset="75%"
+         stop-color="#000"
+         stop-opacity="0"
+         id="stop9" />
+      <stop
+         offset="100%"
+         stop-color="#000"
+         stop-opacity="0.55"
+         id="stop10" />
+    </radialGradient>
+    <!-- Stronger glow for sphere rim -->
+    <filter
+       id="rimGlow"
+       x="-0.033185841"
+       y="-0.033185841"
+       width="1.0663717"
+       height="1.0663717">
+      <feGaussianBlur
+         stdDeviation="3"
+         result="blur"
+         id="feGaussianBlur10" />
+      <feMerge
+         id="feMerge11">
+        <feMergeNode
+           in="blur"
+           id="feMergeNode10" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode11" />
+      </feMerge>
+    </filter>
+    <!-- Clip path in the local frame of the sphere group (centered at 0,0, r=110) -->
+    <clipPath
+       id="sphereClip">
+      <circle
+         cx="0"
+         cy="0"
+         r="108"
+         id="circle11" />
+    </clipPath>
+  </defs>
+  <!-- BACKGROUND -->
+  <rect
+     width="600"
+     height="600"
+     fill="#020608"
+     id="rect11"
+     sodipodi:insensitive="true"
+     x="0"
+     y="0" />
+  <!-- Subtle grid floor hint -->
+  <g
+     stroke="#22c2d2"
+     stroke-width="0.25"
+     stroke-opacity="0.07"
+     fill="none"
+     id="g15"
+     style="display:none">
+    <line
+       x1="0"
+       y1="160"
+       x2="600"
+       y2="160"
+       id="line11" />
+    <line
+       x1="0"
+       y1="240"
+       x2="600"
+       y2="240"
+       id="line12" />
+    <line
+       x1="0"
+       y1="340"
+       x2="600"
+       y2="340"
+       id="line13" />
+    <line
+       x1="0"
+       y1="450"
+       x2="600"
+       y2="450"
+       id="line14" />
+    <line
+       x1="0"
+       y1="560"
+       x2="600"
+       y2="560"
+       id="line15" />
+  </g>
+  <!-- HORIZON LINE (above the icon) + 2 VPs -->
+  <g
+     id="horizon"
+     style="display:inline"
+     transform="matrix(0.89654419,0,0,1.2691689,32.200576,26.058728)">
+    <line
+       x1="0"
+       y1="220"
+       x2="600"
+       y2="220"
+       stroke="#22c2d2"
+       stroke-width="0.5"
+       stroke-opacity="0.4"
+       stroke-dasharray="2, 4"
+       id="line16" />
+    <g
+       transform="translate(60,220)"
+       id="g18">
+      <circle
+         r="4.5"
+         fill="none"
+         stroke="#22c2d2"
+         stroke-width="0.6"
+         stroke-opacity="0.85"
+         id="circle16"
+         cx="0"
+         cy="0" />
+      <circle
+         r="1.6"
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="circle17"
+         cx="0"
+         cy="0" />
+      <line
+         x1="-8"
+         y1="0"
+         x2="8"
+         y2="0"
+         stroke="#22c2d2"
+         stroke-width="0.4"
+         stroke-opacity="0.55"
+         id="line17" />
+      <line
+         x1="0"
+         y1="-8"
+         x2="0"
+         y2="8"
+         stroke="#22c2d2"
+         stroke-width="0.4"
+         stroke-opacity="0.55"
+         id="line18" />
+    </g>
+    <g
+       transform="translate(540,220)"
+       id="g20">
+      <circle
+         r="4.5"
+         fill="none"
+         stroke="#22c2d2"
+         stroke-width="0.6"
+         stroke-opacity="0.85"
+         id="circle18"
+         cx="0"
+         cy="0" />
+      <circle
+         r="1.6"
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="circle19"
+         cx="0"
+         cy="0" />
+      <line
+         x1="-8"
+         y1="0"
+         x2="8"
+         y2="0"
+         stroke="#22c2d2"
+         stroke-width="0.4"
+         stroke-opacity="0.55"
+         id="line19" />
+      <line
+         x1="0"
+         y1="-8"
+         x2="0"
+         y2="8"
+         stroke="#22c2d2"
+         stroke-width="0.4"
+         stroke-opacity="0.55"
+         id="line20" />
+    </g>
+  </g>
+  <!-- 2-POINT PERSPECTIVE GUIDE LINES -->
+  <g
+     id="vp-guides"
+     stroke="#22c2d2"
+     stroke-width="0.3"
+     stroke-opacity="0.22"
+     fill="none"
+     stroke-dasharray="1, 3"
+     style="display:none">
+    <line
+       x1="60"
+       y1="220"
+       x2="510"
+       y2="520"
+       id="line21" />
+    <line
+       x1="60"
+       y1="220"
+       x2="470"
+       y2="450"
+       id="line22" />
+    <line
+       x1="60"
+       y1="220"
+       x2="125"
+       y2="520"
+       id="line23" />
+    <line
+       x1="540"
+       y1="220"
+       x2="90"
+       y2="520"
+       id="line24" />
+    <line
+       x1="540"
+       y1="220"
+       x2="130"
+       y2="450"
+       id="line25" />
+    <line
+       x1="540"
+       y1="220"
+       x2="475"
+       y2="520"
+       id="line26" />
+  </g>
+  <!-- COMPASS ROSE (background) -->
+  <!-- 2-point perspective: vertical compression + shift simulates a tilted plane. -->
+  <g
+     id="compass-rose"
+     transform="matrix(1.0991325,-0.49497585,0.63458443,0.85732332,302.28643,305.18381)"
+     style="display:inline">
+    <!-- Outer rings -->
+    <circle
+       r="205"
+       fill="none"
+       stroke="#22c2d2"
+       stroke-width="0.6"
+       stroke-opacity="0.55"
+       id="circle26"
+       cx="0"
+       cy="0" />
+    <circle
+       r="196"
+       fill="none"
+       stroke="#22c2d2"
+       stroke-width="0.3"
+       stroke-opacity="0.4"
+       id="circle27"
+       cx="0"
+       cy="0" />
+    <circle
+       r="150"
+       fill="none"
+       stroke="#22c2d2"
+       stroke-width="0.4"
+       stroke-opacity="0.45"
+       id="circle28"
+       cx="0"
+       cy="0" />
+    <!-- Degree tick marks: long at 30° intervals, short at 5° -->
+    <g
+       stroke="#22c2d2"
+       stroke-opacity="0.7"
+       fill="none"
+       id="g100">
+      <g
+         stroke-width="0.7"
+         id="g39">
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           id="line28" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(30)"
+           id="line29" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(60)"
+           id="line30" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(90)"
+           id="line31" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(120)"
+           id="line32" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(150)"
+           id="line33" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="scale(-1)"
+           id="line34" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(-150)"
+           id="line35" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(-120)"
+           id="line36" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(-90)"
+           id="line37" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(-60)"
+           id="line38" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-185"
+           transform="rotate(-30)"
+           id="line39" />
+      </g>
+      <g
+         stroke-width="0.45"
+         id="g99">
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(5)"
+           id="line40" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(10)"
+           id="line41" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(15)"
+           id="line42" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(20)"
+           id="line43" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(25)"
+           id="line44" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(35)"
+           id="line45" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(40)"
+           id="line46" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(45)"
+           id="line47" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(50)"
+           id="line48" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(55)"
+           id="line49" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(65)"
+           id="line50" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(70)"
+           id="line51" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(75)"
+           id="line52" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(80)"
+           id="line53" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(85)"
+           id="line54" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(95)"
+           id="line55" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(100)"
+           id="line56" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(105)"
+           id="line57" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(110)"
+           id="line58" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(115)"
+           id="line59" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(125)"
+           id="line60" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(130)"
+           id="line61" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(135)"
+           id="line62" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(140)"
+           id="line63" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(145)"
+           id="line64" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(155)"
+           id="line65" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(160)"
+           id="line66" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(165)"
+           id="line67" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(170)"
+           id="line68" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(175)"
+           id="line69" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-175)"
+           id="line70" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-170)"
+           id="line71" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-165)"
+           id="line72" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-160)"
+           id="line73" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-155)"
+           id="line74" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-145)"
+           id="line75" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-140)"
+           id="line76" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-135)"
+           id="line77" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-130)"
+           id="line78" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-125)"
+           id="line79" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-115)"
+           id="line80" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-110)"
+           id="line81" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-105)"
+           id="line82" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-100)"
+           id="line83" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-95)"
+           id="line84" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-85)"
+           id="line85" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-80)"
+           id="line86" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-75)"
+           id="line87" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-70)"
+           id="line88" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-65)"
+           id="line89" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-55)"
+           id="line90" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-50)"
+           id="line91" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-45)"
+           id="line92" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-40)"
+           id="line93" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-35)"
+           id="line94" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-25)"
+           id="line95" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-20)"
+           id="line96" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-15)"
+           id="line97" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-10)"
+           id="line98" />
+        <line
+           x1="0"
+           y1="-205"
+           x2="0"
+           y2="-197"
+           transform="rotate(-5)"
+           id="line99" />
+      </g>
+    </g>
+    <!-- Cardinal letters -->
+    <g
+       font-family="Georgia, 'Times New Roman', serif"
+       font-size="15px"
+       font-weight="700"
+       fill="#22c2d2"
+       fill-opacity="0.95"
+       text-anchor="middle"
+       id="g103"
+       style="display:inline">
+      <text
+         y="-149.66553"
+         letter-spacing="3"
+         id="text100"
+         x="-0.065917969"
+         style="font-size:45px;stroke-width:3">N</text>
+      <text
+         x="159.86084"
+         y="15.393066"
+         letter-spacing="3"
+         id="text101"
+         style="font-size:45px;stroke-width:3">E</text>
+      <text
+         y="180.39307"
+         letter-spacing="3"
+         id="text102"
+         x="0.087890625"
+         style="font-size:45px;stroke-width:3">S</text>
+      <text
+         x="-159.97803"
+         y="15.275879"
+         letter-spacing="3"
+         id="text103"
+         style="font-size:45px;display:inline;stroke-width:3">W</text>
+    </g>
+    <!-- CARDINAL POINTS (large, with light/dark halves) -->
+    <g
+       id="rose-north"
+       sodipodi:insensitive="true">
+      <polygon
+         points="19,5 0,-170 -19,5 0,20 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         id="polygon103" />
+      <polygon
+         points="-19,5 0,-170 19,5 0,20 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="polygon104" />
+      <line
+         x1="0"
+         y1="-170"
+         x2="0"
+         y2="20"
+         stroke="#020608"
+         stroke-width="0.6"
+         id="line104" />
+    </g>
+    <g
+       id="rose-east"
+       sodipodi:insensitive="true">
+      <polygon
+         points="178,0 5,-19 -18,0 5,19 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         id="polygon105" />
+      <polygon
+         points="178,0 5,19 -18,0 5,-19 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="polygon106" />
+      <line
+         x1="178"
+         y1="0"
+         x2="-18"
+         y2="0"
+         stroke="#020608"
+         stroke-width="0.6"
+         id="line106" />
+    </g>
+    <g
+       id="rose-south"
+       sodipodi:insensitive="true">
+      <polygon
+         points="21,5 0,184 -21,5 0,22 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         id="polygon107" />
+      <polygon
+         points="-21,5 0,184 21,5 0,22 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="polygon108" />
+      <line
+         x1="0"
+         y1="184"
+         x2="0"
+         y2="-20"
+         stroke="#020608"
+         stroke-width="0.6"
+         id="line108" />
+    </g>
+    <g
+       id="rose-west"
+       sodipodi:insensitive="true">
+      <polygon
+         points="-5,19 -178,0 -5,-19 18,0 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         id="polygon109" />
+      <polygon
+         points="-5,-19 -178,0 -5,19 18,0 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="polygon110" />
+      <line
+         x1="-178"
+         y1="0"
+         x2="18"
+         y2="0"
+         stroke="#020608"
+         stroke-width="0.6"
+         id="line110" />
+    </g>
+    <!-- INTERCARDINAL POINTS (medium) -->
+    <g
+       id="rose-ne"
+       sodipodi:insensitive="true">
+      <polygon
+         points="10,0 0,-108 -10,0 0,12 "
+         fill="#0a3540"
+         fill-opacity="0.9"
+         transform="rotate(45)"
+         id="polygon111" />
+      <polygon
+         points="-10,0 0,-108 10,0 0,12 "
+         fill="#22c2d2"
+         fill-opacity="0.7"
+         transform="rotate(45)"
+         id="polygon112" />
+    </g>
+    <g
+       id="rose-se"
+       sodipodi:insensitive="true">
+      <polygon
+         points="10,0 0,-108 -10,0 0,12 "
+         fill="#0a3540"
+         fill-opacity="0.9"
+         transform="rotate(135)"
+         id="polygon113" />
+      <polygon
+         points="-10,0 0,-108 10,0 0,12 "
+         fill="#22c2d2"
+         fill-opacity="0.7"
+         transform="rotate(135)"
+         id="polygon114" />
+    </g>
+    <g
+       id="rose-sw"
+       sodipodi:insensitive="true">
+      <polygon
+         points="10,0 0,-108 -10,0 0,12 "
+         fill="#0a3540"
+         fill-opacity="0.9"
+         transform="rotate(-135)"
+         id="polygon115" />
+      <polygon
+         points="-10,0 0,-108 10,0 0,12 "
+         fill="#22c2d2"
+         fill-opacity="0.7"
+         transform="rotate(-135)"
+         id="polygon116" />
+    </g>
+    <g
+       id="rose-nw"
+       sodipodi:insensitive="true">
+      <polygon
+         points="0,-108 -10,0 0,12 10,0 "
+         fill="#0a3540"
+         fill-opacity="0.9"
+         transform="rotate(-45)"
+         id="polygon117" />
+      <polygon
+         points="0,-108 10,0 0,12 -10,0 "
+         fill="#22c2d2"
+         fill-opacity="0.7"
+         transform="rotate(-45)"
+         id="polygon118" />
+    </g>
+    <!-- TERTIARY POINTS (8 small) at 22.5° intervals -->
+    <g
+       id="rose-tertiary"
+       fill="#22c2d2"
+       fill-opacity="0.55"
+       stroke="#22c2d2"
+       stroke-width="0.3"
+       stroke-opacity="0.6"
+       sodipodi:insensitive="true">
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(22.5)"
+         id="polygon119" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(67.5)"
+         id="polygon120" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(112.5)"
+         id="polygon121" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(157.5)"
+         id="polygon122" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(-157.5)"
+         id="polygon123" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(-112.5)"
+         id="polygon124" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(-67.5)"
+         id="polygon125" />
+      <polygon
+         points="4,0 0,-62 -4,0 0,6 "
+         transform="rotate(-22.5)"
+         id="polygon126" />
+    </g>
+    <!-- CENTRAL COMPASS STAR -->
+    <g
+       id="rose-center"
+       sodipodi:insensitive="true">
+      <circle
+         r="24"
+         fill="#0a3540"
+         fill-opacity="0.95"
+         stroke="#22c2d2"
+         stroke-width="0.7"
+         id="circle126"
+         cx="0"
+         cy="0" />
+      <circle
+         r="17"
+         fill="none"
+         stroke="#22c2d2"
+         stroke-width="0.4"
+         stroke-opacity="0.7"
+         id="circle127"
+         cx="0"
+         cy="0" />
+      <polygon
+         points="3.5,0 0,-15 -3.5,0 0,3.5 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         id="polygon127" />
+      <polygon
+         points="-3.5,0 0,-15 3.5,0 0,3.5 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="polygon128" />
+      <polygon
+         points="3.5,0 0,-15 -3.5,0 0,3.5 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         transform="rotate(90)"
+         id="polygon129" />
+      <polygon
+         points="-3.5,0 0,-15 3.5,0 0,3.5 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         transform="rotate(90)"
+         id="polygon130" />
+      <polygon
+         points="3.5,0 0,-15 -3.5,0 0,3.5 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         transform="scale(-1)"
+         id="polygon131" />
+      <polygon
+         points="-3.5,0 0,-15 3.5,0 0,3.5 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         transform="scale(-1)"
+         id="polygon132" />
+      <polygon
+         points="3.5,0 0,-15 -3.5,0 0,3.5 "
+         fill="#0a3540"
+         fill-opacity="0.95"
+         transform="rotate(-90)"
+         id="polygon133" />
+      <polygon
+         points="-3.5,0 0,-15 3.5,0 0,3.5 "
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         transform="rotate(-90)"
+         id="polygon134" />
+      <circle
+         r="2.2"
+         fill="#22c2d2"
+         fill-opacity="1"
+         id="circle134"
+         cx="0"
+         cy="0" />
+    </g>
+    <!-- FLEUR-DE-LIS marker on N -->
+    <g
+       id="rose-fleur"
+       transform="translate(0,-180)"
+       sodipodi:insensitive="true">
+      <circle
+         r="3.5"
+         fill="none"
+         stroke="#22c2d2"
+         stroke-width="0.7"
+         stroke-opacity="0.9"
+         id="circle135"
+         cx="0"
+         cy="0" />
+      <circle
+         r="1.2"
+         fill="#22c2d2"
+         fill-opacity="0.95"
+         id="circle136"
+         cx="0"
+         cy="0" />
+    </g>
+  </g>
+  <!-- HOLOGRAPHIC SPHERE (foreground) -->
+  <g
+     id="holographic-sphere"
+     transform="matrix(1.3554661,0,0,1.3554661,300.5533,304.48655)"
+     style="display:inline">
+    <!-- Outer rim glow -->
+    <circle
+       r="113"
+       fill="none"
+       stroke="#22c2d2"
+       stroke-width="0.6"
+       stroke-opacity="0.45"
+       filter="url(#rimGlow)"
+       id="circle137"
+       cx="0"
+       cy="0"
+       style="display:inline"
+       sodipodi:insensitive="true" />
+    <!-- Sphere translucent body -->
+    <circle
+       r="110"
+       fill="url(#sphereGrad)"
+       stroke="#22c2d2"
+       stroke-width="1.3"
+       stroke-opacity="0.9"
+       id="circle138"
+       cx="0"
+       cy="0"
+       style="display:inline;fill:url(#sphereGrad)"
+       sodipodi:insensitive="true" />
+    <!-- Inner rim accent -->
+    <circle
+       r="105"
+       fill="none"
+       stroke="#22c2d2"
+       stroke-width="0.4"
+       stroke-opacity="0.5"
+       id="circle139"
+       cx="0"
+       cy="0"
+       style="display:inline"
+       sodipodi:insensitive="true" />
+    <!-- Latitude lines -->
+    <g
+       stroke="#22c2d2"
+       stroke-width="0.5"
+       stroke-opacity="0.65"
+       fill="none"
+       clip-path="url(#sphereClip)"
+       id="g145"
+       style="display:inline"
+       sodipodi:insensitive="true">
+      <ellipse
+         rx="54.155678"
+         ry="9.0655279"
+         cy="-89.235992"
+         id="ellipse139"
+         cx="0"
+         style="fill:#22c2d2;fill-opacity:0.221116;stroke-width:0.368945" />
+      <ellipse
+         rx="89.759369"
+         ry="14.020855"
+         cy="-61.363346"
+         id="ellipse140"
+         cx="1.1099056e-13"
+         style="fill:#22c2d2;fill-opacity:0.0537848;stroke-width:0.458291" />
+      <ellipse
+         rx="107"
+         ry="18"
+         cy="-26"
+         id="ellipse141"
+         cx="0"
+         style="display:none" />
+      <ellipse
+         rx="107"
+         ry="20"
+         cy="0"
+         id="ellipse142"
+         cx="0"
+         style="display:none" />
+      <ellipse
+         rx="104.55053"
+         ry="5.9608178"
+         cy="14.763996"
+         id="ellipse143"
+         cx="0"
+         style="fill:#22c2d2;fill-opacity:0.199203;stroke-width:0.284419" />
+      <ellipse
+         rx="107"
+         ry="14"
+         cy="52"
+         id="ellipse144"
+         cx="0"
+         style="display:none" />
+      <ellipse
+         rx="80.181976"
+         ry="9.033186"
+         cy="74.254669"
+         id="ellipse145"
+         cx="0"
+         style="display:inline;fill:#22c2d2;fill-opacity:0.141434;stroke-width:0.433627" />
+    </g>
+    <!-- Longitude lines -->
+    <g
+       stroke="#22c2d2"
+       stroke-width="0.5"
+       stroke-opacity="0.65"
+       fill="none"
+       clip-path="url(#sphereClip)"
+       id="g151"
+       style="display:inline"
+       sodipodi:insensitive="true">
+      <ellipse
+         rx="9"
+         ry="107"
+         id="ellipse146"
+         cx="0"
+         cy="0"
+         style="display:inline"
+         sodipodi:insensitive="true" />
+      <ellipse
+         rx="22"
+         ry="107"
+         id="ellipse147"
+         cx="0"
+         cy="0"
+         style="display:none"
+         sodipodi:insensitive="true" />
+      <ellipse
+         rx="44"
+         ry="107"
+         id="ellipse148"
+         cx="0"
+         cy="0"
+         style="display:inline"
+         sodipodi:insensitive="true" />
+      <ellipse
+         rx="66"
+         ry="107"
+         id="ellipse149"
+         cx="0"
+         cy="0"
+         style="display:none"
+         sodipodi:insensitive="true" />
+      <ellipse
+         rx="88"
+         ry="107"
+         id="ellipse150"
+         cx="0"
+         cy="0"
+         style="display:inline"
+         sodipodi:insensitive="true" />
+      <circle
+         id="ellipse151"
+         cx="0"
+         cy="0"
+         r="107"
+         style="display:inline"
+         sodipodi:insensitive="true" />
+    </g>
+    <!-- Floating data dots -->
+    <g
+       fill="#22c2d2"
+       id="g160"
+       style="display:inline"
+       sodipodi:insensitive="true">
+      <circle
+         cx="-40"
+         cy="-30"
+         fill-opacity="0.95"
+         id="circle151"
+         r="1" />
+      <circle
+         cx="35"
+         cy="-20"
+         fill-opacity="0.9"
+         id="circle152"
+         r="1.1" />
+      <circle
+         cx="-25"
+         cy="40"
+         fill-opacity="0.95"
+         id="circle153"
+         r="1" />
+      <circle
+         cx="50"
+         cy="35"
+         fill-opacity="0.85"
+         id="circle154"
+         r="0.80000001" />
+      <circle
+         cx="-65"
+         cy="10"
+         fill-opacity="0.8"
+         id="circle155"
+         r="0.69999999" />
+      <circle
+         cx="60"
+         cy="-45"
+         fill-opacity="0.85"
+         id="circle156"
+         r="0.80000001" />
+      <circle
+         cx="0"
+         cy="-65"
+         fill-opacity="0.8"
+         id="circle157"
+         r="0.69999999" />
+      <circle
+         cx="-10"
+         cy="65"
+         fill-opacity="0.85"
+         id="circle158"
+         r="0.80000001" />
+      <circle
+         cx="80"
+         cy="0"
+         fill-opacity="0.7"
+         id="circle159"
+         style="display:inline"
+         r="0.60000002" />
+      <circle
+         cx="-80"
+         cy="-30"
+         fill-opacity="0.7"
+         id="circle160"
+         r="0.60000002" />
+    </g>
+    <!-- Holographic core glow -->
+    <circle
+       r="30"
+       fill="url(#coreGlow)"
+       id="circle161"
+       cx="0"
+       cy="0"
+       style="display:inline;fill:url(#coreGlow)"
+       sodipodi:insensitive="true" />
+    <!-- Bright center spot -->
+    <circle
+       r="2.5"
+       fill="#22c2d2"
+       fill-opacity="1"
+       id="circle162"
+       cx="0"
+       cy="0"
+       sodipodi:insensitive="true" />
+    <circle
+       r="5"
+       fill="none"
+       stroke="#22c2d2"
+       stroke-width="0.5"
+       stroke-opacity="0.7"
+       id="circle163"
+       cx="0"
+       cy="0"
+       sodipodi:insensitive="true"
+       style="display:inline" />
+    <!-- Specular highlight (top-left reflection) -->
+    <ellipse
+       cx="-32"
+       cy="-42"
+       rx="22"
+       ry="12"
+       fill="#22c2d2"
+       fill-opacity="0.15"
+       transform="rotate(-30,-32,-42)"
+       id="ellipse163"
+       sodipodi:insensitive="true" />
+    <ellipse
+       cx="-40"
+       cy="-50"
+       rx="9"
+       ry="4"
+       fill="#22c2d2"
+       fill-opacity="0.25"
+       transform="rotate(-30,-40,-50)"
+       id="ellipse164"
+       sodipodi:insensitive="true" />
+  </g>
+  <!-- Vignette -->
+  <rect
+     width="600"
+     height="600"
+     fill="url(#vignette)"
+     pointer-events="none"
+     id="rect164"
+     x="0"
+     y="0"
+     style="display:inline"
+     sodipodi:insensitive="true" />
+</svg>
