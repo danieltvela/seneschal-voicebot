@@ -49,7 +49,7 @@ pub fn format_history(messages: &[serde_json::Value]) -> String {
 ///
 /// Command construction: `{command_parts...} -q {query}`
 /// e.g. AGENT_COMMAND=`hermes chat` → `hermes chat -Q -q "..."`
-async fn call_agent(command: String, query: String) -> String {
+pub(crate) async fn call_agent(command: String, query: String) -> String {
     let parts: Vec<String> = command.split_whitespace().map(String::from).collect();
     let program = match parts.first() {
         Some(p) => p.clone(),
