@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 /// Parser for Gemma 4 tool calls.
 ///
 /// Gemma 4 uses a proprietary tool-calling format with special tokens:

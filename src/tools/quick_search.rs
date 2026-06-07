@@ -66,10 +66,7 @@ impl Tool for QuickSearchTool {
         let (query, max_results) = match serde_json::from_str::<serde_json::Value>(args) {
             Ok(v) => {
                 let q = v["query"].as_str().unwrap_or("").trim().to_string();
-                let n = v["max_results"]
-                    .as_u64()
-                    .map(|n| n as usize)
-                    .unwrap_or(5);
+                let n = v["max_results"].as_u64().map(|n| n as usize).unwrap_or(5);
                 (q, n)
             }
             Err(_) => (args.trim().to_string(), 5),

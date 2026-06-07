@@ -1,5 +1,8 @@
 pub mod identity;
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;

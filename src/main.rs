@@ -7,7 +7,6 @@ mod agents;
 mod analysis;
 mod audio;
 mod config;
-mod search;
 #[cfg(feature = "control")]
 mod control;
 mod daemon;
@@ -21,6 +20,7 @@ mod pipeline;
 mod profile;
 #[cfg(feature = "remote")]
 mod remote;
+mod search;
 mod stt;
 mod tools;
 mod tts;
@@ -267,10 +267,7 @@ async fn async_main() -> Result<()> {
         info!(target: "voicebot", "quick_search tool enabled (provider={})", provider.name());
 
         if let Some(agent) = agent_registry.agents.first() {
-            tool_registry.register(DeepResearchTool::new(
-                agent.clone(),
-                shared_history.clone(),
-            ));
+            tool_registry.register(DeepResearchTool::new(agent.clone(), shared_history.clone()));
             info!(target: "voicebot", "deep_research tool enabled (agent={})", agent.name);
         }
     }

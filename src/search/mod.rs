@@ -7,6 +7,9 @@ pub mod exa;
 pub mod searxng;
 pub mod tavily;
 
+#[cfg(test)]
+mod tests;
+
 use async_trait::async_trait;
 
 /// Result from a search query — structured for LLM consumption.
@@ -60,18 +63,18 @@ pub fn format_results(results: &[SearchResult], max: usize) -> String {
 pub fn from_config(config: &crate::config::Config) -> Option<Box<dyn SearchProvider>> {
     // 1. Native API providers (Tavily, Exa) take priority because they are
     //    low-latency and LLM-ready.  They require an API key.
-    if let Some(key) = &config.tavily_api_key {
-        if !key.is_empty() {
-            let prov = tavily::TavilyProvider::new(key, config.tavily_max_tokens);
-            return Some(Box::new(prov));
-        }
+    if let Some(key) = &config.tavily_api_key
+        && !key.is_empty()
+    {
+        let prov = tavily::TavilyProvider::new(key, config.tavily_max_tokens);
+        return Some(Box::new(prov));
     }
 
-    if let Some(key) = &config.exa_api_key {
-        if !key.is_empty() {
-            let prov = exa::ExaProvider::new(key);
-            return Some(Box::new(prov));
-        }
+    if let Some(key) = &config.exa_api_key
+        && !key.is_empty()
+    {
+        let prov = exa::ExaProvider::new(key);
+        return Some(Box::new(prov));
     }
 
     // 2. Fall back to SearXNG (self-hosted, no API key).

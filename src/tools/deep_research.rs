@@ -77,7 +77,11 @@ impl Tool for DeepResearchTool {
 
         info!(target: "tools", "deep_research: agent='{}' query={:?}", self.agent_config.name, query);
 
-        let history = self.shared_history.read().map(|g| g.clone()).unwrap_or_default();
+        let history = self
+            .shared_history
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
         let full_query = if history.is_empty() {
             query
         } else {
@@ -87,7 +91,12 @@ impl Tool for DeepResearchTool {
         // Delegate to the agent as a one-shot CLI call.
         let command = match &self.agent_config.command {
             Some(cmd) => cmd.clone(),
-            None => return format!("Error: agent '{}' has no CLI command configured", self.agent_config.name),
+            None => {
+                return format!(
+                    "Error: agent '{}' has no CLI command configured",
+                    self.agent_config.name
+                );
+            }
         };
         run_agent::call_agent(command, full_query).await
     }

@@ -193,7 +193,11 @@ fn parse_jsonrpc(v: &Value) -> Option<JsonRpcMessage> {
 /// Ask the secondary LLM to summarize a raw agent result into a concise,
 /// voice-ready response. Falls back to `raw` if synthesis fails or is not
 /// configured.
-async fn synthesize_agent_result(task: &str, raw: String, client: Option<&dyn LlmProvider>) -> String {
+async fn synthesize_agent_result(
+    task: &str,
+    raw: String,
+    client: Option<&dyn LlmProvider>,
+) -> String {
     let Some(client) = client else { return raw };
     if raw.is_empty() || raw.starts_with("Agent error:") || raw.starts_with("ACP") {
         return raw;
@@ -441,10 +445,11 @@ impl RunAgentTool {
             let latency_start = std::time::Instant::now();
 
             // ── Send prompt ───────────────────────────────────────────────────
-            let prompt_request_id = match {
+            let send_result = {
                 let mut w = writer_arc.lock().await;
                 w.send_prompt(&session_id, &query).await
-            } {
+            };
+            let prompt_request_id = match send_result {
                 Ok(id) => id,
                 Err(e) => {
                     let mut w = writer_arc.lock().await;
@@ -483,7 +488,7 @@ impl RunAgentTool {
             let mut rx_guard = inbound_rx.lock().await;
             let result = collect_acp_response(
                 Arc::clone(&acp_writer_for_collect),
-                &mut *rx_guard,
+                &mut rx_guard,
                 proactive_tx.clone(),
                 session_id.clone(),
                 prompt_request_id,
@@ -650,7 +655,7 @@ impl AcpWriter {
     /// Used exclusively in unit tests to avoid requiring a real Hermes binary.
     #[cfg(test)]
     pub fn dummy() -> Self {
-        let mut child = Command::new("/bin/cat")
+        let child = Command::new("/bin/cat")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

@@ -563,7 +563,8 @@ mod tests {
             std::env::var("LLM_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
         let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
         let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
-        let client = OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3).with_api_key(&llm_api_key);
+        let client =
+            OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3).with_api_key(&llm_api_key);
 
         // ── Case 1: User reveals personal facts ─────────────────────────────
         let facts = extract_facts(
