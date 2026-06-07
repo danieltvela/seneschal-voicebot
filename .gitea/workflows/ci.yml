@@ -11,6 +11,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTUP_HOME: /root/.rustup
+  CARGO_HOME: /root/.cargo
 
 jobs:
   check:
@@ -19,13 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install Rust stable via rustup
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --component rustfmt --component clippy
+            echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          else
+            rustup component add rustfmt clippy
+          fi
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
 
       - name: Install Linux build deps
         run: |
@@ -37,7 +44,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --no-deps -- -D warnings
+        run: cargo clippy --all-targets --no-deps --features tui,remote,control -- -D warnings
 
   test:
     name: Tests
@@ -47,11 +54,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install Rust stable via rustup
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+            echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          fi
+          cargo --version
 
       - name: Install Linux build deps
         run: |
@@ -63,22 +73,7 @@ jobs:
         run: cargo test --features "tui,remote,control"
 
       - name: Run e2e tests (wiremock)
-        run: cargo test -- --ignored
-
-  build-macos:
-    name: Build · macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build (avspeech)
-        run: cargo build --release --bin voicebot --features avspeech
+        run: cargo test e2e -- --ignored
 
   build-linux:
     name: Build · Linux
@@ -88,11 +83,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install Rust stable via rustup
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+            echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          fi
+          cargo --version
 
       - name: Install Linux build deps
         run: |

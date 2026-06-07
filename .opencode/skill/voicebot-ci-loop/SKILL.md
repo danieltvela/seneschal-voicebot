@@ -97,6 +97,31 @@ For very long logs, use `download_job_log` to write to a temp file under `/var/f
 | `error: aborting due to N previous errors` (test) | A test failed | Re-run the specific test locally with `--nocapture` |
 | `failed to fetch crate ...` | Network / registry issue in CI | Re-trigger; if persistent, check `Cargo.lock` for yanked crates |
 | `thread 'main' panicked at 'WHISPER_MODEL not set'` | Expected skip mis-classified | Check `scripts/qa.sh` skip logic; tests should be `#[ignore]`d, not in `test-stt` stage |
+| **Run stays `queued` forever** | GitHub-hosted action unreachable on Gitea runner | Rewrite workflow to use only `actions/checkout@v4` + install Rust via `rustup` (see "Gitea runner constraints" below) |
+| **`macos-latest` job never starts** | No self-hosted macOS runner registered | Use only `ubuntu-latest` jobs; cover macOS via local `make qa` on the maintainer's machine |
+
+### Gitea runner constraints (this instance)
+
+This Gitea instance has **zero repo-level runners registered** and works only because Gitea Actions auto-spawns a docker-based runner for `runs-on: ubuntu-latest`. Implications:
+
+- **No `macos-latest` runner exists.** macOS builds happen via local `make qa` on the maintainer's machine. The CI workflow in `.gitea/workflows/ci.yml` deliberately omits the macOS build job.
+- **No outbound `github.com` access for actions.** `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, and other GitHub-hosted actions will *queue forever* and never execute. The CI workflow installs Rust via `rustup` directly (`curl https://sh.rustup.rs | sh`) and skips the rust-cache action.
+- **Apt IS reachable.** The install-test workflow's `docker build` and apt installs work fine, so this runner has Docker Hub + Ubuntu repo access.
+- **Jobs use `actions/checkout@v4` successfully** because Gitea serves that action from `localhost` / the Gitea server, not from `github.com`.
+
+If a job is stuck in `queued` for more than 2 minutes, suspect a runner availability issue. Check the runner list:
+
+```text
+gitea_actions_run_read  method=list_runners  owner=danielvela  repo=voicebot
+```
+
+and the workflow registration:
+
+```text
+gitea_actions_run_read  method=list_workflows owner=danielvela  repo=voicebot
+```
+
+If your new workflow doesn't appear in `list_workflows`, check the YAML syntax with a validator — Gitea silently ignores invalid workflow files.
 
 ### Platform-specific gotchas
 
