@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_HOME: /root/.rustup
+  CARGO_HOME: /root/.cargo
+
+jobs:
+  check:
+    name: Format + Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable via rustup
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --component rustfmt --component clippy
+            # Make cargo/rustc available to THIS step (subsequent steps inherit via $GITHUB_PATH)
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup component add rustfmt clippy
+            . "$HOME/.cargo/env"
+          fi
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
+
+      - name: Check formatting
+        run: . "$HOME/.cargo/env" && cargo fmt --check
+
+      - name: Clippy
+        run: . "$HOME/.cargo/env" && cargo clippy --all-targets --no-deps --features tui,remote,control -- -D warnings
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C link-arg=-lgomp"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable via rustup
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            . "$HOME/.cargo/env"
+          fi
+          cargo --version
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
+
+      - name: Run tests
+        run: . "$HOME/.cargo/env" && cargo test --features "tui,remote,control"
+
+      - name: Run e2e tests (wiremock)
+        run: . "$HOME/.cargo/env" && cargo test e2e -- --ignored
+
+  build-linux:
+    name: Build · Linux
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C link-arg=-lgomp"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable via rustup
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            . "$HOME/.cargo/env"
+          fi
+          cargo --version
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
+
+      - name: Build (kokoro)
+        run: . "$HOME/.cargo/env" && cargo build --release --bin voicebot --features kokoro

@@ -50,6 +50,15 @@ pub async fn sen_task(
                         if let Some(sentence) = splitter.flush() {
                             let _ = sentences_tx.send(PipelineFrame::SentenceReady { utterance_id, sentence }).await;
                         }
+                        // Forward LLMResponseDone to tts_task so it knows no more
+                        // sentences are coming for this utterance and can transition
+                        // the pipeline FSM back to PipelineState::Idle.
+                        let _ = sentences_tx
+                            .send(PipelineFrame::LLMResponseDone {
+                                utterance_id,
+                                full_text: String::new(),
+                            })
+                            .await;
                         first_sentence_logged = false;
                     }
                     Some(_) => {}

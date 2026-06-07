@@ -26,6 +26,11 @@ data/*.emb
 .sisyphus/
 .sisyphus/
 
+# Project-owned opencode skills (ship with the repo for AI agents)
+!.opencode/
+!.opencode/skill/
+!.opencode/skill/**
+
 # Development logs
 voicebot.log
 *.log

@@ -127,7 +127,11 @@ impl WhisperSttProvider {
     /// Feed a chunk of 16 kHz mono f32 audio. Emits events as the VAD/state
     /// machine advances. Transcription happens synchronously on the caller
     /// thread (blocking); it's acceptable for a single-user interactive loop.
-    pub async fn process_audio(&mut self, audio: &[f32], tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
+    pub async fn process_audio(
+        &mut self,
+        audio: &[f32],
+        tx: &mpsc::Sender<SpeechEvent>,
+    ) -> Result<()> {
         if audio.is_empty() {
             return Ok(());
         }

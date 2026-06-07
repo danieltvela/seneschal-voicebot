@@ -8,6 +8,7 @@ pub mod tts_task;
 
 pub use consolidation::{build_system_prompt, consolidation_task, run_consolidation_cycle};
 pub use frames::PipelineFrame;
+#[allow(unused_imports)]
 pub use fsm::{PauseReason, PipelineState};
 pub use llm_task::llm_task;
 pub use sen_task::sen_task;

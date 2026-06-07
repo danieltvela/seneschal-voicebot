@@ -35,6 +35,47 @@ cargo test -p voicebot <test_name>
 
 ---
 
+## QA Workflow (AI agents: start here)
+
+**Before opening a PR, every AI agent MUST run the QA harness end-to-end.** It is the single source of truth for "does this branch meet the bar".
+
+```bash
+make qa                # fast suite: fmt, lint, test, test-ci, test-e2e, build (~5 min)
+make qa-full           # adds audit + coverage; skips cleanly if tools missing
+make help              # discover individual stages
+bash scripts/qa.sh     # direct, no `make` required
+```
+
+The harness exits 0 only if every stage ran to completion. Skipped stages (no Whisper model, no LLM server, no `cargo-audit`) print `[SKIP] reason` and are non-fatal.
+
+| Stage | Command | Fails if… |
+|---|---|---|
+| `fmt` | `cargo fmt --check` | code is unformatted |
+| `lint` | `cargo clippy --all-targets --no-deps -- -D warnings` | any clippy warning |
+| `test` | `cargo test` | any default-features test fails |
+| `test-ci` | `cargo test --features tui,remote,control` | any feature test fails |
+| `test-e2e` | `cargo test e2e -- --ignored` | wiremock e2e harness fails |
+| `test-stt` | `cargo test -- --ignored stt` | real-Whisper STT fails (skipped if no model) |
+| `test-llm` | `cargo test -- --ignored llm` | real-LLM test fails (skipped if no LLM server) |
+| `build` | `cargo build --features tui,remote,control` | release/feature build breaks |
+| `audit` | `cargo audit` | known CVE in deps (skipped if `cargo-audit` missing) |
+| `coverage` | `cargo llvm-cov` | tooling broken (skipped if `cargo-llvm-cov` missing) |
+
+**Customization:**
+```bash
+QA_SKIP=audit,coverage make qa          # skip stages
+QA_NO_COLOR=1 make qa                   # disable colors
+QA_KEEP_GOING=1 bash scripts/qa.sh full # don't stop on first failure
+```
+
+**Adding new test categories:**
+- Default unit tests: `#[test]` / `#[tokio::test]` anywhere under `src/`. Picked up by `test`.
+- Wiremock-based e2e: add to `src/e2e_tests.rs` and mark `#[ignore]`. Picked up by `test-e2e`.
+- Real-LLM / real-audio integration: `#[ignore]` + check env at top of fn. Add to `test-llm` / `test-stt` filter patterns.
+- Zero-coverage modules: **add unit tests**, do not ignore them.
+
+---
+
 ## Architecture Overview
 
 Mono-user voice AI chatbot in Rust. Streaming STT→LLM→TTS pipeline, single process, tokio channels.
@@ -255,10 +296,13 @@ Every time an agent completes an analysis, plan, or finishes work on a Gitea iss
 
 **Workflow for issue-driven work:**
 1. Fetch issue details: `tea issue view N`
-2. Post initial comment with scope/plan
-3. Execute the work
-4. Post final comment with results (mandatory)
-5. Reference the issue number in commit messages: `fix: address issue #11 — fix VAD timeout`
+2. Mark issue as in progress by adding label `ongoing`.
+3. Establish isolation: Initialize worktree in `/Users/danielvela/projects/ai/voicebot-ai` on a new branch `feature/issue-N`.
+4. Post initial comment with scope/plan.
+5. Execute the work in the AI worktree.
+6. Post final comment with results (mandatory).
+7. Push changes, open a **Pull Request (PR)** targeting `main`, and reference the issue.
+8. Reference the issue number in commit messages: `fix: address issue #11 — fix VAD timeout`
 
 Labels exist but no issue templates — the agent handles formatting naturally.
 
@@ -268,9 +312,13 @@ Labels exist but no issue templates — the agent handles formatting naturally.
 - Example: `v0.1.13-alpha01`, `v0.1.0-beta.1`
 - Tag on main after validated merge.
 
-### Git Worktrees
-- `oh-my-openagent` (plugin for OpenCode, usable with other agents) uses git worktrees for isolated agent sessions.
-- Each worktree gets its own branch for feature work to avoid dirty main state.
+### Git Worktrees (Isolated Binary Model)
+To avoid context switching for the human and resource collisions, use an isolated binary model:
+- **Human Zone:** `/Users/danielvela/projects/ai/voicebot` (Main stable context). Validates and merges PRs.
+- **AI Zone:** `/Users/danielvela/projects/ai/voicebot-ai` (Autonomous cycle zone). 
+  - Agents MUST perform all work here.
+  - Each issue requires its own worktree/branch: `git worktree add -b feature/issue-N /Users/danielvela/projects/ai/voicebot-ai`.
+  - When a task is completed and a PR is opened, the worktree is cleared or moved to the next task.
 
 ---
 

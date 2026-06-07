@@ -45,10 +45,9 @@ unsafe impl Sync for LlamaCppLlmProvider {}
 
 impl LlamaCppLlmProvider {
     pub fn new(config: &Config) -> Result<Self> {
-        let model_path = config
-            .llama_model_path
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LLAMA_MODEL_PATH is required when LLM_PROVIDER=llama-cpp"))?;
+        let model_path = config.llama_model_path.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LLAMA_MODEL_PATH is required when LLM_PROVIDER=llama-cpp")
+        })?;
 
         if !Path::new(model_path).exists() {
             bail!("Model file not found: {}", model_path);
@@ -69,8 +68,7 @@ impl LlamaCppLlmProvider {
             }
         };
 
-        let model_params = LlamaModelParams::default()
-            .with_n_gpu_layers(config.llama_n_gpu_layers);
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(config.llama_n_gpu_layers);
 
         let model = LlamaModel::load_from_file(&backend, Path::new(model_path), &model_params)?;
 
@@ -114,7 +112,10 @@ impl LlamaCppLlmProvider {
         };
         let template = template_result?;
 
-        match self.model.apply_chat_template(&template, &chat_messages, true) {
+        match self
+            .model
+            .apply_chat_template(&template, &chat_messages, true)
+        {
             Ok(prompt) => Ok(prompt),
             Err(llama_cpp_2::ApplyChatTemplateError::FfiError(-1)) => {
                 // Template not recognised by llama.cpp; fall back to ChatML.
@@ -213,7 +214,16 @@ impl LlmProvider for LlamaCppLlmProvider {
         let has_tools = !tools.is_empty();
 
         let handle = tokio::task::spawn_blocking(move || {
-            let result = stream_generate(model, backend, n_ctx, temperature, &prompt, max_tokens, has_tools, tx.clone());
+            let result = stream_generate(
+                model,
+                backend,
+                n_ctx,
+                temperature,
+                &prompt,
+                max_tokens,
+                has_tools,
+                tx.clone(),
+            );
             if let Err(e) = result {
                 error!(target: "llm", "Local generation error: {}", e);
                 let _ = tx.blocking_send(StreamToken::Content(format!("\n[Error: {}]", e)));
@@ -288,8 +298,8 @@ fn stream_generate(
     has_tools: bool,
     tx: mpsc::Sender<StreamToken>,
 ) -> Result<()> {
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx).unwrap()));
+    let ctx_params =
+        LlamaContextParams::default().with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx).unwrap()));
 
     let mut ctx = model.new_context(&backend, ctx_params)?;
 
@@ -372,8 +382,8 @@ fn generate_sync_static(
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String> {
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx).unwrap()));
+    let ctx_params =
+        LlamaContextParams::default().with_n_ctx(Some(std::num::NonZeroU32::new(n_ctx).unwrap()));
 
     let mut ctx = model.new_context(&backend, ctx_params)?;
 

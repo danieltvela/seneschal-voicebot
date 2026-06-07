@@ -156,6 +156,7 @@ impl E2eHarness {
     }
 
     /// Reset shared fields before starting a new pipeline run.
+    #[allow(clippy::let_underscore_future)]
     fn _reset_for_run(&self) {
         self.captured.lock().unwrap().clear();
         self.play_cancel
@@ -252,6 +253,7 @@ impl E2eHarness {
         // Spawn TTS task.
         let h_tts = {
             let events_c = Arc::clone(&events);
+            let state_tx_c = Arc::clone(&state_tx);
             let t_vad_end_c = Arc::clone(&t_vad_end);
             let tts_c = Arc::clone(&self.tts);
             let out_c = Arc::clone(&self.audio_output);
@@ -266,6 +268,7 @@ impl E2eHarness {
             tokio::spawn(async move {
                 tts_task(
                     events_c,
+                    state_tx_c,
                     t_vad_end_c,
                     sentences_rx,
                     tts_c,
@@ -470,11 +473,13 @@ impl E2eHarness {
         let captured_rx = self.captured.clone();
         let _ = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                let guard = captured_rx.lock().unwrap();
-                if !guard.is_empty() {
+                let has_data = {
+                    let guard = captured_rx.lock().unwrap();
+                    !guard.is_empty()
+                };
+                if has_data {
                     return;
                 }
-                drop(guard);
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -644,8 +649,9 @@ async fn barge_in_during_mixed() {
         "La primera respuesta. La segunda respuesta. La tercera respuesta. La cuarta respuesta.",
     )
     .await;
+    h._reset_for_run();
     let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Dinos cuatro cosas.").await;
-    h.wait_for_state("Speaking").await.ok();
+    h.wait_for_first_sentence().await.ok();
     h.barge_in();
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         let _ = h_llm.await;
@@ -675,7 +681,6 @@ async fn barge_in_during_tool() {
     h.wait_for_complete().await;
     E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
     let _captured = h.tts_sentences();
-    assert!(true);
 }
 
 /// Barge-in when pipeline is in Paused/Consolidation state. User input must be discarded.
@@ -710,7 +715,6 @@ async fn barge_in_spam_rapid() {
     }
     h.wait_for_complete().await;
     E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
-    assert!(true, "spam barge-in survived");
 }
 
 /// Barge-in during multi-sentence response.
@@ -798,8 +802,12 @@ async fn barge_in_during_speaking_queueing() {
     let h = E2eHarness::new().await;
     h.mock_llm_response("Primera. Segunda. Tercera. Cuarta. Quinta.")
         .await;
-    h.run_with_barge_in_at_state("Consulta queueing.", "Speaking")
-        .await;
+    h._reset_for_run();
+    let (h_llm, h_sen, h_tts) = h._spawn_and_send("Consulta queueing.").await;
+    h.wait_for_first_sentence().await.ok();
+    h.barge_in();
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     let captured = h.tts_sentences();
     assert!(
         !captured.is_empty(),

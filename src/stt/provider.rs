@@ -43,8 +43,6 @@ pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
                 );
             }
         }
-        other => bail!(
-            "Invalid STT_PROVIDER '{other}'. Supported values: whisper, parakeet"
-        ),
+        other => bail!("Invalid STT_PROVIDER '{other}'. Supported values: whisper, parakeet"),
     }
 }
