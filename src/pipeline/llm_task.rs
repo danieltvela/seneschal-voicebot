@@ -43,6 +43,11 @@ pub async fn llm_task(
 ) {
     let pipeline_id = PIPELINE_RUN_ID.fetch_add(1, Ordering::SeqCst);
     let mut cancel_rx = events.barge_in_tx.subscribe();
+    // Original content of the first transcript of a pending user turn, captured
+    // at user-commit for SQLite reconciliation on assistant-commit. Persists
+    // across loop iterations so repeated barge-ins still resolve to the same
+    // original SQLite row.
+    let mut pending_user_original: Option<String> = None;
 
     loop {
         // Block until a transcript frame arrives; ignore cancels while idle.
@@ -116,15 +121,31 @@ pub async fn llm_task(
         }
 
         if !tool_continuation {
-            {
+            let appended = {
                 let mut s = llm_session.lock().unwrap();
-                s.add_user_turn(&text);
+                // Snapshot the original user content (if a previous user turn is
+                // pending) for SQLite reconciliation on assistant-commit. We do
+                // this BEFORE mutation so we get the pre-append text.
+                if s.is_user_message_pending
+                    && let Some(last) = s.messages.last()
+                    && last["role"].as_str() == Some("user")
+                {
+                    pending_user_original = last["content"].as_str().map(str::to_string);
+                }
+                let result = s.update_last_user_turn(&text);
+                if !result {
+                    s.add_user_turn(&text);
+                }
                 turn_commit_counter.fetch_add(1, Ordering::SeqCst);
                 if let Ok(mut h) = shared_history.write() {
                     *h = format_history(&s.messages);
                 }
-            }
-            {
+                result
+            };
+            if !appended {
+                // Only the FIRST transcript of a pending user turn is persisted
+                // immediately; subsequent barge-in appends are reconciled in
+                // SQLite on assistant-commit.
                 let db_c = db.clone();
                 let text_c = text.clone();
                 tokio::spawn(async move {
@@ -439,10 +460,40 @@ pub async fn llm_task(
                 if !tool_exchanges.is_empty() {
                     s.add_tool_exchange(tool_exchanges);
                 }
+                // Reconcile SQLite user row if a pending user turn was extended by barge-in.
+                if let Some(original) = pending_user_original.as_deref() {
+                    let new_content = s
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"].as_str() == Some("user"))
+                        .and_then(|m| m["content"].as_str())
+                        .map(str::to_string);
+                    if let Some(new_text) = new_content
+                        && new_text != original
+                    {
+                        let db_c = db.clone();
+                        let original_c = original.to_string();
+                        tokio::spawn(async move {
+                            if let Err(e) = db_c
+                                .update_user_message_content(session_id, &original_c, &new_text)
+                                .await
+                            {
+                                warn!(target: "db", "Failed to reconcile user message on commit: {}", e);
+                            }
+                        });
+                    }
+                }
                 s.add_assistant_turn(&final_response);
             }
             committed = true;
+            pending_user_original = None;
         }
+
+        // Cancelled path (above, ~lines 264–282) intentionally does not
+        // reconcile the SQLite user row: the next user transcript will
+        // either append (in-memory only) or start a new turn, and the
+        // final reconcile fires on the next successful assistant-commit.
 
         if !committed && cancelled {
             info!(
