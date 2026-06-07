@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{broadcast, mpsc, watch, Notify};
+use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tracing::error;
 
 use super::fsm::PipelineState;
@@ -96,8 +96,7 @@ pub async fn tts_task(
                 }
 
                 if last_utterance_id != Some(utterance_id) {
-                    let _ = pipeline_state_tx
-                        .send(PipelineState::Speaking { utterance_id });
+                    let _ = pipeline_state_tx.send(PipelineState::Speaking { utterance_id });
                     last_utterance_id = Some(utterance_id);
                 }
 

@@ -94,7 +94,11 @@ impl ParakeetSttProvider {
         })
     }
 
-    pub async fn process_audio(&mut self, audio: &[f32], tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
+    pub async fn process_audio(
+        &mut self,
+        audio: &[f32],
+        tx: &mpsc::Sender<SpeechEvent>,
+    ) -> Result<()> {
         if audio.is_empty() {
             return Ok(());
         }

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use super::{SearchProvider, SearchResult, format_results, MAX_OUTPUT_BYTES};
+use super::{MAX_OUTPUT_BYTES, SearchProvider, SearchResult, format_results};
 
 /// Tavily Search API client.
 ///
@@ -46,7 +46,11 @@ struct TavilyResult {
 
 impl TavilyProvider {
     pub fn new(api_key: &str, max_tokens: usize) -> Self {
-        let max_tokens = if max_tokens == 0 { DEFAULT_MAX_TOKENS } else { max_tokens };
+        let max_tokens = if max_tokens == 0 {
+            DEFAULT_MAX_TOKENS
+        } else {
+            max_tokens
+        };
         Self {
             api_key: api_key.to_string(),
             max_tokens,
@@ -80,13 +84,7 @@ impl SearchProvider for TavilyProvider {
             "max_tokens": self.max_tokens,
         });
 
-        let response = match self
-            .client
-            .post(TAVILY_API_URL)
-            .json(&body)
-            .send()
-            .await
-        {
+        let response = match self.client.post(TAVILY_API_URL).json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
                 warn!(target: "search", "Tavily HTTP error: {}", e);
@@ -114,11 +112,12 @@ impl SearchProvider for TavilyProvider {
 
         // If Tavily generated a concise answer, return it directly — it's
         // exactly what the LLM needs for quick facts.
-        if let Some(answer) = &tavily.answer {
-            if !answer.is_empty() && answer.len() < MAX_OUTPUT_BYTES {
-                info!(target: "search", "Tavily: returned AI-generated answer ({} chars)", answer.len());
-                return answer.clone();
-            }
+        if let Some(answer) = &tavily.answer
+            && !answer.is_empty()
+            && answer.len() < MAX_OUTPUT_BYTES
+        {
+            info!(target: "search", "Tavily: returned AI-generated answer ({} chars)", answer.len());
+            return answer.clone();
         }
 
         if tavily.results.is_empty() {

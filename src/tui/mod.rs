@@ -60,12 +60,10 @@ pub async fn run(
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                // Check for resize events
-                if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
-                    if let Event::Resize(_, _) = event::read().unwrap_or(Event::Key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::empty()))) {
-                        // Clear and redraw on resize - re-render everything
-                        terminal.clear().unwrap_or_default();
-                    }
+                if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false)
+                    && let Event::Resize(_, _) = event::read().unwrap_or(Event::Key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::empty())))
+                {
+                    terminal.clear().unwrap_or_default();
                 }
             }
             key_result = keys.next() => {

@@ -24,6 +24,7 @@ pub use mcp_tool::McpToolProxy;
 pub use open_app::OpenAppTool;
 pub use quick_search::QuickSearchTool;
 pub use read_file::ReadFileTool;
+#[allow(unused_imports)]
 pub use run_agent::{
     AcpWriter, ActiveTask, JsonRpcMessage, PendingInteractionEntry, RunAgentTool, format_history,
 };

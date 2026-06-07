@@ -35,6 +35,47 @@ cargo test -p voicebot <test_name>
 
 ---
 
+## QA Workflow (AI agents: start here)
+
+**Before opening a PR, every AI agent MUST run the QA harness end-to-end.** It is the single source of truth for "does this branch meet the bar".
+
+```bash
+make qa                # fast suite: fmt, lint, test, test-ci, test-e2e, build (~5 min)
+make qa-full           # adds audit + coverage; skips cleanly if tools missing
+make help              # discover individual stages
+bash scripts/qa.sh     # direct, no `make` required
+```
+
+The harness exits 0 only if every stage ran to completion. Skipped stages (no Whisper model, no LLM server, no `cargo-audit`) print `[SKIP] reason` and are non-fatal.
+
+| Stage | Command | Fails if… |
+|---|---|---|
+| `fmt` | `cargo fmt --check` | code is unformatted |
+| `lint` | `cargo clippy --all-targets --no-deps -- -D warnings` | any clippy warning |
+| `test` | `cargo test` | any default-features test fails |
+| `test-ci` | `cargo test --features tui,remote,control` | any feature test fails |
+| `test-e2e` | `cargo test e2e -- --ignored` | wiremock e2e harness fails |
+| `test-stt` | `cargo test -- --ignored stt` | real-Whisper STT fails (skipped if no model) |
+| `test-llm` | `cargo test -- --ignored llm` | real-LLM test fails (skipped if no LLM server) |
+| `build` | `cargo build --features tui,remote,control` | release/feature build breaks |
+| `audit` | `cargo audit` | known CVE in deps (skipped if `cargo-audit` missing) |
+| `coverage` | `cargo llvm-cov` | tooling broken (skipped if `cargo-llvm-cov` missing) |
+
+**Customization:**
+```bash
+QA_SKIP=audit,coverage make qa          # skip stages
+QA_NO_COLOR=1 make qa                   # disable colors
+QA_KEEP_GOING=1 bash scripts/qa.sh full # don't stop on first failure
+```
+
+**Adding new test categories:**
+- Default unit tests: `#[test]` / `#[tokio::test]` anywhere under `src/`. Picked up by `test`.
+- Wiremock-based e2e: add to `src/e2e_tests.rs` and mark `#[ignore]`. Picked up by `test-e2e`.
+- Real-LLM / real-audio integration: `#[ignore]` + check env at top of fn. Add to `test-llm` / `test-stt` filter patterns.
+- Zero-coverage modules: **add unit tests**, do not ignore them.
+
+---
+
 ## Architecture Overview
 
 Mono-user voice AI chatbot in Rust. Streaming STT→LLM→TTS pipeline, single process, tokio channels.
