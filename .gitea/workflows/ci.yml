@@ -41,7 +41,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
+            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
 
       - name: Check formatting
         run: . "$HOME/.cargo/env" && cargo fmt --check
@@ -73,7 +73,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
+            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
 
       - name: Run tests
         run: . "$HOME/.cargo/env" && cargo test --features "tui,remote,control"
@@ -105,7 +105,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
+            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
 
       - name: Build (kokoro)
         run: . "$HOME/.cargo/env" && cargo build --release --bin voicebot --features kokoro
