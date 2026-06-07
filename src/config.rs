@@ -183,8 +183,20 @@ pub struct Config {
     /// Hard timeout per shell command in seconds (SHELL_TIMEOUT_SECS).
     pub shell_timeout_secs: u64,
 
-    // ── Web Search (SearXNG) ─────────────────────────────────────────────────
-    /// Base URL of the SearXNG instance (SEARXNG_URL). None = web_search tool disabled.
+    // ── Web Search (Native API providers) ─────────────────────────────────────
+    /// Tavily Search API key (TAVILY_API_KEY). When set, enables the
+    /// `quick_search` tool with Tavily backend (fast path, preferred).
+    pub tavily_api_key: Option<String>,
+    /// Max tokens for Tavily's AI-generated answer (TAVILY_MAX_TOKENS, default 512).
+    /// Set to 0 to disable the AI-generated answer and return raw results only.
+    pub tavily_max_tokens: usize,
+    /// Exa API key (EXA_API_KEY). When set, enables `quick_search` with Exa
+    /// backend. Only used when TAVILY_API_KEY is not set.
+    pub exa_api_key: Option<String>,
+
+    // ── Web Search (SearXNG fallback) ─────────────────────────────────────────
+    /// Base URL of the SearXNG instance (SEARXNG_URL). Used as fallback when
+    /// no native API key (TAVILY_API_KEY / EXA_API_KEY) is configured.
     pub searxng_url: Option<String>,
     /// Bearer token for SearXNG authentication (SEARXNG_SECRET).
     pub searxng_secret: String,
@@ -454,6 +466,14 @@ impl Config {
                 .unwrap_or_else(|_| "30".to_string())
                 .parse()
                 .context("Invalid SHELL_TIMEOUT_SECS")?,
+
+            // Web Search (native API providers)
+            tavily_api_key: env::var("TAVILY_API_KEY").ok(),
+            tavily_max_tokens: env::var("TAVILY_MAX_TOKENS")
+                .unwrap_or_else(|_| "512".to_string())
+                .parse()
+                .context("Invalid TAVILY_MAX_TOKENS")?,
+            exa_api_key: env::var("EXA_API_KEY").ok(),
 
             // Web Search (SearXNG)
             searxng_url: env::var("SEARXNG_URL").ok(),

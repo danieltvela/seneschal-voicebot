@@ -7,6 +7,7 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod profile;
+pub mod search;
 pub mod stt;
 pub mod tools;
 pub mod tts;
@@ -28,7 +29,7 @@ pub use audio::buffer::AudioBuffer;
 pub use audio::output::AudioOutput;
 pub use config::Config;
 pub use db::Database;
-pub use llm::{LlmProvider, LlmSession, OpenAiLlmProvider, OpenAIClient};
+pub use llm::{LlmProvider, LlmSession, OpenAIClient, OpenAiLlmProvider};
 pub use stt::{
     SpeechEvent, SttProvider, WhisperSTTVAD, WhisperSTTVADConfig, WhisperSttProvider,
     create_provider,

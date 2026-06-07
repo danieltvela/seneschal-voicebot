@@ -3,7 +3,9 @@ pub mod session_events;
 pub mod session_manager;
 
 pub use config::{AgentConfig, AgentRegistry};
+#[allow(unused_imports)]
 pub use session_events::{AcpSessionEvent, create_event_channel, parse_session_update};
+#[allow(unused_imports)]
 pub use session_manager::{
     AcpSessionManager, SessionEntry, SessionEvent, SessionEventRx, SessionEventTx, SessionInfo,
     SessionStatus, create_session_event_channel,

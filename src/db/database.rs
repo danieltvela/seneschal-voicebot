@@ -487,3 +487,192 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn fresh_db() -> (Database, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(path.to_str().unwrap()).await.unwrap();
+        (db, dir)
+    }
+
+    #[tokio::test]
+    async fn new_creates_file_and_migrates() {
+        let (_db, dir) = fresh_db().await;
+        let p = dir.path().join("test.db");
+        assert!(p.exists(), "Database file must be created on disk");
+        assert!(p.metadata().unwrap().len() > 0, "DB must not be empty");
+    }
+
+    #[tokio::test]
+    async fn get_or_create_session_creates_then_reuses() {
+        let (db, _d) = fresh_db().await;
+        let a = db.get_or_create_session().await.unwrap();
+        let b = db.get_or_create_session().await.unwrap();
+        assert_eq!(a, b, "Second call must return the same active session");
+    }
+
+    #[tokio::test]
+    async fn close_session_deactivates_and_new_session_is_created() {
+        let (db, _d) = fresh_db().await;
+        let a = db.get_or_create_session().await.unwrap();
+        db.close_session(a).await.unwrap();
+        let b = db.get_or_create_session().await.unwrap();
+        assert_ne!(a, b, "After close, a new active session is created");
+    }
+
+    #[tokio::test]
+    async fn save_and_load_messages_preserve_order() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "hola").await.unwrap();
+        db.save_message(sid, "assistant", "buenos dias")
+            .await
+            .unwrap();
+        db.save_message(sid, "user", "que hora es").await.unwrap();
+
+        let (summary, msgs) = db.get_session_context(sid, 0).await.unwrap();
+        assert!(summary.is_none());
+        assert_eq!(
+            msgs,
+            vec![
+                ("user".to_string(), "hola".to_string()),
+                ("assistant".to_string(), "buenos dias".to_string()),
+                ("user".to_string(), "que hora es".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_session_context_limit_returns_recent_chronological() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        for i in 0..5 {
+            db.save_message(sid, "user", &format!("msg {i}"))
+                .await
+                .unwrap();
+        }
+        let (_summary, msgs) = db.get_session_context(sid, 2).await.unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].1, "msg 3");
+        assert_eq!(msgs[1].1, "msg 4");
+    }
+
+    #[tokio::test]
+    async fn save_summary_marks_cutoff_and_subsequent_load_uses_it() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "uno").await.unwrap();
+        db.save_message(sid, "assistant", "dos").await.unwrap();
+        db.save_message(sid, "user", "tres").await.unwrap();
+        let cutoff = db
+            .get_message_id_at_offset(sid, 0, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        db.save_summary(sid, "user said hola once", cutoff)
+            .await
+            .unwrap();
+
+        assert_eq!(db.get_summary_through_id(sid).await.unwrap(), cutoff);
+        let (summary, msgs) = db.get_session_context(sid, 0).await.unwrap();
+        assert_eq!(summary.as_deref(), Some("user said hola once"));
+        assert_eq!(msgs.len(), 1, "Only messages with id > cutoff load");
+        assert_eq!(msgs[0].1, "tres");
+    }
+
+    #[tokio::test]
+    async fn get_message_id_at_offset_out_of_range_returns_none() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "uno").await.unwrap();
+        let id = db.get_message_id_at_offset(sid, 0, 99).await.unwrap();
+        assert!(id.is_none());
+    }
+
+    #[tokio::test]
+    async fn save_tool_exchanges_round_trip() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        let exchanges = vec![
+            serde_json::json!({"role":"assistant","tool_calls":[{"id":"1","name":"time","args":{}}]}),
+            serde_json::json!({"role":"tool","content":"12:00"}),
+        ];
+        db.save_tool_exchanges(sid, &exchanges).await.unwrap();
+        let (_summary, msgs) = db.get_session_context(sid, 0).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].0, "ToolExchanges");
+        let parsed: serde_json::Value = serde_json::from_str(&msgs[0].1).unwrap();
+        assert_eq!(parsed, serde_json::json!(exchanges));
+    }
+
+    #[tokio::test]
+    async fn upsert_profile_fact_inserts_then_updates_in_place() {
+        let (db, _d) = fresh_db().await;
+        db.upsert_profile_fact("name", "Daniel", 0.9).await.unwrap();
+        let p1 = db.load_user_profile().await.unwrap();
+        assert_eq!(p1, vec![("name".to_string(), "Daniel".to_string(), 0.9)]);
+
+        db.upsert_profile_fact("name", "Daniel V.", 1.0)
+            .await
+            .unwrap();
+        let p2 = db.load_user_profile().await.unwrap();
+        assert_eq!(p2.len(), 1, "Upsert must not insert a duplicate row");
+        assert_eq!(p2[0].1, "Daniel V.");
+        assert!((p2[0].2 - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_returns_all_newest_first() {
+        let (db, _d) = fresh_db().await;
+        let s1 = db.get_or_create_session().await.unwrap();
+        db.close_session(s1).await.unwrap();
+        let s2 = db.get_or_create_session().await.unwrap();
+        let list = db.list_sessions().await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            list[0].0, s2,
+            "Newest session comes first (ORDER BY created_at DESC)"
+        );
+        assert_eq!(list[1].0, s1);
+    }
+
+    #[tokio::test]
+    async fn save_memories_batch_persists_all_with_is_active_one() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        let items = vec![
+            NewMemory {
+                content: "prefiero español".to_string(),
+                category: "language".to_string(),
+            },
+            NewMemory {
+                content: "trabajo en IA".to_string(),
+                category: "work".to_string(),
+            },
+        ];
+        db.save_memories_batch(&items, sid).await.unwrap();
+        let active = db.load_active_memories().await.unwrap();
+        assert_eq!(active.len(), 2);
+        let cats: Vec<_> = active.iter().map(|m| m.category.as_str()).collect();
+        assert!(cats.contains(&"language"));
+        assert!(cats.contains(&"work"));
+    }
+
+    #[tokio::test]
+    async fn deactivate_memory_soft_deletes_from_active_list() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        let items = vec![NewMemory {
+            content: "obsoleto".to_string(),
+            category: "general".to_string(),
+        }];
+        db.save_memories_batch(&items, sid).await.unwrap();
+        let m = &db.load_active_memories().await.unwrap()[0];
+        db.deactivate_memory(m.id).await.unwrap();
+        assert!(db.load_active_memories().await.unwrap().is_empty());
+    }
+}

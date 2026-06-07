@@ -20,6 +20,7 @@ mod pipeline;
 mod profile;
 #[cfg(feature = "remote")]
 mod remote;
+mod search;
 mod stt;
 mod tools;
 mod tts;
@@ -53,9 +54,10 @@ use crate::pipeline::{
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
-    ActiveTask, ConversationMode, CurrentTimeTool, McpToolProxy, OpenAppTool,
-    PendingInteractionEntry, ReadClipboardTool, ReadFileTool, RunAgentTool, RunShellTool,
-    SetClipboardTool, SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
+    ActiveTask, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy, OpenAppTool,
+    PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool, RunAgentTool,
+    RunShellTool, SetClipboardTool, SetConversationModeTool, TakeScreenshotTool, ToolRegistry,
+    WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -257,6 +259,18 @@ async fn async_main() -> Result<()> {
     let agent_registry = AgentRegistry::from_env();
     let agent_section = agent_registry.system_prompt_section();
     let session_manager = Arc::new(AcpSessionManager::new());
+
+    // ── Search provider (fast path) ───────────────────────────────────────────
+    if let Some(provider) = crate::search::from_config(&config) {
+        let provider = Arc::from(provider);
+        tool_registry.register(QuickSearchTool::new(Arc::clone(&provider)));
+        info!(target: "voicebot", "quick_search tool enabled (provider={})", provider.name());
+
+        if let Some(agent) = agent_registry.agents.first() {
+            tool_registry.register(DeepResearchTool::new(agent.clone(), shared_history.clone()));
+            info!(target: "voicebot", "deep_research tool enabled (agent={})", agent.name);
+        }
+    }
 
     for agent in &agent_registry.agents {
         info!(target: "voicebot", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
@@ -731,6 +745,7 @@ async fn async_main() -> Result<()> {
     }
     {
         let events_c = Arc::clone(&events);
+        let pipeline_state_tx_c = Arc::clone(&pipeline_state_tx);
         let t_vad_end_c = Arc::clone(&t_vad_end);
         let tts_c = Arc::clone(&tts);
         let audio_out_c = Arc::clone(&audio_output);
@@ -745,6 +760,7 @@ async fn async_main() -> Result<()> {
         tokio::spawn(async move {
             tts_task(
                 events_c,
+                pipeline_state_tx_c,
                 t_vad_end_c,
                 sentences_rx,
                 tts_c,

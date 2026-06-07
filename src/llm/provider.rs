@@ -39,11 +39,7 @@ pub trait LlmProvider: Send + Sync {
 
     /// One-shot multimodal completion with a single image + text prompt.
     /// Used by vision tools (e.g. `TakeScreenshotTool`).
-    async fn complete_multimodal(
-        &self,
-        image_data_url: &str,
-        text_prompt: &str,
-    ) -> Result<String>;
+    async fn complete_multimodal(&self, image_data_url: &str, text_prompt: &str) -> Result<String>;
 }
 
 /// Thin wrapper around `OpenAIClient` that implements `LlmProvider`.
@@ -94,12 +90,10 @@ impl LlmProvider for OpenAiLlmProvider {
         self.inner.complete_short(messages).await
     }
 
-    async fn complete_multimodal(
-        &self,
-        image_data_url: &str,
-        text_prompt: &str,
-    ) -> Result<String> {
-        self.inner.complete_multimodal(image_data_url, text_prompt).await
+    async fn complete_multimodal(&self, image_data_url: &str, text_prompt: &str) -> Result<String> {
+        self.inner
+            .complete_multimodal(image_data_url, text_prompt)
+            .await
     }
 }
 
@@ -136,8 +130,6 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn LlmProvider>> {
                 );
             }
         }
-        other => bail!(
-            "Invalid LLM_PROVIDER '{other}'. Supported values: openai, llama-cpp"
-        ),
+        other => bail!("Invalid LLM_PROVIDER '{other}'. Supported values: openai, llama-cpp"),
     }
 }
