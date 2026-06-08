@@ -52,6 +52,8 @@ WORKDIR /app
 COPY --from=builder /build/target/release/voicebot /usr/local/bin/voicebot
 COPY .gitea/install-test/smoke-test.sh /usr/local/bin/voicebot-smoke-test
 RUN chmod +x /usr/local/bin/voicebot-smoke-test
+COPY uninstall.sh /app/uninstall.sh
+RUN chmod +x /app/uninstall.sh
 
 RUN mkdir -p "$MODELS_DIR" \
     && (curl -fsSL --max-time 120 \
