@@ -259,7 +259,7 @@ cargo run --bin test_stt_plus --release
 
 ### Gitea Issues
 
-Issues live on Gitea (`tesla.local:3000`). Use the `tea` CLI for all issue operations (never `gh` or raw `curl`).
+Issues live on Gitea (`tesla.local:3000`). Use the Gitea MCP CLI for all issue operations (never `gh`, `tea` or raw `curl`).
 
 #### Documenting Work as Issue Comments
 
@@ -295,7 +295,7 @@ Every time an agent completes an analysis, plan, or finishes work on a Gitea iss
 ```
 
 **Workflow for issue-driven work:**
-1. Fetch issue details: `tea issue view N`
+1. Fetch issue details from Gitea with ots MCP.
 2. Mark issue as in progress by adding label `ongoing`.
 3. Establish isolation: Initialize worktree in `/Users/danielvela/projects/ai/voicebot-ai` on a new branch `feature/issue-N`.
 4. Post initial comment with scope/plan.

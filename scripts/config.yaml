@@ -8,65 +8,80 @@ servers:
         token: ""
         models:
           # - Step-3.7-Flash
-          # - Qwen3.6-27B
+          - Qwen3.6-27B
           # - gemma-4-31B-it-NVFP4
-          - gemma-4-12B-it
+          # - Qwen3.6-35B-A3B
           # - Qwen3.6-35B-A3B-FP8
           # - Qwen3.6-27B-NVFP4
-      vllm-gemma:
-        port: 8006
-        token: ""
-        models: [] 
-          # - Gemma4-26B-Uncensored
-          # - gemma-4-31B-it-NVFP4
-          # - gemma-4-31B-it
-          # - Qwen3.6-35B-A3B-FP8
-          # - Qwen3.6-27B-NVFP4
-      llama-server:
-        port: 8000
-        token: ""
-        models: []
-          # - LFM2.5-8B-A1B-Q8_0
-      llama-server-amd:
-        port: 8001
-        token: ""
-        models: []
-          # - Qwen3.6-35B-A3B-UD-IQ4_XS
+  #     vllm-gemma:
+  #       port: 8006
+  #       token: ""
+  #       models: [] 
+  #         # - Gemma4-26B-Uncensored
+  #         # - gemma-4-31B-it-NVFP4
+  #         # - gemma-4-31B-it
+  #         # - Qwen3.6-35B-A3B-FP8
+  #         # - Qwen3.6-27B-NVFP4
+  #     llama-server:
+  #       port: 8000
+  #       token: ""
+  #       models: []
+  #         # - LFM2.5-8B-A1B-Q8_0
+  #     llama-server-amd:
+  #       port: 8001
+  #       token: ""
+  #       models: []
+  #         # - Qwen3.6-35B-A3B-UD-IQ4_XS
   macmini:
     host: "http://mac-mini.local"
     location: "mac-mini"
     runtimes:
-      llama-server:
-        port: 8000
-        token: "asdf"
-        models: []
-          # - LFM2.5-8B-A1B-Q8_0
-          # - gemma-4-26B-A4B-it-UD-Q4_K_XL
-          # - gemma-4-26B-A4B-it-UD-Q8_K_XL
-      omlx:
-        port: 8001
-        token: "asdf"
-        models: []
-          # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
-          # - gemma-4-26B-A4B-it-MLX-4bit
-          # - "Qwen3.6-35B-A3B-4bit"
-          # - "Qwen3.6-35B-A3B-UD-MLX-4bit"
+      # llama-server:
+      #   port: 8005
+      #   token: "asdf"
+      #   models: []
+      #     # - LFM2.5-8B-A1B-Q8_0
+      #     # - gemma-4-26B-A4B-it-UD-Q4_K_XL
+      #     # - gemma-4-26B-A4B-it-UD-Q8_K_XL
+      #     # - Qwen3.6-35B-A3B-UD-Q4_K_M
+      # omlx:
+      #   port: 8001
+      #   token: "asdf"
+      #   models: []
+      #     # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
+      #     # - gemma-4-26B-A4B-it-MLX-4bit
+      #     # - "Qwen3.6-35B-A3B-4bit"
+      #     # - "Qwen3.6-35B-A3B-UD-MLX-4bit"
       mlx-lm:
         port: 8080
         token: ""
         models: []
+          # - lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit
+          # - unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
           # - LiquidAI/LFM2.5-8B-A1B-MLX-4bit
           # - LiquidAI/LFM2.5-8B-A1B-MLX-8bit
           # - mlx-community/gemma-4-26b-a4b-it-4bit
           # - zecanard/gemma-4-26B-A4B-it-uncensored-abliterix-MLX-4bit-nvfp4
           # - culturerevolt/gemma-4-26B-A4B-it-ultra-uncensored-heretic-mlx-4Bit
-      ollama:
-        port: 11434
+      # ollama:
+      #   port: 11434
+      #   token: ""
+      #   models: []
+      #     # - qwen3.6:35b-a3b-coding-nvfp4
+      #     # - qwen3.6:35b-a3b-mtp-q4_K_M
+      #     # - maternion/lfm2.5:8b
+      #     # - gemma4:26b-nvfp4
+      #     # - gemma4:26b-a4b-it-q4_K_M
+      lm-studio:
+        port: 1234
         token: ""
         models: []
-          # - maternion/lfm2.5:8b
-          # - gemma4:26b-nvfp4
-          # - gemma4:26b-a4b-it-q4_K_M
+          # - qwen/qwen3.6-35b-a3b
+          # - google/gemma-4-26b-a4b
+          # - google/gemma-4-26b-a4b-qat
+          # - gemma-4-26b-a4b-it-nvfp4
+          # - gemma-4-26B-A4B-it-qat-nvfp4
+
 
 # Evaluator model used to judge quality benchmark responses.
 # This model scores each fixture response against a rubric and is NOT itself
@@ -78,7 +93,7 @@ evaluator:
   runtime: "llama-server-nvidia"
   port: 8005
   token: ""
-  model: gemma-4-12B-it
+  model: Qwen3.6-27B
   # temperature: 0.0 — evaluator always runs at zero temperature for determinism
   temperature: 0.0
   # max_tokens: budget for the evaluator's JSON verdict per fixture

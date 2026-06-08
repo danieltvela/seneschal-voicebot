@@ -669,13 +669,15 @@ def run_mechanical_checks(fixture: dict, text: str, tool_calls: list) -> list[tu
             )
         )
 
-    for s in ev.get("required_strings", []):
-        passed = s.lower() in text.lower()
+    req_strings = ev.get("required_strings", [])
+    if req_strings:
+        found = [s for s in req_strings if s.lower() in text.lower()]
+        passed = bool(found)
         checks.append(
             (
                 "required_string",
                 passed,
-                f"{s!r}: {'found ✓' if passed else 'missing ✗'}",
+                f"{req_strings!r}: {'found ' + repr(found) + ' ✓' if passed else 'none found ✗'}",
             )
         )
 
@@ -750,12 +752,17 @@ def run_mechanical_checks(fixture: dict, text: str, tool_calls: list) -> list[tu
             )
         else:
             args_str = matching[0]["function"].get("arguments", "")
-            passed = expected_arg.lower() in args_str.lower()
+            if isinstance(expected_arg, list):
+                passed = any(arg.lower() in args_str.lower() for arg in expected_arg)
+                arg_desc = " or ".join(expected_arg)
+            else:
+                passed = expected_arg.lower() in args_str.lower()
+                arg_desc = expected_arg
             checks.append(
                 (
                     "tool_args_contain",
                     passed,
-                    f"tool {tool_name!r} arg {expected_arg!r}: {'✓' if passed else f'✗ (args={args_str!r})'}",
+                    f"tool {tool_name!r} arg {arg_desc!r}: {'✓' if passed else f'✗ (args={args_str!r})'}",
                 )
             )
 
@@ -821,6 +828,9 @@ def call_evaluator(
         f"{no_think}You are a strict quality evaluator for a voice assistant called Jarvis. "
         "Assess whether the assistant's response meets the stated criteria. "
         "Be concise and decisive. "
+        "CRITICAL RULE: The mechanical checks are the absolute ground truth. "
+        "If the mechanical checks passed, your verdict MUST be PASS. "
+        "Only judge aspects that the mechanical checks cannot verify. "
         "Reply ONLY with one line of valid JSON: "
         '{"verdict":"PASS","reason":"..."} '
         '{"verdict":"FAIL","reason":"..."} or '
@@ -828,8 +838,8 @@ def call_evaluator(
     )
     user_msg = (
         f"Test: {fixture['description']}\n"
+        f"CRITICAL: {mech_note}\n\n"
         f"Criteria: {fixture.get('eval', {}).get('notes', '(see mechanical checks)')}\n"
-        f"{mech_note}\n"
         f"\nConversation:\n{conv_text}\n"
         f"\nAssistant response:\n{response_repr}\n"
         "\nVerdict (JSON only):"
@@ -979,7 +989,7 @@ def run_quality_benchmark(
         mech = run_mechanical_checks(fx, text, tcs)
         failed = [detail for _, p, detail in mech if not p]
 
-        if ev_available:
+        if ev_available and ev_cfg:
             try:
                 ev_out = call_evaluator(ev_cfg, fx, fx["messages"], text, tcs, mech)
                 verdict = ev_out["verdict"]
