@@ -24,6 +24,21 @@ pub struct NewMemory {
     pub category: String,
 }
 
+/// A single full-text search result from the messages FTS5 index.
+///
+/// `rank` is the BM25 score (lower = better match). `snippet` contains
+/// highlighted context around the matching terms.
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub rank: f64,
+    pub message_id: i64,
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+    pub snippet: String,
+}
+
 /// SQLite database for persistent chat history.
 #[derive(Clone)]
 pub struct Database {
@@ -123,6 +138,102 @@ impl Database {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(is_active)")
             .execute(&self.pool)
             .await?;
+
+        // Additive migration: is_under_review column for profile compaction.
+        let _ = sqlx::query(
+            "ALTER TABLE user_profile ADD COLUMN is_under_review INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&self.pool)
+        .await;
+
+        // Profile history table: tracks every change to user_profile for audit trail.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS profile_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                key         TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                confidence  REAL NOT NULL,
+                timestamp   TEXT NOT NULL,
+                change_type TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_profile_history_key ON profile_history(key)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS dream_state (
+                session_id         TEXT PRIMARY KEY,
+                last_processed_at  TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // ── FTS5 full-text search on messages ──────────────────────────────
+
+        // Virtual table for fast keyword search across conversation history.
+        // Uses external content mode (content=messages) to avoid duplicating
+        // message text — the FTS index stores only tokenized search data.
+        sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                role, content,
+                content=messages,
+                content_rowid=id,
+                tokenize='porter unicode61'
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Rebuild FTS index for any pre-existing messages (runs on first
+        // migration only; subsequent startups find the virtual table exists
+        // and this is a no-op rebuild that re-syncs the token index).
+        sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+            .execute(&self.pool)
+            .await?;
+
+        // ── Synchronisation triggers ──────────────────────────────────────
+
+        // After INSERT: add new message to FTS index.
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, role, content)
+                VALUES (new.id, new.role, new.content);
+            END",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // After DELETE: remove deleted message from FTS index.
+        // The two-step sequence ('delete' command + content insert) tells
+        // FTS5 to remove the row matching old.id from its token index.
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts) VALUES('delete');
+                INSERT INTO messages_fts(rowid, role, content)
+                VALUES (old.id, old.role, old.content);
+            END",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // After UPDATE: remove old entry from FTS index, then insert new.
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts) VALUES('delete');
+                INSERT INTO messages_fts(rowid, role, content)
+                VALUES (old.id, old.role, old.content);
+                INSERT INTO messages_fts(rowid, role, content)
+                VALUES (new.id, new.role, new.content);
+            END",
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -230,6 +341,108 @@ impl Database {
                 (role, content)
             })
             .collect())
+    }
+
+    /// Count messages with id > after_id for a session.
+    pub async fn count_messages_after_id(&self, session_id: Uuid, after_id: i64) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_id = ? AND id > ?")
+                .bind(session_id.to_string())
+                .bind(after_id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count)
+    }
+
+    /// Load messages with id > after_id, including id and timestamp.
+    pub async fn get_messages_with_timestamp_after_id(
+        &self,
+        session_id: Uuid,
+        after_id: i64,
+    ) -> Result<Vec<(i64, String, String, String)>> {
+        let rows = sqlx::query(
+            "SELECT id, role, content, timestamp FROM messages
+             WHERE session_id = ? AND id > ?
+             ORDER BY id ASC",
+        )
+        .bind(session_id.to_string())
+        .bind(after_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let id: i64 = row.try_get("id").unwrap_or(0);
+                let role: String = row.try_get("role").unwrap_or_default();
+                let content: String = row.try_get("content").unwrap_or_default();
+                let timestamp: String = row.try_get("timestamp").unwrap_or_default();
+                (id, role, content, timestamp)
+            })
+            .collect())
+    }
+
+    /// Load messages newer than `last_timestamp` for a session.
+    ///
+    /// Used by the S-DREAM daemon for incremental JSONL export — only
+    /// returns messages whose `timestamp` is strictly greater than the
+    /// last value already exported.
+    pub async fn get_messages_since(
+        &self,
+        session_id: Uuid,
+        last_timestamp: &str,
+    ) -> Result<Vec<(i64, String, String, String)>> {
+        let rows = sqlx::query(
+            "SELECT id, role, content, timestamp FROM messages
+             WHERE session_id = ? AND timestamp > ?
+             ORDER BY id ASC",
+        )
+        .bind(session_id.to_string())
+        .bind(last_timestamp)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let id: i64 = row.try_get("id").unwrap_or(0);
+                let role: String = row.try_get("role").unwrap_or_default();
+                let content: String = row.try_get("content").unwrap_or_default();
+                let timestamp: String = row.try_get("timestamp").unwrap_or_default();
+                (id, role, content, timestamp)
+            })
+            .collect())
+    }
+
+    /// Return the last processed timestamp for a session from the dream_state table.
+    ///
+    /// Returns an empty string if no record exists yet.
+    pub async fn get_dream_last_processed(&self, session_id: Uuid) -> Result<String> {
+        let row = sqlx::query("SELECT last_processed_at FROM dream_state WHERE session_id = ?")
+            .bind(session_id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row
+            .map(|r| {
+                r.try_get::<String, _>("last_processed_at")
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Update (or insert) the last processed timestamp for a session.
+    pub async fn set_dream_last_processed(&self, session_id: Uuid, timestamp: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO dream_state (session_id, last_processed_at)
+             VALUES (?, ?)
+             ON CONFLICT(session_id) DO UPDATE SET last_processed_at = excluded.last_processed_at",
+        )
+        .bind(session_id.to_string())
+        .bind(timestamp)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Return the message id at a 0-based offset within a session (ordered by id ASC),
@@ -380,13 +593,57 @@ impl Database {
             .collect())
     }
 
+    pub async fn get_immutable_rules(&self) -> Result<Vec<(String, String, f64)>> {
+        let rows = sqlx::query(
+            "SELECT key, value, confidence FROM user_profile
+             WHERE key LIKE 'correction:%' AND confidence = 1.0
+             ORDER BY updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let key: String = r.try_get("key").unwrap_or_default();
+                let value: String = r.try_get("value").unwrap_or_default();
+                let confidence: f64 = r.try_get("confidence").unwrap_or(1.0);
+                (key, value, confidence)
+            })
+            .collect())
+    }
+
     /// Insert or update a profile fact.
     ///
     /// An existing fact is only overwritten when the new confidence is strictly
     /// higher — this prevents low-quality inferences from degrading confirmed facts.
+    /// Each call also appends an entry to `profile_history` for audit trail,
+    /// recording whether this was an insert or an update.
     #[allow(dead_code)]
     pub async fn upsert_profile_fact(&self, key: &str, value: &str, confidence: f64) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+
+        let exists: bool =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user_profile WHERE key = ?")
+                .bind(key)
+                .fetch_one(&self.pool)
+                .await?
+                > 0;
+
+        let change_type = if exists { "update" } else { "insert" };
+
+        sqlx::query(
+            "INSERT INTO profile_history (key, value, confidence, timestamp, change_type)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(confidence)
+        .bind(&now)
+        .bind(change_type)
+        .execute(&self.pool)
+        .await?;
+
         sqlx::query(
             "INSERT INTO user_profile (key, value, confidence, updated_at)
              VALUES (?, ?, ?, ?)
@@ -403,6 +660,86 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Return recent history for a profile key (or all keys if key is None).
+    #[allow(dead_code)]
+    pub async fn get_profile_history(
+        &self,
+        key: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<(String, String, f64, String, String)>> {
+        let rows = if let Some(k) = key {
+            sqlx::query(
+                "SELECT key, value, confidence, timestamp, change_type
+                 FROM profile_history WHERE key = ?
+                 ORDER BY timestamp DESC LIMIT ?",
+            )
+            .bind(k)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT key, value, confidence, timestamp, change_type
+                 FROM profile_history
+                 ORDER BY timestamp DESC LIMIT ?",
+            )
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.try_get("key").unwrap_or_default(),
+                    r.try_get("value").unwrap_or_default(),
+                    r.try_get("confidence").unwrap_or(1.0),
+                    r.try_get("timestamp").unwrap_or_default(),
+                    r.try_get("change_type").unwrap_or_default(),
+                )
+            })
+            .collect())
+    }
+
+    /// Mark profile facts with confidence < 0.3 for human review.
+    /// Returns the number of facts newly marked.
+    #[allow(dead_code)]
+    pub async fn compact_user_profile(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_profile
+             SET is_under_review = 1
+             WHERE confidence < 0.3 AND is_under_review = 0",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Return all profile facts currently flagged for human review.
+    #[allow(dead_code)]
+    pub async fn get_profile_facts_under_review(&self) -> Result<Vec<(String, String, f64)>> {
+        let rows = sqlx::query(
+            "SELECT key, value, confidence
+             FROM user_profile
+             WHERE is_under_review = 1
+             ORDER BY key ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.try_get("key").unwrap_or_default(),
+                    r.try_get("value").unwrap_or_default(),
+                    r.try_get("confidence").unwrap_or(1.0),
+                )
+            })
+            .collect())
     }
 
     #[allow(dead_code)]
@@ -485,6 +822,100 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ── FTS5 search & export ───────────────────────────────────────────────
+
+    /// Search messages using FTS5 full-text search.
+    ///
+    /// Returns results ranked by BM25 relevance (lowest rank = best match).
+    /// Each result includes a `snippet` with highlighted matching terms.
+    ///
+    /// Optionally filter by `session_id` to scope the search to a single
+    /// conversation. Use `limit` and `offset` for pagination.
+    pub async fn search_messages(
+        &self,
+        query: &str,
+        session_id: Option<Uuid>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let rows = match session_id {
+            Some(sid) => {
+                sqlx::query(
+                    "SELECT m.id, m.session_id, m.role, m.content, m.timestamp,
+                            bm25(messages_fts) AS rank,
+                            snippet(messages_fts, 1, '<b>', '</b>', '…', 32) AS snippet
+                     FROM messages_fts
+                     JOIN messages m ON messages_fts.rowid = m.id
+                     WHERE messages_fts MATCH ?
+                       AND m.session_id = ?
+                     ORDER BY rank
+                     LIMIT ? OFFSET ?",
+                )
+                .bind(query)
+                .bind(sid.to_string())
+                .bind(limit as i64)
+                .bind(offset as i64)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(
+                    "SELECT m.id, m.session_id, m.role, m.content, m.timestamp,
+                            bm25(messages_fts) AS rank,
+                            snippet(messages_fts, 1, '<b>', '</b>', '…', 32) AS snippet
+                     FROM messages_fts
+                     JOIN messages m ON messages_fts.rowid = m.id
+                     WHERE messages_fts MATCH ?
+                     ORDER BY rank
+                     LIMIT ? OFFSET ?",
+                )
+                .bind(query)
+                .bind(limit as i64)
+                .bind(offset as i64)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(|r| SearchResult {
+                rank: r.try_get("rank").unwrap_or(f64::MAX),
+                message_id: r.try_get("id").unwrap_or(0),
+                session_id: r.try_get("session_id").unwrap_or_default(),
+                role: r.try_get("role").unwrap_or_default(),
+                content: r.try_get("content").unwrap_or_default(),
+                timestamp: r.try_get("timestamp").unwrap_or_default(),
+                snippet: r.try_get("snippet").unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    /// Export all messages for a session as JSONL (one JSON object per line).
+    ///
+    /// Each line has fields: `timestamp`, `role`, `content`.
+    /// Messages are ordered oldest-first by `id`.
+    pub async fn export_session_jsonl(&self, session_id: Uuid) -> Result<String> {
+        let rows = sqlx::query(
+            "SELECT role, content, timestamp FROM messages
+             WHERE session_id = ? ORDER BY id ASC",
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut lines: Vec<String> = Vec::with_capacity(rows.len());
+        for row in rows {
+            let entry = serde_json::json!({
+                "timestamp": row.try_get::<String, _>("timestamp").unwrap_or_default(),
+                "role": row.try_get::<String, _>("role").unwrap_or_default(),
+                "content": row.try_get::<String, _>("content").unwrap_or_default(),
+            });
+            lines.push(entry.to_string());
+        }
+        Ok(lines.join("\n"))
     }
 }
 
@@ -674,5 +1105,297 @@ mod tests {
         let m = &db.load_active_memories().await.unwrap()[0];
         db.deactivate_memory(m.id).await.unwrap();
         assert!(db.load_active_memories().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_profile_fact_records_history() {
+        let (db, _d) = fresh_db().await;
+
+        // First insert.
+        db.upsert_profile_fact("city", "Madrid", 0.8).await.unwrap();
+        let hist = db.get_profile_history(Some("city"), 10).await.unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].4, "insert");
+
+        db.upsert_profile_fact("city", "Barcelona", 0.9)
+            .await
+            .unwrap();
+        let hist = db.get_profile_history(Some("city"), 10).await.unwrap();
+        assert_eq!(hist.len(), 2);
+        assert_eq!(hist[0].4, "update");
+        assert_eq!(hist[0].1, "Barcelona");
+
+        db.upsert_profile_fact("city", "Seville", 0.2)
+            .await
+            .unwrap();
+        let hist = db.get_profile_history(Some("city"), 10).await.unwrap();
+        assert_eq!(hist.len(), 3);
+        assert_eq!(hist[0].1, "Seville");
+        assert_eq!(hist[0].4, "update");
+    }
+
+    #[tokio::test]
+    async fn get_profile_history_none_key_returns_all() {
+        let (db, _d) = fresh_db().await;
+        db.upsert_profile_fact("color", "azul", 0.7).await.unwrap();
+        db.upsert_profile_fact("age", "30", 0.9).await.unwrap();
+        let hist = db.get_profile_history(None, 10).await.unwrap();
+        assert_eq!(hist.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn compact_user_profile_marks_low_confidence_facts() {
+        let (db, _d) = fresh_db().await;
+        db.upsert_profile_fact("high", "confirmed", 0.9)
+            .await
+            .unwrap();
+        db.upsert_profile_fact("low", "doubtful", 0.2)
+            .await
+            .unwrap();
+
+        let marked = db.compact_user_profile().await.unwrap();
+        assert_eq!(marked, 1, "Only the low-confidence fact should be marked");
+
+        let under_review = db.get_profile_facts_under_review().await.unwrap();
+        assert_eq!(under_review.len(), 1);
+        assert_eq!(under_review[0].0, "low");
+    }
+
+    #[tokio::test]
+    async fn compact_user_profile_idempotent() {
+        let (db, _d) = fresh_db().await;
+        db.upsert_profile_fact("low", "doubtful", 0.2)
+            .await
+            .unwrap();
+        db.compact_user_profile().await.unwrap();
+        let second = db.compact_user_profile().await.unwrap();
+        assert_eq!(
+            second, 0,
+            "Second compaction must not mark already-marked facts"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_profile_facts_under_review_empty_when_none_marked() {
+        let (db, _d) = fresh_db().await;
+        db.upsert_profile_fact("high", "confirmed", 0.9)
+            .await
+            .unwrap();
+        let under_review = db.get_profile_facts_under_review().await.unwrap();
+        assert!(under_review.is_empty());
+    }
+
+    // ── FTS5 search ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn search_messages_returns_ranked_results() {
+        let (db, _d) = fresh_db().await;
+        let sid1 = db.get_or_create_session().await.unwrap();
+        let sid2 = Uuid::new_v4();
+        db.create_session(sid2).await.unwrap();
+
+        // Insert messages across two sessions.
+        db.save_message(sid1, "user", "hola que tal").await.unwrap();
+        db.save_message(sid1, "assistant", "muy bien gracias")
+            .await
+            .unwrap();
+        db.save_message(sid1, "user", "que hora es en madrid")
+            .await
+            .unwrap();
+        db.save_message(sid2, "user", "madrid es una ciudad bonita")
+            .await
+            .unwrap();
+        db.save_message(sid1, "assistant", "son las tres en madrid")
+            .await
+            .unwrap();
+
+        // Search across all sessions.
+        let results = db.search_messages("madrid", None, 10, 0).await.unwrap();
+
+        assert!(!results.is_empty(), "FTS5 must find matches for 'madrid'");
+        assert!(
+            results[0].rank <= results[1].rank,
+            "Results must be sorted by BM25 rank (ascending)"
+        );
+        for r in &results {
+            assert!(
+                r.content.contains("madrid"),
+                "Each result content must contain the query term"
+            );
+            assert!(!r.snippet.is_empty(), "Snippet must not be empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn search_messages_filters_by_session() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        let other = Uuid::new_v4();
+        db.create_session(other).await.unwrap();
+
+        db.save_message(sid, "user", "hola que tal").await.unwrap();
+        db.save_message(other, "user", "madrid es bonita")
+            .await
+            .unwrap();
+
+        let results = db
+            .search_messages("madrid", Some(sid), 10, 0)
+            .await
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "Search scoped to session without 'madrid' should be empty"
+        );
+
+        let results = db
+            .search_messages("madrid", Some(other), 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].role, "user");
+    }
+
+    #[tokio::test]
+    async fn search_messages_pagination_works() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+
+        for i in 0..10 {
+            db.save_message(sid, "user", &format!("palabra clave numero {i}"))
+                .await
+                .unwrap();
+        }
+
+        // Search with limit and offset.
+        let page1 = db.search_messages("clave", None, 3, 0).await.unwrap();
+        assert_eq!(page1.len(), 3);
+
+        let page2 = db.search_messages("clave", None, 3, 3).await.unwrap();
+        assert_eq!(page2.len(), 3);
+
+        // Pages should be different.
+        let ids1: Vec<i64> = page1.iter().map(|r| r.message_id).collect();
+        let ids2: Vec<i64> = page2.iter().map(|r| r.message_id).collect();
+        assert!(
+            ids1.iter().all(|id| !ids2.contains(id)),
+            "Pages must not overlap"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_messages_empty_query_returns_empty() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "hola").await.unwrap();
+
+        // Empty or non-matching query.
+        let results = db
+            .search_messages("xyznonexistent", None, 10, 0)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── JSONL export ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_immutable_rules_filters_by_prefix_and_confidence() {
+        let (db, _d) = fresh_db().await;
+
+        db.upsert_profile_fact("correction:name", "Daniel", 1.0)
+            .await
+            .unwrap();
+        db.upsert_profile_fact("correction:city", "Madrid", 1.0)
+            .await
+            .unwrap();
+        db.upsert_profile_fact("name", "David", 0.9).await.unwrap();
+        db.upsert_profile_fact("correction:age", "30", 0.8)
+            .await
+            .unwrap();
+
+        let rules = db.get_immutable_rules().await.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert!(
+            rules
+                .iter()
+                .any(|(k, v, _)| k == "correction:name" && v == "Daniel")
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|(k, v, _)| k == "correction:city" && v == "Madrid")
+        );
+        assert!(
+            !rules.iter().any(|(k, _, _)| k == "name"),
+            "regular profile facts must be excluded"
+        );
+        assert!(
+            !rules.iter().any(|(k, _, _)| k == "correction:age"),
+            "low-confidence corrections must be excluded"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_immutable_rules_empty_when_none() {
+        let (db, _d) = fresh_db().await;
+        db.upsert_profile_fact("name", "Daniel", 0.9).await.unwrap();
+        let rules = db.get_immutable_rules().await.unwrap();
+        assert!(rules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn export_session_jsonl_format_and_content() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "hola").await.unwrap();
+        db.save_message(sid, "assistant", "buenos dias")
+            .await
+            .unwrap();
+
+        let jsonl = db.export_session_jsonl(sid).await.unwrap();
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 2, "JSONL must have one line per message");
+
+        // Parse first line and verify structure.
+        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["role"], "user");
+        assert_eq!(first["content"], "hola");
+        assert!(first["timestamp"].is_string());
+        assert!(!first["timestamp"].as_str().unwrap().is_empty());
+
+        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["role"], "assistant");
+        assert_eq!(second["content"], "buenos dias");
+    }
+
+    #[tokio::test]
+    async fn export_session_jsonl_empty_session() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+
+        let jsonl = db.export_session_jsonl(sid).await.unwrap();
+        assert!(jsonl.is_empty(), "Empty session must produce empty JSONL");
+    }
+
+    #[tokio::test]
+    async fn export_session_jsonl_embedding_in_sync_via_triggers() {
+        // Verify the FTS5 trigger fires on INSERT by searching for content
+        // that was inserted via save_message.
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+
+        db.save_message(sid, "user", "busca esta frase unica")
+            .await
+            .unwrap();
+
+        let results = db
+            .search_messages("frase unica", None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "FTS5 trigger must index newly inserted messages"
+        );
     }
 }

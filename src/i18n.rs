@@ -35,6 +35,13 @@ pub fn get_notification(key: &str, lang: &str) -> &'static str {
             "[System: you've finished reorganizing your memory. It's {now}. Tell the user you're available again.]"
         }
 
+        ("l1_saturated", "es") => {
+            "[Sistema: he almacenado mucha información sobre ti ({total_chars} caracteres, umbral: {threshold}). ¿Quieres que revise y limpie los datos obsoletos?]"
+        }
+        ("l1_saturated", "en") => {
+            "[System: I have stored a lot of information about you ({total_chars} chars, threshold: {threshold}). Would you like me to review and clean up outdated data?]"
+        }
+
         _ => "[Sistema: el voicebot acaba de arrancar.]\n Saluda al usuario.",
     }
 }

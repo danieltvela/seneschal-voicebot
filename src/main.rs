@@ -48,16 +48,17 @@ use crate::config::Config;
 use crate::db::{Database, Memory};
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{
-    PipelineEvents, PipelineFrame, PipelineState, build_system_prompt, consolidation_task,
-    llm_task, run_consolidation_cycle, sen_task, tts_task,
+    PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,
+    check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
+    sen_task, tts_task,
 };
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
     ActiveTask, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy, OpenAppTool,
-    PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool, RunAgentTool,
-    RunShellTool, SetClipboardTool, SetConversationModeTool, TakeScreenshotTool, ToolRegistry,
-    WebSearchTool,
+    PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool,
+    RecoverHistoricalContextTool, RunAgentTool, RunShellTool, SetClipboardTool,
+    SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -191,6 +192,8 @@ async fn async_main() -> Result<()> {
 
     // ── Proactive event channel ───────────────────────────────────────────────
     let (proactive_tx, proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
+    // Per-session flag: ensures L1Saturated is emitted at most once.
+    let l1_saturation_notified: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // ── Secondary LLM client ─────────────────────────────────────────────────
     let secondary_llm_client: Option<Arc<dyn LlmProvider>> =
@@ -342,8 +345,6 @@ async fn async_main() -> Result<()> {
         }
     }
 
-    let tools = Arc::new(tool_registry);
-
     // ── Database ──────────────────────────────────────────────────────────────
     let db = Database::new(&config.db_path).await?;
     let session_id = db.get_or_create_session().await?;
@@ -376,7 +377,23 @@ async fn async_main() -> Result<()> {
         info!(target: "memory", "Loaded {} persistent memories", memories.len());
     }
 
+    tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
+    info!(target: "voicebot", "recover_historical_context tool enabled");
+
+    let tools = Arc::new(tool_registry);
+
     // ── LLM session ───────────────────────────────────────────────────────────
+    let immutable_rules: Vec<crate::profile::Correction> = db
+        .get_immutable_rules()
+        .await?
+        .into_iter()
+        .map(|(key, value, confidence)| crate::profile::Correction {
+            topic: key,
+            correction_text: value,
+            confidence,
+        })
+        .collect();
+
     let tool_section = tools.system_prompt_section();
     let system_prompt = build_system_prompt(
         &config.llm_system_prompt,
@@ -384,7 +401,17 @@ async fn async_main() -> Result<()> {
         &memories,
         &agent_section,
         &tool_section,
+        &immutable_rules,
     );
+
+    // Check if the initial context is already saturated and emit event if so.
+    check_system_prompt_saturation(
+        &profile_facts,
+        &memories,
+        &proactive_tx,
+        &l1_saturation_notified,
+    );
+
     let llm_session = Arc::new(Mutex::new(LlmSession::from_history(
         &system_prompt,
         summary.as_deref(),
@@ -795,6 +822,8 @@ async fn async_main() -> Result<()> {
         let agent_section_c = agent_section.clone();
         let tool_section_c = tool_section.clone();
         let language_c = config.language.clone();
+        let proactive_tx_c = proactive_tx.clone();
+        let already_notified_c = Arc::clone(&l1_saturation_notified);
         tokio::spawn(async move {
             consolidation_task(
                 events_c,
@@ -814,6 +843,8 @@ async fn async_main() -> Result<()> {
                 agent_section_c,
                 tool_section_c,
                 language_c,
+                proactive_tx_c,
+                already_notified_c,
             )
             .await;
         });
@@ -889,6 +920,8 @@ async fn async_main() -> Result<()> {
                 &config.llm_system_prompt,
                 &agent_section,
                 &tool_section,
+                &proactive_tx,
+                &l1_saturation_notified,
             )
             .await;
         }
@@ -974,6 +1007,12 @@ async fn async_main() -> Result<()> {
                                 }
                             }
                             ProactiveEvent::InferenceDaemon { .. } => {}
+                            ProactiveEvent::L1Saturated { total_chars, threshold } => {
+                                let prompt = i18n::get_notification("l1_saturated", &config.language)
+                                    .replace("{total_chars}", &total_chars.to_string())
+                                    .replace("{threshold}", &threshold.to_string());
+                                transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
+                            }
                             ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
                                 if pipeline_state_rx.borrow().is_busy() {
                                     events.barge_in_tx.send(0).ok();

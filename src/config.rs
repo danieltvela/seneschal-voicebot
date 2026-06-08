@@ -267,6 +267,27 @@ pub struct Config {
 
     // ── Hermes ACP session log viewer ───────────────────────────────────────────
     pub hermes_session_viewer: HermesSessionViewerMode,
+
+    // ── Cold Path Memory (S-DREAM) ─────────────────────────────────────────────
+    /// Interval in seconds between S-DREAM consolidation cycles.
+    /// 0 = disabled. Default: 3600 (1 hour). (S_DREAM_INTERVAL_SECS)
+    pub s_dream_interval_secs: u64,
+    /// Whether S-DREAM should trigger consolidation when the user is idle.
+    /// Default: true. (S_DREAM_ON_IDLE)
+    pub s_dream_on_idle: bool,
+    /// Seconds of user inactivity before idle consolidation triggers.
+    /// Default: 600 (10 minutes). (S_DREAM_IDLE_THRESHOLD_SECS)
+    pub s_dream_idle_threshold_secs: u64,
+    /// Scheduled hour (0-23) for daily consolidation.
+    /// None = no scheduled consolidation. Default: Some(3) (3 AM).
+    /// (S_DREAM_SCHEDULED_HOUR)
+    pub s_dream_scheduled_hour: Option<u8>,
+    /// Minimum number of L2 messages before consolidation triggers.
+    /// Default: 50. (S_DREAM_L2_MIN_MESSAGES)
+    pub s_dream_l2_min_messages: usize,
+    /// Directory path for archived JSONL consolidations.
+    /// Default: "data/archives". (S_DREAM_JSONL_DIR)
+    pub s_dream_jsonl_dir: String,
 }
 
 impl Config {
@@ -565,6 +586,30 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse::<HermesSessionViewerMode>().ok())
                 .unwrap_or(HermesSessionViewerMode::Off),
+
+            // Cold Path Memory (S-DREAM)
+            s_dream_interval_secs: env::var("S_DREAM_INTERVAL_SECS")
+                .unwrap_or_else(|_| "3600".to_string())
+                .parse()
+                .context("Invalid S_DREAM_INTERVAL_SECS")?,
+            s_dream_on_idle: env::var("S_DREAM_ON_IDLE")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            s_dream_idle_threshold_secs: env::var("S_DREAM_IDLE_THRESHOLD_SECS")
+                .unwrap_or_else(|_| "600".to_string())
+                .parse()
+                .context("Invalid S_DREAM_IDLE_THRESHOLD_SECS")?,
+            s_dream_scheduled_hour: env::var("S_DREAM_SCHEDULED_HOUR")
+                .ok()
+                .map(|v| v.parse::<u8>())
+                .transpose()
+                .context("Invalid S_DREAM_SCHEDULED_HOUR")?,
+            s_dream_l2_min_messages: env::var("S_DREAM_L2_MIN_MESSAGES")
+                .unwrap_or_else(|_| "50".to_string())
+                .parse()
+                .context("Invalid S_DREAM_L2_MIN_MESSAGES")?,
+            s_dream_jsonl_dir: env::var("S_DREAM_JSONL_DIR")
+                .unwrap_or_else(|_| "data/archives".to_string()),
         };
 
         if config.llm_self_managed && config.llm_command.is_none() {
@@ -576,6 +621,12 @@ impl Config {
                 "Invalid STT_PROVIDER '{}'. Supported values: whisper, parakeet",
                 config.stt_provider
             );
+        }
+
+        if let Some(hour) = config.s_dream_scheduled_hour
+            && hour > 23
+        {
+            anyhow::bail!("Invalid S_DREAM_SCHEDULED_HOUR: {hour}. Must be between 0 and 23.");
         }
 
         Ok(config)

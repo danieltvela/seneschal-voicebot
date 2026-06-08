@@ -102,6 +102,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 - **Barge-in**: Implemented via `CancellationToken` (tokio-util). User speech cancels the active pipeline.
 - **Pluggable STT**: Provider trait abstracts Whisper (whisper-cpp-plus) and Parakeet (ONNX). Both share Silero VAD. Select via `STT_PROVIDER` env var.
 - **Agent delegation**: Complex tasks can be delegated to external AI agents via the ACP protocol over stdio.
+- **Cold Path Memory (S-DREAM)**: Background memory consolidation with L1/L2 dual-layer architecture. L1 tracks context saturation (profile + memories section exceeding ~4000 chars) and emits `ProactiveEvent::L1Saturated` to trigger consolidation. L2 is the long-term archive of consolidated conversations stored as JSONL files with rotation (10 MB / 10000 lines per file). The `recover_historical_context` tool searches the L2 archive via FTS5 full-text search. The `[IMMUTABLE RULES]` prompt block injects non-negotiable behavioral constraints during consolidation cycles. See `src/dream/`.
 
 ---
 
@@ -122,6 +123,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 | `src/agents/` | Agent delegation for complex tasks | `mod.rs`, `config.rs`, `session_manager.rs`, `session_events.rs` |
 | `src/analysis/` | Identity analysis | `mod.rs`, `identity.rs` |
 | `src/db/` | SQLite persistence: sessions, messages, user_profile, memories | `database.rs`, `mod.rs` |
+| `src/dream/` | S-DREAM cold-path memory consolidation daemon | `mod.rs` (SDreamDaemon, SDreamConfig) |
 | `src/config.rs` | Environment-based config | `Config::from_env()` |
 | `src/memory/` | Extract persistent notes from conversation, archive outdated | `mod.rs` (extract_memories, build_memory_context) |
 | `src/profile/` | User profile facts extraction | `mod.rs` |
@@ -166,6 +168,12 @@ Read from `.env` (dotenvy loads automatically):
 | `SEARXNG_URL` | — | SearXNG base URL (enables web_search) |
 | `SEARXNG_SECRET` | — | SearXNG bearer token |
 | `WS_PORT` | `9090` | WebSocket server port |
+| `S_DREAM_INTERVAL_SECS` | `3600` | Seconds between consolidation cycles (0 = disabled) |
+| `S_DREAM_ON_IDLE` | `1` | Trigger consolidation when user is idle (1 = true) |
+| `S_DREAM_IDLE_THRESHOLD_SECS` | `600` | Idle seconds before consolidation triggers |
+| `S_DREAM_SCHEDULED_HOUR` | `3` | Scheduled daily hour (0-23); set empty to disable |
+| `S_DREAM_L2_MIN_MESSAGES` | `50` | Min L2 messages before consolidation triggers |
+| `S_DREAM_JSONL_DIR` | `data/archives` | Directory for archived JSONL consolidation files |
 
 ---
 
