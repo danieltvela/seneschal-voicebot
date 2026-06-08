@@ -79,6 +79,54 @@ else
     report_skip "Silero VAD model missing or empty: $VAD_MODEL"
 fi
 
+banner "Check 4: uninstall.sh removes install artifacts"
+_uninstall_pass=0
+_uninstall_fail=0
+
+# Set up fake install tree in a temp location so we don't clobber the real binary.
+_test_home="$(mktemp -d)"
+_test_bin="$(mktemp -d)"
+mkdir -p "$_test_home/bin" "$_test_home/models" "$_test_home/data"
+printf '#!/bin/sh\nexec true\n' > "$_test_bin/voicebot"
+chmod +x "$_test_bin/voicebot"
+printf 'dummy model' > "$_test_home/models/dummy.bin"
+printf 'dummy db' > "$_test_home/data/voicebot.db"
+printf 'VOICEBOT_LANGUAGE=es\n' > "$_test_home/.env"
+
+# Run uninstall.sh --yes with overridden paths.
+_out="$(VOICEBOT_HOME="$_test_home" BIN_DIR="$_test_bin" /app/uninstall.sh --yes 2>&1)"
+_rc=$?
+
+if [ "$_rc" -eq 0 ]; then
+    report_pass "uninstall.sh exited 0"
+else
+    report_fail "uninstall.sh exited $_rc"
+    printf '%s\n' "$_out" | sed 's/^/    /'
+    _uninstall_fail=$((_uninstall_fail + 1))
+fi
+
+if [ ! -d "$_test_home" ]; then
+    report_pass "VOICEBOT_HOME removed"
+else
+    report_fail "VOICEBOT_HOME still exists: $_test_home"
+    _uninstall_fail=$((_uninstall_fail + 1))
+fi
+
+if [ ! -f "$_test_bin/voicebot" ]; then
+    report_pass "launcher removed"
+else
+    report_fail "launcher still exists: $_test_bin/voicebot"
+    _uninstall_fail=$((_uninstall_fail + 1))
+fi
+
+# Clean up temp dirs (should already be gone, but be safe).
+rm -rf "$_test_home" "$_test_bin"
+
+if [ "$_uninstall_fail" -gt 0 ]; then
+    fail=$((fail + _uninstall_fail))
+fi
+pass=$((pass + 3 - _uninstall_fail))
+
 printf '\n%s=== Summary ===%s\n' "$YELLOW" "$NC"
 printf '  passed: %s%d%s\n' "$GREEN" "$pass" "$NC"
 printf '  failed: %s%d%s\n' "$RED" "$fail" "$NC"
