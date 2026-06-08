@@ -40,6 +40,12 @@ pub enum ProactiveEvent {
         /// One-shot channel: send the ACP outcome string ("allow_once" / "reject_once")
         response_tx: tokio::sync::oneshot::Sender<String>,
     },
+    /// L1 memory context is saturated — total stored chars exceed the threshold.
+    /// The system should prompt the user to allow memory cleanup/reorganization.
+    L1Saturated {
+        total_chars: usize,
+        threshold: usize,
+    },
 }
 
 impl std::fmt::Debug for ProactiveEvent {
@@ -59,6 +65,57 @@ impl std::fmt::Debug for ProactiveEvent {
                     "AgentQuestion(task={task_id}, agent={agent_name}, q={question:?}, opts={options:?})"
                 )
             }
+            Self::L1Saturated {
+                total_chars,
+                threshold,
+            } => {
+                write!(
+                    f,
+                    "L1Saturated(total_chars={total_chars}, threshold={threshold})"
+                )
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_l1_saturated_event_roundtrip() {
+        let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
+
+        let event = ProactiveEvent::L1Saturated {
+            total_chars: 15000,
+            threshold: 10000,
+        };
+
+        tx.send(event).await.unwrap();
+
+        let received = rx.recv().await.unwrap();
+        match received {
+            ProactiveEvent::L1Saturated {
+                total_chars,
+                threshold,
+            } => {
+                assert_eq!(total_chars, 15000);
+                assert_eq!(threshold, 10000);
+            }
+            other => panic!("Expected L1Saturated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_l1_saturated_debug_format() {
+        let event = ProactiveEvent::L1Saturated {
+            total_chars: 25000,
+            threshold: 20000,
+        };
+        let debug_str = format!("{event:?}");
+        assert!(debug_str.contains("L1Saturated"));
+        assert!(debug_str.contains("25000"));
+        assert!(debug_str.contains("20000"));
     }
 }

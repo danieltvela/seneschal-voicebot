@@ -6,6 +6,7 @@ pub mod mcp_tool;
 pub mod open_app;
 pub mod quick_search;
 pub mod read_file;
+pub mod recover_historical_context;
 pub mod run_agent;
 pub mod run_shell;
 pub mod take_screenshot;
@@ -24,6 +25,8 @@ pub use mcp_tool::McpToolProxy;
 pub use open_app::OpenAppTool;
 pub use quick_search::QuickSearchTool;
 pub use read_file::ReadFileTool;
+#[allow(unused_imports)]
+pub use recover_historical_context::RecoverHistoricalContextTool;
 #[allow(unused_imports)]
 pub use run_agent::{
     AcpWriter, ActiveTask, JsonRpcMessage, PendingInteractionEntry, RunAgentTool, format_history,
@@ -139,6 +142,11 @@ impl ToolRegistry {
             .get(name)
             .map(|t| t.is_background())
             .unwrap_or(false)
+    }
+
+    /// Returns a reference to the named tool if it is registered.
+    pub fn get_tool(&self, name: &str) -> Option<&dyn Tool> {
+        self.tools.get(name).map(|t| t.as_ref())
     }
 
     /// Execute a registered tool by name with the given args.
@@ -311,6 +319,29 @@ mod tests {
     fn is_background_unknown_tool_returns_false() {
         let r = ToolRegistry::new();
         assert!(!r.is_background("nonexistent"));
+    }
+
+    // ── get_tool ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn get_tool_returns_some_for_registered_tool() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        assert!(r.get_tool("current_time").is_some());
+    }
+
+    #[test]
+    fn get_tool_returns_none_for_unregistered_tool() {
+        let r = ToolRegistry::new();
+        assert!(r.get_tool("nonexistent").is_none());
+    }
+
+    #[test]
+    fn get_tool_returns_correct_name() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        let tool = r.get_tool("current_time").expect("tool should exist");
+        assert_eq!(tool.name(), "current_time");
     }
 
     // ── parse → execute round-trip ────────────────────────────────────────────

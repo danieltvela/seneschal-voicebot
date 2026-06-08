@@ -134,6 +134,117 @@ fn strip_code_fence(s: &str) -> &str {
     s.trim()
 }
 
+/// A user correction extracted from conversation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Correction {
+    pub topic: String,
+    pub correction_text: String,
+    pub confidence: f64,
+}
+
+/// Detect correction patterns in user text.
+///
+/// Supports Spanish and English correction phrases. Returns a list of
+/// structured corrections that should be treated as immutable rules.
+pub fn detect_corrections(user_text: &str, _assistant_text: &str) -> Vec<Correction> {
+    let text_lower = user_text.to_lowercase();
+    let mut corrections = Vec::new();
+
+    let es_patterns = [
+        ("no, en realidad", "en realidad"),
+        ("no es así", "no es así"),
+        ("me equivoqué", "me equivoqué"),
+        ("corrijo", "corrijo"),
+        ("error", "error"),
+        ("incorrecto", "incorrecto"),
+        ("deberías saber", "deberías saber"),
+        ("no me gusta", "no me gusta"),
+        ("no es correcto", "no es correcto"),
+    ];
+
+    let en_patterns = [
+        ("no, actually", "actually"),
+        ("that's not right", "not right"),
+        ("i was wrong", "i was wrong"),
+        ("correction", "correction"),
+        ("i made a mistake", "mistake"),
+        ("you're wrong", "you're wrong"),
+        ("that's incorrect", "incorrect"),
+        ("not correct", "not correct"),
+        ("wrong about", "wrong about"),
+    ];
+
+    for (trigger, _hint) in es_patterns.iter().chain(en_patterns.iter()) {
+        if text_lower.contains(trigger) {
+            let topic = extract_correction_topic(&text_lower);
+            let correction_text = extract_correction_clause(user_text, trigger);
+            corrections.push(Correction {
+                topic,
+                correction_text,
+                confidence: 1.0,
+            });
+            break;
+        }
+    }
+
+    corrections
+}
+
+fn extract_correction_topic(text_lower: &str) -> String {
+    if let Some(start) = text_lower.find("sobre ") {
+        let rest = &text_lower[start + 6..];
+        rest.split_whitespace()
+            .next()
+            .unwrap_or("general")
+            .to_string()
+    } else if let Some(start) = text_lower.find("about ") {
+        let rest = &text_lower[start + 6..];
+        rest.split_whitespace()
+            .next()
+            .unwrap_or("general")
+            .to_string()
+    } else {
+        "general".to_string()
+    }
+}
+
+fn extract_correction_clause(original: &str, trigger: &str) -> String {
+    let lower = original.to_lowercase();
+    if let Some(pos) = lower.find(trigger) {
+        let after = &original[pos + trigger.len()..].trim();
+        let clipped = if after.len() > 120 {
+            match after[..120].rfind(['.', '!', '?']) {
+                Some(end) => &after[..=end],
+                None => &after[..120],
+            }
+        } else {
+            after
+        };
+        clipped.trim().to_string()
+    } else {
+        original.trim().to_string()
+    }
+}
+
+/// Build the [IMMUTABLE RULES] block injected into the system prompt.
+///
+/// Returns an empty string if there are no corrections.
+pub fn build_corrections_context(corrections: &[Correction]) -> String {
+    if corrections.is_empty() {
+        return String::new();
+    }
+
+    let mut block = String::from("\n\n[IMMUTABLE RULES]\n");
+    for c in corrections {
+        block.push_str("- The user corrected me: ");
+        block.push_str(&c.topic);
+        block.push_str(" -> ");
+        block.push_str(&c.correction_text);
+        block.push('\n');
+    }
+    block
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +652,173 @@ mod tests {
         assert!(msgs[0].content.contains("city: Madrid"));
         assert!(msgs[0].content.contains("hobby_1: Rust"));
         assert!(!msgs[0].content.contains("skill"));
+    }
+
+    #[test]
+    fn detect_corrections_empty_for_normal_text() {
+        let corrections = detect_corrections("Me gusta el café.", "Entendido.");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn detect_corrections_spanish_no_en_realidad() {
+        let corrections = detect_corrections(
+            "No, en realidad me gusta el verde, no el azul.",
+            "Entendido, el azul.",
+        );
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].topic, "general");
+        assert_eq!(corrections[0].confidence, 1.0);
+        assert!(corrections[0].correction_text.contains("me gusta el verde"));
+    }
+
+    #[test]
+    fn detect_corrections_spanish_no_es_asi() {
+        let corrections = detect_corrections(
+            "No es así, mi nombre es Daniel, no David.",
+            "Perdón, David.",
+        );
+        assert_eq!(corrections.len(), 1);
+        assert!(
+            corrections[0]
+                .correction_text
+                .contains("mi nombre es Daniel")
+        );
+    }
+
+    #[test]
+    fn detect_corrections_spanish_me_equivoque() {
+        let corrections = detect_corrections(
+            "Me equivoqué, vivo en Madrid, no en Barcelona.",
+            "Vale, Barcelona.",
+        );
+        assert_eq!(corrections.len(), 1);
+        assert!(corrections[0].correction_text.contains("vivo en Madrid"));
+    }
+
+    #[test]
+    fn detect_corrections_spanish_corrijo() {
+        let corrections = detect_corrections(
+            "Corrijo: mi cumpleaños es en marzo.",
+            "Gracias por la corrección.",
+        );
+        assert_eq!(corrections.len(), 1);
+        assert!(
+            corrections[0]
+                .correction_text
+                .contains("mi cumpleaños es en marzo")
+        );
+    }
+
+    #[test]
+    fn detect_corrections_english_no_actually() {
+        let corrections =
+            detect_corrections("No, actually I prefer tea over coffee.", "Got it, coffee.");
+        assert_eq!(corrections.len(), 1);
+        assert!(
+            corrections[0]
+                .correction_text
+                .contains("I prefer tea over coffee")
+        );
+    }
+
+    #[test]
+    fn detect_corrections_english_thats_not_right() {
+        let corrections =
+            detect_corrections("That's not right, I work from home.", "Sorry, office.");
+        assert_eq!(corrections.len(), 1);
+        assert!(corrections[0].correction_text.contains("I work from home"));
+    }
+
+    #[test]
+    fn detect_corrections_english_i_was_wrong() {
+        let corrections = detect_corrections(
+            "I was wrong, the meeting is at 3pm, not 2pm.",
+            "Understood, 2pm.",
+        );
+        assert_eq!(corrections.len(), 1);
+        assert!(
+            corrections[0]
+                .correction_text
+                .contains("the meeting is at 3pm")
+        );
+    }
+
+    #[test]
+    fn detect_corrections_english_correction_keyword() {
+        let corrections =
+            detect_corrections("Correction: my email is daniel@example.com", "Thanks.");
+        assert_eq!(corrections.len(), 1);
+        assert!(
+            corrections[0]
+                .correction_text
+                .contains("my email is daniel@example.com")
+        );
+    }
+
+    #[test]
+    fn detect_corrections_extracts_topic_about() {
+        let corrections = detect_corrections(
+            "No, actually I was wrong about the color, it's blue.",
+            "Got it.",
+        );
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].topic, "the");
+    }
+
+    #[test]
+    fn detect_corrections_extracts_topic_sobre() {
+        let corrections =
+            detect_corrections("No es así sobre el precio, son 50 euros.", "Entendido.");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].topic, "el");
+    }
+
+    #[test]
+    fn detect_corrections_clips_long_text() {
+        let long_text = format!("No, actually {}", "x".repeat(200));
+        let corrections = detect_corrections(&long_text, "OK.");
+        assert_eq!(corrections.len(), 1);
+        assert!(
+            corrections[0].correction_text.len() <= 130,
+            "correction text should be clipped to ~120 chars"
+        );
+    }
+
+    #[test]
+    fn corrections_context_empty_for_no_corrections() {
+        assert!(build_corrections_context(&[]).is_empty());
+    }
+
+    #[test]
+    fn corrections_context_includes_header() {
+        let corrections = vec![Correction {
+            topic: "color".to_string(),
+            correction_text: "it's blue".to_string(),
+            confidence: 1.0,
+        }];
+        let ctx = build_corrections_context(&corrections);
+        assert!(ctx.contains("[IMMUTABLE RULES]"));
+        assert!(ctx.contains("color -> it's blue"));
+    }
+
+    #[test]
+    fn corrections_context_multiple_rules() {
+        let corrections = vec![
+            Correction {
+                topic: "name".to_string(),
+                correction_text: "Daniel".to_string(),
+                confidence: 1.0,
+            },
+            Correction {
+                topic: "city".to_string(),
+                correction_text: "Madrid".to_string(),
+                confidence: 1.0,
+            },
+        ];
+        let ctx = build_corrections_context(&corrections);
+        assert!(ctx.contains("name -> Daniel"));
+        assert!(ctx.contains("city -> Madrid"));
     }
 
     /// Integration test for `extract_facts` using a real LLM server.

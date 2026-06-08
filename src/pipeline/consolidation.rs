@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
@@ -6,6 +7,7 @@ use tracing::{debug, info, warn};
 use super::frames::PipelineFrame;
 use super::fsm::{PauseReason, PipelineState};
 use super::state::PipelineEvents;
+use crate::agents::ProactiveEvent;
 use crate::db::{Database, Memory};
 use crate::i18n;
 use crate::llm::{LlmProvider, LlmSession};
@@ -60,9 +62,54 @@ pub fn build_routing_section() -> &'static str {
       un reporte\" → Delega a Hermes."
 }
 
+/// Character threshold for L1 saturation detection.
+///
+/// When the combined length of `[USER PROFILE]` + `[MEMORIES]` sections exceeds
+/// this value, a `ProactiveEvent::L1Saturated` is emitted (at most once per session).
+/// Set to 4000 chars (~1000 tokens), roughly 50% of a modest context window.
+const L1_SATURATION_THRESHOLD_CHARS: usize = 4000;
+
+/// Check whether the profile + memories context sections exceed the L1
+/// saturation threshold and emit `ProactiveEvent::L1Saturated` if so.
+///
+/// This is a non-blocking check — it sends the event via `try_send` so the
+/// pipeline is not delayed. The `already_notified` flag ensures the event is
+/// emitted at most once per session (using `compare_exchange` for thread safety).
+pub fn check_system_prompt_saturation(
+    profile_facts: &[ProfileFact],
+    memories: &[Memory],
+    proactive_tx: &mpsc::Sender<ProactiveEvent>,
+    already_notified: &AtomicBool,
+) {
+    let profile_len = build_profile_context(profile_facts).len();
+    let memory_len = build_memory_context(memories).len();
+    // corrections_len reserved for future use (T12 — immutable rules injection)
+    let total_chars = profile_len + memory_len;
+    let threshold = L1_SATURATION_THRESHOLD_CHARS;
+
+    if total_chars > threshold
+        && already_notified
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        let event = ProactiveEvent::L1Saturated {
+            total_chars,
+            threshold,
+        };
+        if let Err(e) = proactive_tx.try_send(event) {
+            warn!(target: "memory", "Failed to send L1Saturated event: {e}");
+        } else {
+            info!(
+                target: "memory",
+                "L1 saturation detected: {total_chars} chars > {threshold} threshold — event emitted"
+            );
+        }
+    }
+}
+
 /// Assemble the full system prompt from its components.
 ///
-/// Order: base prompt → tool instructions → [USER PROFILE] → [MEMORIES] → [ROUTING] → [AGENTS].
+/// Order: base prompt → tool instructions → [IMMUTABLE RULES] → [USER PROFILE] → [MEMORIES] → [ROUTING] → [AGENTS].
 /// Tool instructions are placed immediately after the base prompt so the model sees them
 /// early and cannot ignore them, even when the rest of the prompt is very long.
 pub fn build_system_prompt(
@@ -71,11 +118,13 @@ pub fn build_system_prompt(
     memories: &[Memory],
     agent_section: &str,
     tool_section: &str,
+    corrections: &[crate::profile::Correction],
 ) -> String {
     format!(
-        "{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}",
         base_prompt,
         tool_section,
+        crate::profile::build_corrections_context(corrections),
         build_profile_context(profile_facts),
         build_memory_context(memories),
         build_routing_section(),
@@ -98,6 +147,8 @@ pub async fn run_consolidation_cycle(
     base_prompt: &str,
     agent_section: &str,
     tool_section: &str,
+    proactive_tx: &mpsc::Sender<ProactiveEvent>,
+    already_notified: &AtomicBool,
 ) {
     let (conversation_text, summary_prompt, turns_to_summarize) = {
         let s = llm_session.lock().unwrap();
@@ -210,6 +261,16 @@ pub async fn run_consolidation_cycle(
         &fresh_memories,
         agent_section,
         tool_section,
+        &[],
+    );
+
+    // Emit L1 saturation event if context exceeds the threshold (at most once
+    // per session — the `already_notified` flag ensures this).
+    check_system_prompt_saturation(
+        &fresh_profile_facts,
+        &fresh_memories,
+        proactive_tx,
+        already_notified,
     );
 
     {
@@ -248,6 +309,8 @@ pub async fn consolidation_task(
     agent_section: String,
     tool_section: String,
     language: String,
+    proactive_tx: mpsc::Sender<ProactiveEvent>,
+    already_notified: Arc<AtomicBool>,
 ) {
     let mut cancel_rx = events.barge_in_tx.subscribe();
     let mut last_turn_at = Instant::now();
@@ -349,6 +412,8 @@ pub async fn consolidation_task(
             &base_prompt,
             &agent_section,
             &tool_section,
+            &proactive_tx,
+            &already_notified,
         )
         .await;
 
@@ -368,5 +433,199 @@ pub async fn consolidation_task(
 
         last_turn_at = Instant::now();
         while cancel_rx.try_recv().is_ok() {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::mpsc;
+
+    use crate::db::Memory;
+    use crate::profile::ProfileFact;
+
+    /// Helper: build a profile fact with a long value.
+    fn long_fact(value: &str) -> ProfileFact {
+        ProfileFact {
+            key: "test_key".into(),
+            value: value.to_string(),
+            confidence: 0.9,
+        }
+    }
+
+    /// Helper: build a memory with long content.
+    fn long_memory(content: &str) -> Memory {
+        Memory {
+            id: 1,
+            content: content.to_string(),
+            category: "general".into(),
+            source_session_id: None,
+            created_at: "".into(),
+            updated_at: "".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_saturation_triggers_when_over_threshold() {
+        let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
+        let notified = AtomicBool::new(false);
+
+        // Build enough data to exceed L1_SATURATION_THRESHOLD_CHARS (4000).
+        let facts = vec![long_fact(&"x".repeat(3000))]; // profile ~3000 chars
+        let mems = vec![long_memory(&"y".repeat(2000))]; // memories ~2000 chars
+        // total ~5000 > 4000
+
+        check_system_prompt_saturation(&facts, &mems, &tx, &notified);
+
+        // Flush — try_send is synchronous so the event should be in the channel.
+        let received = rx.try_recv().expect("Expected L1Saturated event");
+        match received {
+            ProactiveEvent::L1Saturated {
+                total_chars,
+                threshold,
+            } => {
+                assert!(
+                    total_chars > threshold,
+                    "total_chars={total_chars} should exceed threshold={threshold}"
+                );
+                assert_eq!(threshold, L1_SATURATION_THRESHOLD_CHARS);
+            }
+            other => panic!("Expected L1Saturated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_saturation_no_event_when_below_threshold() {
+        let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
+        let notified = AtomicBool::new(false);
+
+        let facts = vec![long_fact("short")];
+        let mems = vec![long_memory("tiny")];
+
+        check_system_prompt_saturation(&facts, &mems, &tx, &notified);
+
+        // Channel should be empty — nothing sent.
+        assert!(
+            rx.try_recv().is_err(),
+            "No event should be emitted when below threshold"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_saturation_deduplication() {
+        let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
+        let notified = AtomicBool::new(false);
+
+        let facts = vec![long_fact(&"x".repeat(3000))];
+        let mems = vec![long_memory(&"y".repeat(2000))];
+
+        // First call: should emit.
+        check_system_prompt_saturation(&facts, &mems, &tx, &notified);
+        assert!(rx.try_recv().is_ok(), "First call should emit an event");
+
+        // Second call: `notified` is now true, should NOT emit.
+        check_system_prompt_saturation(&facts, &mems, &tx, &notified);
+        assert!(
+            rx.try_recv().is_err(),
+            "Second call must NOT emit — deduplication failed"
+        );
+    }
+
+    /// Verify the compare_exchange transition: false → true.
+    #[test]
+    fn test_atomic_bool_state_transition() {
+        let notified = AtomicBool::new(false);
+
+        // First check: false → true succeeds.
+        assert!(
+            notified
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        );
+        assert!(notified.load(Ordering::SeqCst));
+
+        // Second check: false → true fails because already true.
+        assert!(
+            notified
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        );
+        assert!(notified.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn build_system_prompt_order_is_correct() {
+        let base = "Eres un asistente.";
+        let tools = "[TOOLS]";
+        let agents = "[AGENTS]";
+        let facts = vec![ProfileFact {
+            key: "name".into(),
+            value: "Daniel".into(),
+            confidence: 0.9,
+        }];
+        let mems = vec![Memory {
+            id: 1,
+            content: "Recuerda el café".into(),
+            category: "general".into(),
+            source_session_id: None,
+            created_at: "".into(),
+            updated_at: "".into(),
+        }];
+        let corrections = vec![crate::profile::Correction {
+            topic: "color".into(),
+            correction_text: "azul".into(),
+            confidence: 1.0,
+        }];
+
+        let prompt = build_system_prompt(base, &facts, &mems, agents, tools, &corrections);
+
+        let pos_base = prompt.find(base).unwrap();
+        let pos_tools = prompt.find(tools).unwrap();
+        let pos_immutable = prompt.find("[IMMUTABLE RULES]").unwrap();
+        let pos_profile = prompt.find("[USER PROFILE]").unwrap();
+        let pos_memories = prompt.find("[MEMORIES]").unwrap();
+        let pos_routing = prompt.find("CUÁNDO RESPONDER").unwrap();
+        let pos_agents = prompt.find(agents).unwrap();
+
+        assert!(
+            pos_base < pos_tools
+                && pos_tools < pos_immutable
+                && pos_immutable < pos_profile
+                && pos_profile < pos_memories
+                && pos_memories < pos_routing
+                && pos_routing < pos_agents,
+            "Prompt sections must appear in the correct order"
+        );
+    }
+
+    #[test]
+    fn build_system_prompt_includes_corrections_when_present() {
+        let corrections = vec![crate::profile::Correction {
+            topic: "name".into(),
+            correction_text: "Daniel".into(),
+            confidence: 1.0,
+        }];
+        let prompt = build_system_prompt("base", &[], &[], "", "", &corrections);
+        assert!(prompt.contains("[IMMUTABLE RULES]"));
+        assert!(prompt.contains("name -> Daniel"));
+    }
+
+    #[test]
+    fn build_system_prompt_omits_corrections_when_empty() {
+        let prompt = build_system_prompt("base", &[], &[], "", "", &[]);
+        assert!(!prompt.contains("[IMMUTABLE RULES]"));
+    }
+
+    #[test]
+    fn build_system_prompt_omits_profile_when_no_facts() {
+        let prompt = build_system_prompt("base", &[], &[], "", "", &[]);
+        assert!(!prompt.contains("[USER PROFILE]"));
+    }
+
+    #[test]
+    fn build_system_prompt_omits_memories_when_empty() {
+        let prompt = build_system_prompt("base", &[], &[], "", "", &[]);
+        assert!(!prompt.contains("[MEMORIES]"));
     }
 }

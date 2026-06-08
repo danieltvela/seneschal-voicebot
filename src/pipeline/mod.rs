@@ -6,7 +6,10 @@ pub mod sen_task;
 pub mod state;
 pub mod tts_task;
 
-pub use consolidation::{build_system_prompt, consolidation_task, run_consolidation_cycle};
+pub use consolidation::{
+    build_system_prompt, check_system_prompt_saturation, consolidation_task,
+    run_consolidation_cycle,
+};
 pub use frames::PipelineFrame;
 #[allow(unused_imports)]
 pub use fsm::{PauseReason, PipelineState};

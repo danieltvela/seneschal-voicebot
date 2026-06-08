@@ -1,3 +1,4 @@
 pub mod database;
 
-pub use database::{Database, Memory, NewMemory};
+#[allow(unused_imports)]
+pub use database::{Database, Memory, NewMemory, SearchResult};
