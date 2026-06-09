@@ -55,8 +55,8 @@ use crate::pipeline::{
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
-    ActiveTask, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy, OpenAppTool,
-    PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool,
+    ActiveTask, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy, NoopTool,
+    OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool,
     RecoverHistoricalContextTool, RunAgentTool, RunShellTool, SetClipboardTool,
     SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
@@ -379,6 +379,13 @@ async fn async_main() -> Result<()> {
 
     tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
     info!(target: "voicebot", "recover_historical_context tool enabled");
+
+    tool_registry.register(NoopTool::new(config.noop_tool_instructions.clone()));
+    info!(
+        target: "voicebot",
+        "noop tool enabled (instructions: {})",
+        config.noop_tool_instructions,
+    );
 
     let tools = Arc::new(tool_registry);
 

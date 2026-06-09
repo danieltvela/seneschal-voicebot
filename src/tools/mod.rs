@@ -3,6 +3,7 @@ pub mod conversation_mode;
 pub mod current_time;
 pub mod deep_research;
 pub mod mcp_tool;
+pub mod noop;
 pub mod open_app;
 pub mod quick_search;
 pub mod read_file;
@@ -22,6 +23,7 @@ pub use conversation_mode::{ConversationMode, SetConversationModeTool};
 pub use current_time::CurrentTimeTool;
 pub use deep_research::DeepResearchTool;
 pub use mcp_tool::McpToolProxy;
+pub use noop::NoopTool;
 pub use open_app::OpenAppTool;
 pub use quick_search::QuickSearchTool;
 pub use read_file::ReadFileTool;
@@ -48,6 +50,11 @@ pub trait Tool: Send + Sync {
     /// If true, the pipeline runs this tool in a background task and delivers the
     /// result via ProactiveEvent instead of blocking the LLM turn for another round-trip.
     fn is_background(&self) -> bool {
+        false
+    }
+    /// If true, the tool's result suppresses any LLM response — the pipeline
+    /// stops without sending output to the user. Used for the NOOP tool.
+    fn is_silent(&self) -> bool {
         false
     }
     /// Execute the tool with optional args and return the result as a string.
