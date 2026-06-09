@@ -183,6 +183,13 @@ pub struct Config {
     /// Hard timeout per shell command in seconds (SHELL_TIMEOUT_SECS).
     pub shell_timeout_secs: u64,
 
+    // ── NOOP tool ──────────────────────────────────────────────────────────────
+    /// Instructions for the LLM about when to call the NOOP (silent) tool.
+    /// The NOOP tool stops the current query without any response to the user.
+    /// Default: instructs the LLM to call it when the user asks something to
+    /// Siri or Alexa. (NOOP_TOOL_INSTRUCTIONS)
+    pub noop_tool_instructions: String,
+
     // ── Web Search (Native API providers) ─────────────────────────────────────
     /// Tavily Search API key (TAVILY_API_KEY). When set, enables the
     /// `quick_search` tool with Tavily backend (fast path, preferred).
@@ -610,6 +617,15 @@ impl Config {
                 .context("Invalid S_DREAM_L2_MIN_MESSAGES")?,
             s_dream_jsonl_dir: env::var("S_DREAM_JSONL_DIR")
                 .unwrap_or_else(|_| "data/archives".to_string()),
+
+            // NOOP tool
+            noop_tool_instructions: env::var("NOOP_TOOL_INSTRUCTIONS").unwrap_or_else(|_| {
+                "Llamar a la herramienta noop cuando el usuario mencione a Siri, Alexa \
+                 u otro asistente de voz, o cuando pida algo que claramente requiere \
+                 otro asistente. La herramienta noop detiene la respuesta actual \
+                 sin output de voz."
+                    .to_string()
+            }),
         };
 
         if config.llm_self_managed && config.llm_command.is_none() {

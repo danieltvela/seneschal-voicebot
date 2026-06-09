@@ -386,6 +386,19 @@ pub async fn llm_task(
 
                         let result = tools.execute(&name, &args).await;
                         info!(target: "pipeline", "Tool[{}] `{}` → {}", iter, name, result);
+
+                        // Silent tools (e.g. NOOP) suppress all response output.
+                        if let Some(t) = tools.get_tool(&name)
+                            && t.is_silent()
+                        {
+                            info!(
+                                target: "pipeline",
+                                "Tool `{}` is silent — suppressing response", name,
+                            );
+                            committed = false;
+                            break 'pipeline;
+                        }
+
                         #[cfg(feature = "tui")]
                         tui_tx
                             .send(crate::tui::events::TuiEvent::ToolCall {
