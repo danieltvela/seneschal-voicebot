@@ -43,7 +43,6 @@ impl Message {
 /// messages) can be persisted verbatim alongside regular user/assistant turns.
 /// This ensures the LLM sees prior tool calls in its context window and does not
 /// learn to respond verbally without calling tools.
-#[derive(Clone)]
 pub struct LlmSession {
     /// Base system prompt — updated at runtime after context consolidation.
     original_system_prompt: String,
@@ -56,6 +55,7 @@ pub struct LlmSession {
     /// new user transcript should be appended (barge-in while Thinking) or
     /// pushed as a new turn.
     pub is_user_message_pending: bool,
+    cached_formatted_history: Option<String>,
 }
 
 impl LlmSession {
@@ -87,6 +87,7 @@ impl LlmSession {
             summary: None,
             messages: Vec::new(),
             is_user_message_pending: false,
+            cached_formatted_history: None,
         }
     }
 
@@ -104,6 +105,7 @@ impl LlmSession {
             summary: summary.map(String::from),
             messages: Vec::new(),
             is_user_message_pending: false,
+            cached_formatted_history: None,
         };
         for (role, content) in history {
             match role.as_str() {
@@ -155,6 +157,7 @@ impl LlmSession {
         self.messages
             .push(serde_json::json!({"role": "user", "content": text}));
         self.is_user_message_pending = true;
+        self.cached_formatted_history = None;
     }
 
     /// Append an in-conversation system turn.
@@ -165,6 +168,7 @@ impl LlmSession {
     pub fn add_system_turn(&mut self, text: &str) {
         self.messages
             .push(serde_json::json!({"role": "system", "content": text}));
+        self.cached_formatted_history = None;
     }
 
     /// Append the assistant's final response for this turn.
@@ -172,6 +176,7 @@ impl LlmSession {
         self.messages
             .push(serde_json::json!({"role": "assistant", "content": text}));
         self.is_user_message_pending = false;
+        self.cached_formatted_history = None;
     }
 
     /// Persist tool call exchanges from a completed pipeline turn.
@@ -184,6 +189,7 @@ impl LlmSession {
     pub fn add_tool_exchange(&mut self, exchanges: Vec<serde_json::Value>) {
         self.messages.extend(exchanges);
         self.is_user_message_pending = false;
+        self.cached_formatted_history = None;
     }
 
     /// Inject a tool call + result into the message list (OpenAI format).
@@ -204,6 +210,7 @@ impl LlmSession {
             "content": result
         }));
         self.is_user_message_pending = false;
+        self.cached_formatted_history = None;
     }
 
     /// Append `extra` to the content of the last user turn if the pending flag
@@ -218,9 +225,32 @@ impl LlmSession {
         {
             let current = last["content"].as_str().unwrap_or("").to_string();
             last["content"] = serde_json::Value::String(format!("{}{}", current, extra));
+            self.cached_formatted_history = None;
             return true;
         }
         false
+    }
+
+    pub fn format_history(&mut self) -> String {
+        if let Some(ref cached) = self.cached_formatted_history {
+            return cached.clone();
+        }
+        let formatted = self
+            .messages
+            .iter()
+            .filter_map(|m| {
+                let role = m["role"].as_str()?;
+                let content = m["content"].as_str()?;
+                match role {
+                    "user" => Some(format!("[User]: {content}")),
+                    "assistant" => Some(format!("[Jarvis]: {content}")),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.cached_formatted_history = Some(formatted.clone());
+        formatted
     }
 
     // ── Summarization ──────────────────────────────────────────────────────────

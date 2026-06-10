@@ -97,6 +97,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 
 - **Single binary**: no inter-service communication; all stages connected by `tokio::sync` channels
 - **STT→LLM latency trick**: partial Whisper transcripts are accumulated in a `String`; when VAD signals end-of-speech the full transcript is sent to the LLM server. The server maintains its own KV-cache implicitly across requests within a session.
+- **No speculative LLM on local GPUs**: Do NOT implement speculative / preemptive LLM generation (starting the LLM while the user is still speaking). This requires cloud-scale infrastructure with separate GPUs for STT and LLM. On a local single-GPU setup (Apple Silicon or one NVIDIA card), the speculative LLM task would contend with STT for the same GPU compute, causing jitter, wasted cycles, and memory pressure. The latency savings are real only when STT and LLM run on physically separate hardware.
 - **LLM→TTS streaming**: LLM tokens arrive via SSE and are buffered until a sentence boundary (`.`, `!`, `?`, `;`, `:`) — then that sentence is synthesized immediately. While sentence N plays, sentence N+1 is being generated and synthesized.
 - **Language**: Spanish by default (`VOICEBOT_LANGUAGE=es`), English supported. Affects Whisper hint and TTS voice. Parakeet auto-detects 25 languages.
 - **Barge-in**: Implemented via `CancellationToken` (tokio-util). User speech cancels the active pipeline.

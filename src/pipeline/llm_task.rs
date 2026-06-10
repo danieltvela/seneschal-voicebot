@@ -11,7 +11,7 @@ use crate::agents::ProactiveEvent;
 use crate::analysis::ContextLens;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, StreamToken};
-use crate::tools::{ToolRegistry, format_history};
+use crate::tools::ToolRegistry;
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
 static PIPELINE_RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -138,7 +138,7 @@ pub async fn llm_task(
                 }
                 turn_commit_counter.fetch_add(1, Ordering::SeqCst);
                 if let Ok(mut h) = shared_history.write() {
-                    *h = format_history(&s.messages);
+                    *h = s.format_history();
                 }
                 result
             };
@@ -156,8 +156,8 @@ pub async fn llm_task(
             }
         } else {
             if let Ok(mut h) = shared_history.write() {
-                let s = llm_session.lock().unwrap();
-                *h = format_history(&s.messages);
+                let mut s = llm_session.lock().unwrap();
+                *h = s.format_history();
             }
             turn_commit_counter.fetch_add(1, Ordering::SeqCst);
         }
@@ -343,7 +343,7 @@ pub async fn llm_task(
                                     let mut s = llm_session.lock().unwrap();
                                     s.add_tool_exchange(tool_exchanges.clone());
                                     if let Ok(mut h) = shared_history.write() {
-                                        *h = format_history(&s.messages);
+                                        *h = s.format_history();
                                     }
                                 }
                                 let db_c = db.clone();

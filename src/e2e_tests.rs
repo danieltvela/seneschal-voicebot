@@ -999,3 +999,44 @@ fn load_wav_as_f32(path: &str) -> anyhow::Result<Vec<f32>> {
 
     Ok(samples)
 }
+
+// ── Latency benchmark ─────────────────────────────────────────────────────────
+
+use std::time::Instant;
+
+/// Measures end-to-end latency: transcript injection → first TTS sentence.
+/// Uses the mock pipeline (no Whisper, no real LLM server) so the baseline
+/// reflects pure pipeline overhead.
+#[tokio::test]
+#[ignore]
+async fn latency_transcript_to_tts_under_1500ms() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Son las diez y media.").await;
+
+    let t0 = Instant::now();
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Hola, qué hora es").await;
+
+    h.events.llm_post_finished.notified().await;
+    let llm_done_ms = t0.elapsed().as_millis();
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let tts_first_ms = t0.elapsed().as_millis();
+
+    h.barge_in();
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected TTS to receive at least one sentence"
+    );
+
+    assert!(
+        llm_done_ms < 1500,
+        "LLM done latency too high: {llm_done_ms}ms (target < 1500ms)"
+    );
+    assert!(
+        tts_first_ms < 1500,
+        "TTS first sentence latency too high: {tts_first_ms}ms (target < 1500ms)"
+    );
+}
