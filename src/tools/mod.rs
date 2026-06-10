@@ -14,6 +14,7 @@ pub mod take_screenshot;
 pub mod web_search;
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use tracing::info;
@@ -64,6 +65,7 @@ pub trait Tool: Send + Sync {
 /// Registry of available tools and tool-call parser.
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
+    cached_tool_defs: Mutex<Option<Vec<serde_json::Value>>>,
 }
 
 impl Default for ToolRegistry {
@@ -76,11 +78,13 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            cached_tool_defs: Mutex::new(None),
         }
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {
         self.tools.insert(tool.name().to_string(), Box::new(tool));
+        *self.cached_tool_defs.lock().unwrap() = None;
     }
 
     #[allow(dead_code)]
@@ -90,7 +94,14 @@ impl ToolRegistry {
 
     /// Returns the tools array for the OpenAI `tools` request field.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
-        self.tools
+        {
+            let cache = self.cached_tool_defs.lock().unwrap();
+            if let Some(ref cached) = *cache {
+                return cached.clone();
+            }
+        }
+        let defs = self
+            .tools
             .values()
             .map(|t| {
                 serde_json::json!({
@@ -102,7 +113,9 @@ impl ToolRegistry {
                     }
                 })
             })
-            .collect()
+            .collect::<Vec<_>>();
+        *self.cached_tool_defs.lock().unwrap() = Some(defs.clone());
+        defs
     }
 
     /// Returns a section to append to the system prompt describing how to call tools.

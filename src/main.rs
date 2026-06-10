@@ -505,7 +505,7 @@ async fn async_main() -> Result<()> {
     // enriches every LLM call without being persisted to the session.
     let context_lens = Arc::new(Mutex::new(ContextLens::new()));
 
-    let mut identity_analyzer: Option<IdentityAnalyzer> = if let Some(ref model_path) =
+    let identity_analyzer: Option<Arc<Mutex<IdentityAnalyzer>>> = if let Some(ref model_path) =
         config.speaker_model
     {
         match SpeakerVerifier::new(
@@ -520,7 +520,10 @@ async fn async_main() -> Result<()> {
                     "Speaker verification enabled (threshold={})",
                     config.speaker_similarity_min
                 );
-                Some(IdentityAnalyzer::new(sv, Arc::clone(&context_lens)))
+                Some(Arc::new(Mutex::new(IdentityAnalyzer::new(
+                    sv,
+                    Arc::clone(&context_lens),
+                ))))
             }
             Err(e) => {
                 warn!(target: "speaker", "Speaker verification disabled — model load failed: {e}");
@@ -1117,12 +1120,6 @@ async fn async_main() -> Result<()> {
 
                             let mut segment_text = final_stream_text;
 
-                            if segment_text.trim().is_empty()
-                                && let Ok(text) = stt_provider.transcribe_complete(&audio)
-                            {
-                                segment_text = text;
-                            }
-
                             #[cfg(feature = "tui")]
                             tui_tx.send(tui::events::TuiEvent::StateChange(
                                 tui::events::PipelineState::Transcribing,
@@ -1135,57 +1132,56 @@ async fn async_main() -> Result<()> {
 
                             *last_speech_at.lock().unwrap() = Instant::now();
 
-                            // ── Speaker identity via IdentityAnalyzer ─────────────
                             let mut is_main_speaker = true;
                             let mut speaker_label = "Usuario".to_string();
 
-                            if let Some(ref mut analyzer) = identity_analyzer {
-                                let result = analyzer.verify(config.sample_rate, &audio);
-                                is_main_speaker = result.is_main_speaker;
-                                speaker_label = result.speaker_label;
-
-                                if !is_main_speaker {
-                                    let mut streak = non_user_streak.lock().unwrap();
-                                    *streak = streak.saturating_add(1);
-                                    if *streak >= config.speaker_ambient_trigger {
-                                        let mut mode = conv_mode.lock().unwrap();
-                                        if *mode == ConversationMode::Active {
-                                            *mode = ConversationMode::Ambient;
-                                            drop(mode);
-                                            info!(
-                                                target: "pipeline",
-                                                "Ambient mode: {} consecutive non-user voices",
-                                                *streak
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    *non_user_streak.lock().unwrap() = 0;
-                                }
-                            }
-
-                            // ── Non-main speaker: spawn background transcription ──
-                            if !is_main_speaker {
-                                let amb_c = Arc::clone(&ambient_buffer);
-                                let label = speaker_label.clone();
-                                let audio_for_task = audio.clone();
+                            if let Some(analyzer) = identity_analyzer.clone() {
+                                let audio_c = audio.clone();
+                                let streak_c = Arc::clone(&non_user_streak);
+                                let mode_c = Arc::clone(&conv_mode);
+                                let amb_trigger = config.speaker_ambient_trigger;
+                                let amb_buf_c = Arc::clone(&ambient_buffer);
                                 let stt_cfg = config.clone();
+                                let sample_rate = config.sample_rate;
+                                let label = speaker_label.clone();
 
                                 tokio::spawn(async move {
-                                    let t0 = Instant::now();
-                                    if let Ok(provider) = create_provider(&stt_cfg)
-                                        && let Ok(text) = provider.transcribe_complete(&audio_for_task)
-                                        && !text.is_empty()
-                                    {
-                                        amb_c.lock().unwrap().push(label.clone(), text.clone());
-                                        debug!(
-                                            target: "pipeline",
-                                            "Ambient buffer ← {label}: {text} ({}ms)",
-                                            t0.elapsed().as_millis()
-                                        );
+                                    let mut analyzer = analyzer.lock().unwrap();
+                                    let result = analyzer.verify(sample_rate, &audio_c);
+                                    let is_main = result.is_main_speaker;
+                                    let speaker_label = result.speaker_label;
+
+                                    if !is_main {
+                                        let mut streak = streak_c.lock().unwrap();
+                                        *streak = streak.saturating_add(1);
+                                        if *streak >= amb_trigger {
+                                            let mut mode = mode_c.lock().unwrap();
+                                            if *mode == ConversationMode::Active {
+                                                *mode = ConversationMode::Ambient;
+                                                drop(mode);
+                                                info!(
+                                                    target: "pipeline",
+                                                    "Ambient mode: {} consecutive non-user voices",
+                                                    *streak
+                                                );
+                                            }
+                                        }
+                                        let t0 = Instant::now();
+                                        if let Ok(provider) = create_provider(&stt_cfg)
+                                            && let Ok(text) = provider.transcribe_complete(&audio_c)
+                                            && !text.is_empty()
+                                        {
+                                            amb_buf_c.lock().unwrap().push(speaker_label.clone(), text.clone());
+                                            debug!(
+                                                target: "pipeline",
+                                                "Ambient buffer ← {speaker_label}: {text} ({}ms)",
+                                                t0.elapsed().as_millis()
+                                            );
+                                        }
+                                    } else {
+                                        *streak_c.lock().unwrap() = 0;
                                     }
                                 });
-                                continue;
                             }
 
                             let mode_snapshot = conv_mode.lock().unwrap().clone();
