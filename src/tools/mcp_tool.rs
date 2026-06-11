@@ -14,7 +14,10 @@ use crate::mcp::McpClient;
 
 /// Proxy that exposes one MCP tool through the `Tool` trait.
 pub struct McpToolProxy {
-    name: String,
+    /// Display name for the LLM (may be prefixed with server name).
+    display_name: String,
+    /// Original tool name from the MCP server (used for `call_tool`).
+    original_name: String,
     description: String,
     /// The `inputSchema` from the MCP server — used as-is for the OpenAI
     /// function-calling `parameters` field.
@@ -24,13 +27,15 @@ pub struct McpToolProxy {
 
 impl McpToolProxy {
     pub fn new(
-        name: String,
+        display_name: String,
+        original_name: String,
         description: String,
         parameters: Value,
         client: Arc<McpClient>,
     ) -> Self {
         Self {
-            name,
+            display_name,
+            original_name,
             description,
             parameters,
             client,
@@ -41,7 +46,7 @@ impl McpToolProxy {
 #[async_trait]
 impl Tool for McpToolProxy {
     fn name(&self) -> &str {
-        &self.name
+        &self.display_name
     }
 
     fn description(&self) -> &str {
@@ -60,11 +65,15 @@ impl Tool for McpToolProxy {
     async fn run(&self, args: &str) -> String {
         let arguments: Value =
             serde_json::from_str(args).unwrap_or(Value::Object(Default::default()));
-        match self.client.call_tool(&self.name, arguments).await {
+        match self.client.call_tool(&self.original_name, arguments).await {
             Ok(text) => text,
             Err(e) => {
-                tracing::warn!(target: "mcp", "Tool '{}' failed: {e}", self.name);
-                format!("Error calling MCP tool '{}': {e}", self.name)
+                tracing::warn!(
+                    target: "mcp",
+                    "Tool '{}' failed: {e}",
+                    self.display_name
+                );
+                format!("Error calling MCP tool '{}': {e}", self.display_name)
             }
         }
     }

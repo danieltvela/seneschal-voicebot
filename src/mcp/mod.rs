@@ -11,6 +11,7 @@
 //! to the correct waiter.
 
 use std::collections::HashMap;
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,6 +56,96 @@ pub struct McpToolDef {
     pub description: String,
     /// JSON Schema for the tool input (`inputSchema` field).
     pub input_schema: Value,
+}
+
+// ── MCP Server Configuration ─────────────────────────────────────────────────
+
+/// Single MCP server configuration loaded from environment variables.
+///
+/// Each server gets its own subprocess and its own set of tools.
+#[derive(Debug, Clone)]
+pub struct McpConfig {
+    /// Unique name used for tool prefixing: `{name}_mcp__{tool_name}`.
+    pub name: String,
+    /// Command to spawn the MCP server subprocess.
+    pub command: String,
+    /// Hard timeout in seconds for each tool call (default 30).
+    pub tool_timeout_secs: u64,
+}
+
+/// Registry of all configured MCP servers.
+///
+/// Created once at startup from environment variables. Supports both the
+/// new multi-MCP format (`MCPS=apple,filesystem`) and the legacy
+/// single-MCP format (`MCP_COMMAND`).
+#[derive(Debug, Clone)]
+pub struct McpRegistry {
+    pub servers: Vec<McpConfig>,
+}
+
+impl McpRegistry {
+    /// Load MCP servers from environment variables.
+    ///
+    /// Priority:
+    /// 1. If `MCPS` is set → parse comma-separated names, load each via `MCP_<NAME>_COMMAND`.
+    /// 2. If `MCP_COMMAND` is set → create single `"default"` server (backward compatibility).
+    /// 3. Otherwise → empty registry (no MCP tools).
+    pub fn from_env() -> Self {
+        // ── New multi-MCP format ──────────────────────────────────────
+        if let Ok(raw) = env::var("MCPS") {
+            let names: Vec<&str> = raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if !names.is_empty() {
+                let servers = names.into_iter().filter_map(load_mcp_from_env).collect();
+                return Self { servers };
+            }
+        }
+
+        // ── Legacy single-MCP format (backward compatibility) ────────
+        if let Ok(command) = env::var("MCP_COMMAND") {
+            let timeout: u64 = env::var("MCP_TOOL_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30);
+
+            return Self {
+                servers: vec![McpConfig {
+                    name: "default".to_string(),
+                    command,
+                    tool_timeout_secs: timeout,
+                }],
+            };
+        }
+
+        // ── No MCP servers configured ─────────────────────────────────
+        Self {
+            servers: Vec::new(),
+        }
+    }
+}
+
+/// Load a single MCP server config from env vars using the `MCP_<NAME>_*` convention.
+///
+/// Returns `None` if the server has no valid command configured.
+fn load_mcp_from_env(name: &str) -> Option<McpConfig> {
+    let upper = name.to_uppercase().replace('-', "_");
+
+    let command = env::var(format!("MCP_{}_COMMAND", upper)).ok()?;
+
+    let tool_timeout_secs: u64 = env::var(format!("MCP_{}_TIMEOUT_SECS", upper))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+
+    Some(McpConfig {
+        name: name.to_string(),
+        command,
+        tool_timeout_secs,
+    })
 }
 
 // ── Internal writer ──────────────────────────────────────────────────────────
@@ -429,5 +520,72 @@ mod tests {
         let result = serde_json::json!({"content": []});
         // Empty content → JSON serialization of the whole result.
         assert!(!extract_text_content(&result).is_empty());
+    }
+
+    #[test]
+    fn mcp_registry_from_env_empty() {
+        temp_env::with_var("MCPS", None::<&str>, || {
+            temp_env::with_var("MCP_COMMAND", None::<&str>, || {
+                let registry = McpRegistry::from_env();
+                assert!(registry.servers.is_empty());
+            });
+        });
+    }
+
+    #[test]
+    fn mcp_registry_from_env_legacy() {
+        temp_env::with_var("MCPS", None::<&str>, || {
+            temp_env::with_var("MCP_COMMAND", Some("bunx apple-mcp@latest"), || {
+                temp_env::with_var("MCP_TOOL_TIMEOUT_SECS", Some("60"), || {
+                    let registry = McpRegistry::from_env();
+                    assert_eq!(registry.servers.len(), 1);
+                    assert_eq!(registry.servers[0].name, "default");
+                    assert_eq!(registry.servers[0].command, "bunx apple-mcp@latest");
+                    assert_eq!(registry.servers[0].tool_timeout_secs, 60);
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn mcp_registry_from_env_multi() {
+        temp_env::with_var("MCP_COMMAND", None::<&str>, || {
+            temp_env::with_var("MCPS", Some("apple,filesystem"), || {
+                temp_env::with_var("MCP_APPLE_COMMAND", Some("bunx apple-mcp@latest"), || {
+                    temp_env::with_var("MCP_APPLE_TIMEOUT_SECS", Some("120"), || {
+                        temp_env::with_var(
+                            "MCP_FILESYSTEM_COMMAND",
+                            Some("npx @mcp/server-filesystem /tmp"),
+                            || {
+                                let registry = McpRegistry::from_env();
+                                assert_eq!(registry.servers.len(), 2);
+                                assert_eq!(registry.servers[0].name, "apple");
+                                assert_eq!(registry.servers[0].command, "bunx apple-mcp@latest");
+                                assert_eq!(registry.servers[0].tool_timeout_secs, 120);
+                                assert_eq!(registry.servers[1].name, "filesystem");
+                                assert_eq!(
+                                    registry.servers[1].command,
+                                    "npx @mcp/server-filesystem /tmp"
+                                );
+                                assert_eq!(registry.servers[1].tool_timeout_secs, 30);
+                            },
+                        );
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn mcp_registry_from_env_skips_missing_command() {
+        temp_env::with_var("MCP_COMMAND", None::<&str>, || {
+            temp_env::with_var("MCPS", Some("exists,missing"), || {
+                temp_env::with_var("MCP_EXISTS_COMMAND", Some("echo exists"), || {
+                    let registry = McpRegistry::from_env();
+                    assert_eq!(registry.servers.len(), 1);
+                    assert_eq!(registry.servers[0].name, "exists");
+                });
+            });
+        });
     }
 }
