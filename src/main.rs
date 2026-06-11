@@ -316,31 +316,44 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    // ── MCP tools ─────────────────────────────────────────────────────────────
-    if let Some(ref mcp_cmd) = config.mcp_command {
-        info!(target: "mcp", "Spawning MCP server: {}", mcp_cmd);
-        match mcp::McpClient::spawn_and_init(mcp_cmd, config.mcp_tool_timeout_secs).await {
+    // ── MCP tools (multi-server) ──────────────────────────────────────────────
+    let mcp_registry = mcp::McpRegistry::from_env();
+    for server in &mcp_registry.servers {
+        info!(target: "mcp", "Spawning MCP server '{}': {}", server.name, server.command);
+        match mcp::McpClient::spawn_and_init(&server.command, server.tool_timeout_secs).await {
             Ok((client, tool_defs)) => {
                 let client = std::sync::Arc::new(client);
-                let count = tool_defs.len();
+                let mut count = 0;
                 for def in tool_defs {
+                    let prefixed_name = format!("{}_mcp__{}", server.name, def.name);
+                    let prefixed_desc =
+                        format!("[MCP server: {}] {}", server.name, def.description);
                     info!(
                         target: "mcp",
                         "Tool `{}`: schema={}",
-                        def.name,
+                        prefixed_name,
                         serde_json::to_string(&def.input_schema).unwrap_or_default(),
                     );
                     tool_registry.register(McpToolProxy::new(
+                        prefixed_name,
                         def.name,
-                        def.description,
+                        prefixed_desc,
                         def.input_schema,
                         std::sync::Arc::clone(&client),
                     ));
+                    count += 1;
                 }
-                info!(target: "mcp", "Registered {} MCP tool(s)", count);
+                info!(
+                    target: "mcp",
+                    "Registered {} MCP tool(s) from server '{}'",
+                    count, server.name
+                );
             }
             Err(e) => {
-                warn!(target: "mcp", "MCP server failed to start — MCP tools disabled: {e}");
+                warn!(
+                    target: "mcp",
+                    "MCP server '{}' failed to start: {}", server.name, e
+                );
             }
         }
     }
