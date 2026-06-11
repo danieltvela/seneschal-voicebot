@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
+use uuid::Uuid;
 
 use super::Tool;
 use crate::db::Database;
@@ -9,10 +10,8 @@ use crate::db::Database;
 ///
 /// Provides access to historical conversations consolidated out of the active
 /// context window. Queries match against message content, memory entries,
-/// and session summaries.
-///
-/// Actual FTS5 integration will be implemented in T13. For now, this tool
-/// validates parameters and returns a placeholder response.
+/// and session summaries. Results are ranked by BM25 relevance and formatted
+/// as markdown with rank, role, session, timestamp, snippet, and content.
 pub struct RecoverHistoricalContextTool {
     db: Option<Database>,
 }
@@ -95,23 +94,49 @@ impl Tool for RecoverHistoricalContextTool {
             params.limit
         );
 
-        // TODO(T13): Implement actual FTS5 search against L2 archive.
-        // When `db` is Some, call db.search_messages(query, session_id, limit).
+        // Parse session_id: empty string -> None, valid UUID -> Some, otherwise error ignored.
+        let session_uuid: Option<Uuid> = match &params.session_id {
+            Some(s) if !s.trim().is_empty() => Uuid::parse_str(s.trim()).ok(),
+            _ => None,
+        };
+
         match &self.db {
-            Some(_db) => {
-                format!(
-                    "[PLACEHOLDER] recover_historical_context searched for {:?} \
-                     (limit={}, session_id={:?}). La integraci\u{00f3}n con la base \
-                     de datos se implementar\u{00e1} en una versi\u{00f3}n futura.",
-                    params.query, params.limit, params.session_id
-                )
+            Some(db) => {
+                let results = match db
+                    .search_messages(&params.query, session_uuid, params.limit, 0)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return format!("Error de base de datos: {e}");
+                    }
+                };
+
+                if results.is_empty() {
+                    return "No se encontraron mensajes hist\u{00f3}ricos que coincidan con la b\u{00fa}squeda.".to_string();
+                }
+
+                let mut output = "## Resultados de búsqueda histórica\n\n".to_string();
+                output += &format!("**Consulta:** {}\n\n", params.query);
+                output += &format!("**Total:** {} resultado(s)\n\n---\n\n", results.len());
+
+                for (i, res) in results.iter().enumerate() {
+                    output += &format!(
+                        "{}. **Rango:** {:.4} | **Rol:** {} | **Sesi\u{00f3}n:** {} | **Fecha:** {}\n\n",
+                        i + 1,
+                        res.rank,
+                        res.role,
+                        &res.session_id[..8],
+                        res.timestamp
+                    );
+                    output += &format!("**Fragmento:** {}\n\n", res.snippet);
+                    output += &format!("**Contenido:** {}\n\n---\n\n", res.content);
+                }
+                output
             }
             None => {
-                format!(
-                    "[PLACEHOLDER] recover_historical_context: base de datos no disponible. \
-                     B\u{00fa}squeda solicitada: {:?} (limit={}, session_id={:?})",
-                    params.query, params.limit, params.session_id
-                )
+                "Base de datos no disponible. No se puede buscar en el archivo hist\u{00f3}rico."
+                    .to_string()
             }
         }
     }
@@ -172,37 +197,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_returns_placeholder_with_query() {
-        let tool = RecoverHistoricalContextTool::new(None);
+    async fn run_returns_no_results_for_empty_db() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(path.to_str().unwrap())
+            .await
+            .expect("failed to create test database");
+        let tool = RecoverHistoricalContextTool::new(Some(db));
         let result = tool
-            .run(r#"{"query": "machine learning", "limit": 5}"#)
+            .run(r#"{"query": "nonexistent_query_xyz", "limit": 5}"#)
             .await;
         assert!(
-            result.contains("machine learning"),
-            "response must contain the query: {result:?}"
-        );
-        assert!(
-            result.contains("PLACEHOLDER"),
-            "response must indicate placeholder: {result:?}"
+            result.contains("No se encontraron mensajes"),
+            "should return no results message: {result:?}"
         );
     }
 
     #[tokio::test]
     async fn run_uses_default_limit_when_omitted() {
-        let tool = RecoverHistoricalContextTool::new(None);
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(path.to_str().unwrap())
+            .await
+            .expect("failed to create test database");
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "test message content")
+            .await
+            .unwrap();
+
+        let tool = RecoverHistoricalContextTool::new(Some(db));
         let result = tool.run(r#"{"query": "test"}"#).await;
-        assert!(result.contains("limit=10"), "default limit should be 10");
+        assert!(
+            result.contains("Total:"),
+            "should contain total results count: {result:?}"
+        );
+        assert!(
+            result.contains("resultado"),
+            "should contain resultado(s): {result:?}"
+        );
     }
 
     #[tokio::test]
     async fn run_accepts_session_id() {
-        let tool = RecoverHistoricalContextTool::new(None);
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(path.to_str().unwrap())
+            .await
+            .expect("failed to create test database");
+        let sid = db.get_or_create_session().await.unwrap();
+        let sid_str = sid.to_string();
+        db.save_message(sid, "user", "session test message")
+            .await
+            .unwrap();
+
+        let tool = RecoverHistoricalContextTool::new(Some(db));
         let result = tool
-            .run(r#"{"query": "test", "session_id": "abc-123"}"#)
+            .run(&format!(
+                r#"{{"query": "session", "session_id": "{}", "limit": 5}}"#,
+                sid
+            ))
             .await;
         assert!(
-            result.contains("abc-123"),
-            "should include session_id: {result:?}"
+            result.contains(&sid_str[..8]),
+            "should include session ID prefix: {result:?}"
         );
     }
 
@@ -216,12 +273,8 @@ mod tests {
         let tool = RecoverHistoricalContextTool::new(Some(db));
         let result = tool.run(r#"{"query": "hello", "limit": 3}"#).await;
         assert!(
-            result.contains("hello"),
-            "response should contain query: {result:?}"
-        );
-        assert!(
-            result.contains("PLACEHOLDER"),
-            "response should indicate placeholder even with DB: {result:?}"
+            result.contains("No se encontraron mensajes"),
+            "empty DB should return no results: {result:?}"
         );
     }
 
@@ -243,12 +296,73 @@ mod tests {
             .run(r#"{"query": "hola", "limit": 5, "session_id": ""}"#)
             .await;
         assert!(
-            result.contains("hola"),
-            "response should contain query: {result:?}"
+            result.contains("hola que tal"),
+            "response should contain matching message content: {result:?}"
         );
         assert!(
-            result.contains("PLACEHOLDER"),
-            "response should indicate placeholder: {result:?}"
+            !result.contains("PLACEHOLDER"),
+            "response must not contain PLACEHOLDER: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_finds_messages_with_fts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(path.to_str().unwrap())
+            .await
+            .expect("failed to create test database");
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "mensaje sobre machine learning")
+            .await
+            .unwrap();
+        db.save_message(sid, "assistant", "keyword para testing de busqueda")
+            .await
+            .unwrap();
+
+        let tool = RecoverHistoricalContextTool::new(Some(db));
+        let result = tool.run(r#"{"query": "keyword", "limit": 5}"#).await;
+        assert!(
+            result.contains("keyword"),
+            "result should contain matching keyword: {result:?}"
+        );
+        assert!(
+            result.contains("<b>"),
+            "snippet should contain <b> highlight tags from FTS5: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_with_session_id_filter() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::new(path.to_str().unwrap())
+            .await
+            .expect("failed to create test database");
+        let sid_a = db.get_or_create_session().await.unwrap();
+        let sid_b = Uuid::new_v4();
+        db.create_session(sid_b).await.unwrap();
+        db.save_message(sid_a, "user", "unique alpha message content")
+            .await
+            .unwrap();
+        db.save_message(sid_b, "user", "unique beta message content")
+            .await
+            .unwrap();
+
+        let tool = RecoverHistoricalContextTool::new(Some(db));
+        let result = tool
+            .run(&format!(
+                r#"{{"query": "unique", "session_id": "{}", "limit": 5}}"#,
+                sid_a
+            ))
+            .await;
+        assert!(
+            result.contains("alpha"),
+            "should contain messages from session A: {result:?}"
+        );
+        assert!(
+            !result.contains("beta"),
+            "should NOT contain messages from session B: {result:?}"
         );
     }
 }
