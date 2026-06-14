@@ -33,7 +33,7 @@ pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
                     whisper_cfg,
                     config.parakeet_model_dir.as_deref(),
                 )?;
-                return Ok(Box::new(provider));
+                Ok(Box::new(provider))
             }
 
             #[cfg(not(feature = "parakeet"))]
