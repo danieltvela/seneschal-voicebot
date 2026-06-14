@@ -1075,7 +1075,7 @@ async fn async_main() -> Result<()> {
                 } else {
                     chunk.samples
                 };
-                let mono = resample_nearest(&mono, source_sample_rate, config.sample_rate);
+                let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
 
                 stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
