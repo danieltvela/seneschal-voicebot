@@ -8,7 +8,7 @@ use futures_util::SinkExt;
 use futures_util::stream::StreamExt;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tracing::{error, info, trace, warn};
 
@@ -107,6 +107,9 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
     let audio_tx = state.audio_tx.clone();
     let samples_per_chunk = state.samples_per_chunk;
 
+    let remote_sample_rate = Arc::new(AtomicU32::new(16_000));
+    let audio_sample_rate = Arc::clone(&remote_sample_rate);
+
     // Task: read WS messages, fan out binary vs text.
     let barge_in_tx = state.barge_in_tx.clone();
     let ws_write = Arc::new(tokio::sync::Mutex::new(ws_write));
@@ -131,8 +134,9 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
                     }
                 }
                 Message::Text(text) => match serde_json::from_str::<ClientMessage>(&text) {
-                    Ok(ClientMessage::SessionStart { sample_rate: _ }) => {
-                        info!(target: "remote", "Session started");
+                    Ok(ClientMessage::SessionStart { sample_rate }) => {
+                        remote_sample_rate.store(sample_rate, Ordering::Relaxed);
+                        info!(target: "remote", "Session started (sample_rate={sample_rate} Hz)");
                         let ready = serde_json::to_string(&ServerMessage::SessionReady).unwrap();
                         let mut tx = ws_write_ctrl.lock().await;
                         let _ = tx.send(Message::Text(ready.into())).await;
@@ -170,7 +174,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
                 let chunk_samples: Vec<f32> = buffer.drain(..samples_per_chunk).collect();
                 let _ = audio_tx.try_send(AudioChunk {
                     samples: chunk_samples,
-                    sample_rate: 16_000,
+                    sample_rate: audio_sample_rate.load(Ordering::Relaxed),
                     channels: 1,
                 });
             }
