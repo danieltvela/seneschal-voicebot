@@ -8,14 +8,21 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var viewModel = CompanionViewModel()
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        TabView {
+            ConnectionView()
+                .tabItem {
+                    Label("Connect", systemImage: "wifi")
+                }
+            
+            ConversationView()
+                .tabItem {
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                }
         }
-        .padding()
+        .environmentObject(viewModel)
     }
 }
 
