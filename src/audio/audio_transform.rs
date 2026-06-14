@@ -202,3 +202,18 @@ impl AudioTransformer {
         }
     }
 }
+
+/// Lightweight nearest-neighbour resampling to 16 kHz for STT/VAD input.
+pub fn resample_nearest(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate {
+        return samples.to_vec();
+    }
+    let ratio = from_rate as f64 / to_rate as f64;
+    let out_len = (samples.len() as f64 / ratio) as usize;
+    (0..out_len)
+        .map(|i| {
+            let src = (i as f64 * ratio) as usize;
+            samples[src.min(samples.len().saturating_sub(1))]
+        })
+        .collect()
+}

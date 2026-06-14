@@ -41,6 +41,7 @@ use crate::analysis::ContextLens;
 use crate::analysis::identity::IdentityAnalyzer;
 use crate::audio::ambient_buffer::AmbientBuffer;
 use crate::audio::audio_capture::{AudioCapture, AudioChunk};
+use crate::audio::audio_transform::resample_nearest;
 use crate::audio::buffer::AudioBuffer;
 use crate::audio::output::AudioOutput;
 use crate::audio::speaker::SpeakerVerifier;
@@ -1066,7 +1067,6 @@ async fn async_main() -> Result<()> {
                     },
                 };
 
-                // Downmix to mono.
                 let mono: Vec<f32> = if chunk.channels > 1 {
                     chunk.samples
                         .chunks(chunk.channels as usize)
@@ -1075,6 +1075,7 @@ async fn async_main() -> Result<()> {
                 } else {
                     chunk.samples
                 };
+                let mono = resample_nearest(&mono, source_sample_rate, config.sample_rate);
 
                 stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
