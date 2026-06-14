@@ -15,8 +15,14 @@ const VAD_PROBE_MS: usize = 200;
 const VAD_PROBE_SAMPLES: usize = SAMPLE_RATE * VAD_PROBE_MS / 1000;
 const PRE_ROLL_MS: usize = 300;
 const PRE_ROLL_SAMPLES: usize = SAMPLE_RATE * PRE_ROLL_MS / 1000;
+const POST_ROLL_MS: usize = 250;
+const POST_ROLL_SAMPLES: usize = SAMPLE_RATE * POST_ROLL_MS / 1000;
 const MAX_SEGMENT_MS: usize = 20_000;
 const MAX_SEGMENT_SAMPLES: usize = SAMPLE_RATE * MAX_SEGMENT_MS / 1000;
+
+const TRIM_WINDOW_MS: usize = 20;
+const TRIM_WINDOW_SAMPLES: usize = SAMPLE_RATE * TRIM_WINDOW_MS / 1000;
+const MAX_TRIM_PERCENT: usize = 90;
 
 pub struct ParakeetSttProvider {
     model: Arc<Mutex<ParakeetTDT>>,
@@ -26,10 +32,12 @@ pub struct ParakeetSttProvider {
 
     // State machine
     in_speech: bool,
+    in_post_roll: bool,
     speech_buf: Vec<f32>,
     pre_roll: VecDeque<f32>,
     silence_samples: usize,
     silence_samples_threshold: usize,
+    post_roll_remaining: usize,
 
     // Leftover samples that didn't fill a probe window.
     probe_carry: Vec<f32>,
@@ -86,10 +94,12 @@ impl ParakeetSttProvider {
             vad_start_threshold: base.vad_start_threshold,
             vad_end_threshold,
             in_speech: false,
+            in_post_roll: false,
             speech_buf: Vec::with_capacity(MAX_SEGMENT_SAMPLES),
             pre_roll: VecDeque::with_capacity(PRE_ROLL_SAMPLES),
             silence_samples: 0,
             silence_samples_threshold,
+            post_roll_remaining: 0,
             probe_carry: Vec::with_capacity(VAD_PROBE_SAMPLES),
         })
     }
@@ -142,6 +152,18 @@ impl ParakeetSttProvider {
                 let _ = tx.send(SpeechEvent::SpeechStart).await;
                 tracing::debug!(target: "sttvad", "SpeechStart");
             }
+        } else if self.in_post_roll {
+            self.speech_buf.extend_from_slice(chunk);
+            if silence {
+                self.post_roll_remaining = self.post_roll_remaining.saturating_sub(chunk.len());
+                if self.post_roll_remaining == 0 {
+                    self.finalize_segment(tx).await?;
+                }
+            } else {
+                self.in_post_roll = false;
+                self.post_roll_remaining = 0;
+                self.silence_samples = 0;
+            }
         } else {
             self.speech_buf.extend_from_slice(chunk);
             if silence {
@@ -150,29 +172,14 @@ impl ParakeetSttProvider {
                 self.silence_samples = 0;
             }
 
-            let should_finalize = self.silence_samples >= self.silence_samples_threshold
-                || self.speech_buf.len() >= MAX_SEGMENT_SAMPLES;
+            let max_segment_reached = self.speech_buf.len() >= MAX_SEGMENT_SAMPLES;
+            let silence_timeout = self.silence_samples >= self.silence_samples_threshold;
 
-            if should_finalize {
-                let audio = std::mem::take(&mut self.speech_buf);
-                self.in_speech = false;
-                self.silence_samples = 0;
-
-                tracing::debug!(
-                    target: "sttvad",
-                    "Finalizing segment: {:.2}s",
-                    audio.len() as f32 / SAMPLE_RATE as f32
-                );
-
-                let model = Arc::clone(&self.model);
-                let text = tokio::task::spawn_blocking(move || -> Result<String> {
-                    transcribe(&model, &audio)
-                })
-                .await
-                .context("transcription task join")??;
-
-                tracing::info!(target: "sttvad", "SpeechEnd: {}", text);
-                let _ = tx.send(SpeechEvent::SpeechEnd(text)).await;
+            if max_segment_reached {
+                self.finalize_segment(tx).await?;
+            } else if silence_timeout {
+                self.in_post_roll = true;
+                self.post_roll_remaining = POST_ROLL_SAMPLES;
             }
         }
 
@@ -183,6 +190,36 @@ impl ParakeetSttProvider {
             self.pre_roll.push_back(s);
         }
 
+        Ok(())
+    }
+
+    async fn finalize_segment(&mut self, tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
+        let audio = std::mem::take(&mut self.speech_buf);
+        self.in_speech = false;
+        self.in_post_roll = false;
+        self.silence_samples = 0;
+        self.post_roll_remaining = 0;
+
+        let trimmed = trim_leading_silence(&audio);
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        tracing::debug!(
+            target: "sttvad",
+            "Finalizing segment: {:.2}s (trimmed from {:.2}s)",
+            trimmed.len() as f32 / SAMPLE_RATE as f32,
+            audio.len() as f32 / SAMPLE_RATE as f32
+        );
+
+        let model = Arc::clone(&self.model);
+        let text =
+            tokio::task::spawn_blocking(move || -> Result<String> { transcribe(&model, &trimmed) })
+                .await
+                .context("transcription task join")??;
+
+        tracing::info!(target: "sttvad", "SpeechEnd: {}", text);
+        let _ = tx.send(SpeechEvent::SpeechEnd(text)).await;
         Ok(())
     }
 
@@ -220,4 +257,101 @@ fn transcribe(model: &Arc<Mutex<ParakeetTDT>>, audio: &[f32]) -> Result<String> 
         .context("Parakeet transcription failed")?;
 
     Ok(result.text.trim().to_string())
+}
+
+fn trim_leading_silence(audio: &[f32]) -> Vec<f32> {
+    if audio.len() < TRIM_WINDOW_SAMPLES {
+        return audio.to_vec();
+    }
+
+    let rms_values: Vec<f32> = audio
+        .chunks(TRIM_WINDOW_SAMPLES)
+        .map(|window| {
+            let sum_sq: f32 = window.iter().map(|&s| s * s).sum();
+            (sum_sq / window.len() as f32).sqrt()
+        })
+        .collect();
+
+    let max_rms = rms_values.iter().copied().fold(0.0f32, f32::max);
+    if max_rms <= 0.0 {
+        return audio.to_vec();
+    }
+
+    let threshold = (max_rms * 0.05).max(0.001);
+    let max_trim_windows = (audio.len() * MAX_TRIM_PERCENT / 100) / TRIM_WINDOW_SAMPLES;
+
+    let mut trim_windows = 0;
+    for (i, &rms) in rms_values.iter().enumerate() {
+        if i >= max_trim_windows {
+            break;
+        }
+        if rms >= threshold {
+            break;
+        }
+        trim_windows += 1;
+    }
+
+    let trim_samples = trim_windows * TRIM_WINDOW_SAMPLES;
+    audio[trim_samples..].to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn silence(samples: usize) -> Vec<f32> {
+        vec![0.0f32; samples]
+    }
+
+    fn sine_wave(freq_hz: f32, sample_rate: usize, num_samples: usize) -> Vec<f32> {
+        (0..num_samples)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                (2.0 * std::f32::consts::PI * freq_hz * t).sin()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn trim_leading_silence_removes_quiet_prefix() {
+        let quiet = silence(TRIM_WINDOW_SAMPLES * 3);
+        let speech_len = TRIM_WINDOW_SAMPLES * 5;
+        let speech = sine_wave(440.0, SAMPLE_RATE, speech_len);
+        let audio = [quiet, speech].concat();
+
+        let trimmed = trim_leading_silence(&audio);
+        assert!(
+            trimmed.len() <= audio.len() - TRIM_WINDOW_SAMPLES * 3 + TRIM_WINDOW_SAMPLES,
+            "expected most of the leading silence to be trimmed"
+        );
+        assert!(trimmed.len() >= speech_len, "speech portion should remain");
+    }
+
+    #[test]
+    fn trim_leading_silence_keeps_short_audio() {
+        let audio = sine_wave(440.0, SAMPLE_RATE, TRIM_WINDOW_SAMPLES / 2);
+        let trimmed = trim_leading_silence(&audio);
+        assert_eq!(trimmed, audio);
+    }
+
+    #[test]
+    fn trim_leading_silence_does_not_remove_all() {
+        let audio = silence(TRIM_WINDOW_SAMPLES * 100);
+        let trimmed = trim_leading_silence(&audio);
+        assert!(
+            !trimmed.is_empty(),
+            "should keep at least 10% of pure silence"
+        );
+        assert!(
+            trimmed.len() >= audio.len() / 10,
+            "should respect MAX_TRIM_PERCENT"
+        );
+    }
+
+    #[test]
+    fn trim_leading_silence_no_trim_when_all_speech() {
+        let audio = sine_wave(440.0, SAMPLE_RATE, TRIM_WINDOW_SAMPLES * 10);
+        let trimmed = trim_leading_silence(&audio);
+        assert_eq!(trimmed.len(), audio.len());
+    }
 }
