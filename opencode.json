@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "argent": {
+      "type": "local",
+      "command": [
+        "argent",
+        "mcp"
+      ],
+      "enabled": true
+    },
+    "xcode": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "xcrun",
+        "mcpbridge"
+      ]
+    }
+  },
+  "tools": {
+    "argent*": true
+  }
+}

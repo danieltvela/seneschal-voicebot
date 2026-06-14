@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, broadcast, mpsc};
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::audio::audio_capture::AudioChunk;
 
@@ -125,6 +125,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
 
             match msg {
                 Message::Binary(data) => {
+                    trace!(target: "remote", "WS recv binary: {} bytes {}", data.len(), format_buffer(&data));
                     if binary_tx.try_send(data.to_vec()).is_err() {
                         warn!(target: "remote", "Binary channel full, dropping frame");
                     }
@@ -216,6 +217,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
                     break;
                 }
                 let bytes = f32_to_i16le(chunk);
+                trace!(target: "remote", "WS send binary: {} bytes {}", bytes.len(), format_buffer(&bytes));
                 if tx
                     .send(Message::Binary(bytes.into_iter().collect()))
                     .await
@@ -248,6 +250,24 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
 
     state.connected.store(false, Ordering::SeqCst);
     info!(target: "remote", "Remote client disconnected, restored local audio");
+}
+
+fn format_buffer(data: &[u8]) -> String {
+    const PREVIEW: usize = 10;
+    if data.len() <= PREVIEW * 2 {
+        format!("[{}]", hex_preview(data))
+    } else {
+        let head = &data[..PREVIEW];
+        let tail = &data[data.len() - PREVIEW..];
+        format!("[{} ... {}]", hex_preview(head), hex_preview(tail))
+    }
+}
+
+fn hex_preview(data: &[u8]) -> String {
+    data.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn f32_to_i16le(samples: &[f32]) -> Vec<u8> {
