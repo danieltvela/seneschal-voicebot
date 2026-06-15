@@ -72,7 +72,7 @@ pub struct Config {
     pub stt_early_require_punctuation: bool,
 
     // ── LLM ──────────────────────────────────────────────────────────────────
-    /// LLM backend provider: "openai" (default) or "llama-cpp" (--features llama-cpp).
+    /// LLM backend provider: "openai" (default).
     pub llm_provider: String,
     /// LLM server base URL (OpenAI-compatible, default http://127.0.0.1:8000 for mlx-lm)
     pub llm_url: String,
@@ -84,16 +84,6 @@ pub struct Config {
     pub llm_max_tokens: u32,
     pub llm_system_prompt: String,
     pub llm_temperature: f32,
-
-    // ── Local LLM (llama-cpp) ────────────────────────────────────────────────
-    /// Path to the GGUF model file for local inference (LLAMA_MODEL_PATH).
-    pub llama_model_path: Option<String>,
-    /// Number of CPU threads for local inference (LLAMA_N_THREADS, 0 = auto).
-    pub llama_n_threads: u32,
-    /// Number of layers to offload to GPU (LLAMA_N_GPU_LAYERS, 99 = all).
-    pub llama_n_gpu_layers: u32,
-    /// Context size in tokens for local inference (LLAMA_CONTEXT_SIZE, default 4096).
-    pub llama_context_size: u32,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
     /// TTS backend: "avspeech" (default, native AVSpeechSynthesizer, --features avspeech)
@@ -390,21 +380,6 @@ impl Config {
                 .unwrap_or_else(|_| "0.3".to_string())
                 .parse()
                 .context("Invalid LLM_TEMPERATURE")?,
-
-            // Local LLM (llama-cpp)
-            llama_model_path: env::var("LLAMA_MODEL_PATH").ok(),
-            llama_n_threads: env::var("LLAMA_N_THREADS")
-                .unwrap_or_else(|_| "0".to_string())
-                .parse()
-                .context("Invalid LLAMA_N_THREADS")?,
-            llama_n_gpu_layers: env::var("LLAMA_N_GPU_LAYERS")
-                .unwrap_or_else(|_| "99".to_string())
-                .parse()
-                .context("Invalid LLAMA_N_GPU_LAYERS")?,
-            llama_context_size: env::var("LLAMA_CONTEXT_SIZE")
-                .unwrap_or_else(|_| "4096".to_string())
-                .parse()
-                .context("Invalid LLAMA_CONTEXT_SIZE")?,
 
             // TTS
             tts_provider: env::var("TTS_PROVIDER").unwrap_or_else(|_| "avspeech".to_string()),

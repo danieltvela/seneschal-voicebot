@@ -50,9 +50,6 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 # Base64 encoding (screenshot → vision model)
 base64 = "0.22"
 
-# Text encoding for llama.cpp token decoding
-encoding_rs = "0.8"
-
 # STT — whisper-cpp-plus (true streaming audio-to-text with VAD support)
 # On macOS: enable Metal GPU acceleration for whisper-cpp-plus
 [target.'cfg(target_os = "macos")'.dependencies.whisper-cpp-plus]
@@ -82,12 +79,6 @@ optional = true
 # STT — NVIDIA Parakeet via ONNX (optional, enable with: cargo build --features parakeet)
 [dependencies.parakeet-rs]
 version = "0.3.5"
-optional = true
-
-# Local LLM inference via llama.cpp (optional, enable with: cargo build --features llama-cpp)
-# Supports GGUF models (e.g. Gemma 4) with Metal/CUDA offload.
-[dependencies.llama-cpp-2]
-version = "0.1.146"
 optional = true
 
 # TUI — terminal user interface (optional, enable with: cargo build --features tui)
@@ -135,7 +126,6 @@ avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-au
 tui = ["dep:ratatui", "dep:crossterm"]
 remote = ["dep:axum", "dep:tower"]
 control = ["dep:axum", "dep:tower"]
-llama-cpp = ["dep:llama-cpp-2"]
 
 [[bin]]
 name = "voicebot"
@@ -147,14 +137,6 @@ path = "src/bin/acp_agent_chat.rs"
 
 [dependencies.hound]
 version = "3"
-
-[patch.crates-io]
-# Patch llama-cpp-sys-2 to fix Gemma 4 context creation crash.
-# Upstream bug: graph_max_nodes() underestimates the compute graph size for
-# Gemma 4 MoE models, causing the scheduler hash table to overflow and abort.
-# Patch adds LLM_ARCH_GEMMA4 to the high-node-count special-case list.
-# See: https://github.com/ggml-org/llama.cpp/issues (Gemma 4 MoE support)
-llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }
 
 [dev-dependencies]
 # Mock HTTP server for LLM client integration tests

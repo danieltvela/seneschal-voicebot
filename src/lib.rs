@@ -30,7 +30,8 @@ pub use audio::buffer::AudioBuffer;
 pub use audio::output::AudioOutput;
 pub use config::Config;
 pub use db::Database;
-pub use llm::{LlmProvider, LlmSession, OpenAIClient, OpenAiLlmProvider};
+pub use llm::client::OpenAIClient;
+pub use llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 pub use stt::{
     SpeechEvent, SttProvider, WhisperSTTVAD, WhisperSTTVADConfig, WhisperSttProvider,
     create_provider,

@@ -12,8 +12,7 @@ use super::session::Message;
 /// Abstraction over LLM inference backends.
 ///
 /// The primary implementation is `OpenAiLlmProvider` which speaks to an
-/// OpenAI-compatible HTTP endpoint. A local `LlamaCppLlmProvider` (gated by
-/// `--features llama-cpp`) loads a GGUF model in-process using `llama-cpp-2`.
+/// OpenAI-compatible HTTP endpoint.
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     fn provider_name(&self) -> &'static str;
@@ -105,9 +104,7 @@ impl LlmProvider for OpenAiLlmProvider {
 /// Factory that instantiates the active LLM provider based on `Config`.
 ///
 /// Reads `LLM_PROVIDER` from the environment (via `config.llm_provider`).
-/// Supported values:
-/// - `openai` (default) — OpenAI-compatible HTTP endpoint.
-/// - `llama-cpp` — local inference with `llama-cpp-2` (requires `--features llama-cpp`).
+/// The only supported backend is `openai` (default) — an OpenAI-compatible HTTP endpoint.
 pub fn create_provider(config: &Config) -> Result<Arc<dyn LlmProvider>> {
     match config.llm_provider.to_lowercase().as_str() {
         "openai" => {
@@ -120,21 +117,6 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn LlmProvider>> {
             .with_api_key(&config.llm_api_key);
             Ok(Arc::new(provider))
         }
-        "llama-cpp" => {
-            #[cfg(feature = "llama-cpp")]
-            {
-                let provider = super::llama_cpp::LlamaCppLlmProvider::new(config)?;
-                return Ok(Arc::new(provider));
-            }
-
-            #[cfg(not(feature = "llama-cpp"))]
-            {
-                bail!(
-                    "LLM_PROVIDER=llama-cpp requested but the 'llama-cpp' feature is not enabled. \
-                     Rebuild with: cargo run --features llama-cpp"
-                );
-            }
-        }
-        other => bail!("Invalid LLM_PROVIDER '{other}'. Supported values: openai, llama-cpp"),
+        other => bail!("Invalid LLM_PROVIDER '{other}'. Supported values: openai"),
     }
 }
