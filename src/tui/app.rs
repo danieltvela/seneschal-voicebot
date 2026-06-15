@@ -47,12 +47,8 @@ pub struct App {
     pub should_quit: bool,
     /// Shared conversation mode — read each render tick directly from the pipeline.
     pub conv_mode: Arc<Mutex<ConversationMode>>,
-    /// Scroll offset from bottom (0 = showing most recent).
-    pub scroll_offset: usize,
-    /// Whether user has manually scrolled away from bottom.
-    pub scroll_lock: bool,
-    /// Total rendered lines count for calculating max scroll.
-    pub total_lines: usize,
+    /// Index of the last message already printed into terminal scrollback.
+    pub last_printed_index: usize,
 }
 
 impl App {
@@ -66,9 +62,7 @@ impl App {
             tts_enabled: true,
             conv_mode,
             should_quit: false,
-            scroll_offset: 0,
-            scroll_lock: false,
-            total_lines: 0,
+            last_printed_index: 0,
         }
     }
 
@@ -144,7 +138,6 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) | (_, KeyCode::Esc) => Some(Action::Quit),
             (KeyModifiers::CONTROL, KeyCode::Char('t')) => Some(Action::ToggleTts),
             (_, KeyCode::Enter) => {
-                self.scroll_lock = false;
                 let text = self.input.trim().to_string();
                 if text.is_empty() {
                     return None;
@@ -202,20 +195,6 @@ impl App {
             }
             (_, KeyCode::End) => {
                 self.cursor = self.input.len();
-                None
-            }
-            (_, KeyCode::PageUp) | (_, KeyCode::Up) => {
-                let visible_height = 20;
-                let max_scroll = self.total_lines.saturating_sub(visible_height);
-                self.scroll_offset = (self.scroll_offset + visible_height).min(max_scroll);
-                self.scroll_lock = true;
-                None
-            }
-            (_, KeyCode::PageDown) | (_, KeyCode::Down) if self.scroll_lock => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(20);
-                if self.scroll_offset == 0 {
-                    self.scroll_lock = false;
-                }
                 None
             }
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
