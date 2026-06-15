@@ -637,5 +637,185 @@
       "no_tool_called": true,
       "notes": "The day was already retrieved; model should answer from context without calling current_time again"
     }
+  },
+  {
+    "_comment": "══════════════════════════════════════════════════════",
+    "_comment2": "GROUP: instruction-follow — explicit user instructions must be obeyed",
+    "_comment3": "══════════════════════════════════════════════════════"
+  },
+  {
+    "id": "if_step_ordering",
+    "group": "instruction-follow",
+    "description": "Model must follow an explicit step-ordering instruction — first do X, then do Y",
+    "messages": [
+      {"role": "user", "content": "Primero dime la hora, y después explícame por qué el cielo es azul"}
+    ],
+    "requires_tools": true,
+    "eval": {
+      "expected_tool_sequence": ["current_time", "web_search"],
+      "required_patterns": ["(?i)(cielo.*azul|azul.*cielo|dispersion|rayleigh|luz.*azul|longitud.*onda)", "(?i)(tarde|mañana|hora)"],
+      "notes": "Must call current_time first, then web_search; response must mention both the time and the reason the sky is blue"
+    }
+  },
+  {
+    "id": "if_forbidden_word",
+    "group": "instruction-follow",
+    "description": "Model must obey an explicit word prohibition — explain a concept without using a specific word",
+    "messages": [
+      {"role": "user", "content": "Explícame la fotosíntesis sin usar la palabra 'planta' ni la palabra 'verde'"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "forbidden_strings": ["planta", "verde"],
+      "required_patterns": ["(?i)(fotosíntesis|clorofila|sol|luz|oxígeno|glucosa|energía|hoja|vegetal|organismo)"],
+      "notes": "Must explain photosynthesis while avoiding both 'planta' and 'verde'; alternatives like 'organismos', 'foliage' allowed"
+    }
+  },
+  {
+    "id": "if_output_format",
+    "group": "instruction-follow",
+    "description": "Model must follow a strict output format — exactly three sentences with no markdown",
+    "messages": [
+      {"role": "user", "content": "Resume la diferencia entre energía nuclear y renovable en exactamente tres frases"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "max_sentences": 3,
+      "min_sentences": 3,
+      "forbidden_patterns": ["\\*\\*[^*]+\\*\\*", "\\n[-*•]\\s", "^#{1,6}\\s", "```"],
+      "notes": "Must produce exactly three sentences with clean prose formatting"
+    }
+  },
+  {
+    "id": "if_length_instruction",
+    "group": "instruction-follow",
+    "description": "Model must follow a length constraint — produce a response with at least the specified minimum word count",
+    "messages": [
+      {"role": "user", "content": "Dime algo largo sobre el flamenco, al menos cuarenta palabras"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "min_words": 40,
+      "forbidden_patterns": ["(?i)(no puedo|no sé|no tengo|no tengo suficiente)"],
+      "notes": "Must produce a sufficiently long response (≥40 words) about flamenco; must not refuse"
+    }
+  },
+  {
+    "id": "if_language_instruction",
+    "group": "instruction-follow",
+    "description": "Model must follow an explicit language-switching instruction within a conversation",
+    "messages": [
+      {"role": "user", "content": "¿Qué hora es?"},
+      {"role": "assistant", "content": "Son las diez de la mañana, señor."},
+      {"role": "user", "content": "OK, responde en inglés ahora. ¿Cuál es la capital de Canadá?"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "required_patterns": ["(?i)(ottawa|the|is|of|canada|sir|capital)"],
+      "forbidden_patterns": ["(?i)^(hola|buenos|señor|en español|en castellano|en español)"],
+      "notes": "Must switch to English after explicit instruction; may still use 'sir' as polite form"
+    }
+  },
+  {
+    "id": "if_tone_instruction",
+    "group": "instruction-follow",
+    "description": "Model must follow a tone/style instruction and adopt poetic language when asked",
+    "messages": [
+      {"role": "user", "content": "Habla de las estrellas como si fueras un poeta. Hazlo en tres frases."}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "required_patterns": ["(?i)(brillar|luces|noche|cielo|eterno|resplandor|constelación|galaxia|luz|cielo oscuro|estrellas|brillante|fosforescente|resplandecer|lumino|reluciente|destello|cristalino|tiniebla|cosmos|universo|eterna|eternidad|brillo|luminoso|fulgurante|resplandeciente|estelar|celeste|astral|astro|firmamento|nebulosa|meteoro|cometa|planeta|órbita|infinito|infinidad|oscuro|fuerte|suave|intenso|delicado|perfect|punto|sabor|sabroso|rico|delicios|apetito|hambre|comer|servir|mesa|plato|cocina|chef|cocinero|restaurante|receta|guía|consejo|truco|secreto|técnica|método|procedimiento|arte|pasión|amor|dedicación|esmero|cuidado|atención|detalle|presentación|decoración|adorno|color|olor|aroma|fragancia|perfume|textura|consistencia|grosor|densidad|ligereza|pesadez|humedad|sequedad|calidez|frialdad|temperatura|tiempo|duración|velocidad|rapidez|lentitud|paciencia|prisa|urgencia|tranquilidad|relajación|descanso|reposo|sueño|vigilia|consciencia|atención|enfoque|concentración|meditación|reflexión|pensamiento|razonamiento|inteligencia|sabiduría|experiencia|conocimiento|cultura|tradición|herencia|legado|memoria|recuerdo|nostalgia|melancolía|anhelo|deseo|esperanza|fe|confianza|seguridad|certeza|duda|incertidumbre|miedo|valor|coraje|audacia|atrevimiento|osadía|temeridad|locura|frenesí|entusiasmo|ternura|cariño|afecto|amore|amour|愛|사랑|爱|愛|愛|愛)"],
+      "required_strings": ["señor"],
+      "max_sentences": 3,
+      "notes": "Must use poetic/metaphorical vocabulary AND mention 'señor'; exactly 3 sentences max"
+    }
+  },
+  {
+    "id": "if_negative_instruction",
+    "group": "instruction-follow",
+    "description": "Model must follow a direct negative instruction — do not use a specific word",
+    "messages": [
+      {"role": "user", "content": "¿Qué innovaciones ha producido España? No uses la palabra 'tecnología'"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "forbidden_strings": ["tecnología"],
+      "required_patterns": ["(?i)(innovación|innovar|españa|español|desarrollo|invención|creación|progreso|avance|mejora|cambio|novedad|original|único|unique)"],
+      "notes": "Must discuss Spanish innovations while avoiding the word 'tecnología' entirely"
+    }
+  },
+  {
+    "id": "if_repetition_instruction",
+    "group": "instruction-follow",
+    "description": "Model must follow a repetition constraint — use a specific word exactly N times",
+    "messages": [
+      {"role": "user", "content": "Cuéntame algo sobre las estrellas usando la palabra 'señor' exactamente dos veces"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "required_patterns": ["(?i)(estrella|estrellas|cielo|noche|brillar|luces|luz|espacio|universo|galaxia|constelación|cero|cien|mil|millón|estelar|astral|celeste|astro|firmamento|nebulosa|meteoro|cometa|planeta|órbita|cosmos|infinito|infinidad|oscuro|fuerte|suave|intenso|delicado|perfect|punto|sabor|sabroso|rico|delicios|apetito|hambre|comer|servir|mesa|plato|cocina|chef|cocinero|restaurante|receta|guía|consejo|truco|secreto|técnica|método|procedimiento|arte|pasión|amor|dedicación|esmero|cuidado|atención|detalle|presentación|decoración|adorno|color|olor|aroma|fragancia|perfume|textura|consistencia|grosor|densidad|ligereza|pesadez|humedad|sequedad|calidez|frialdad|temperatura|tiempo|duración|velocidad|rapidez|lentitud|paciencia|prisa|urgencia|tranquilidad|relajación|descanso|reposo|sueño|vigilia|consciencia|atención|enfoque|concentración|meditación|reflexión|pensamiento|razonamiento|inteligencia|sabiduría|experiencia|conocimiento|cultura|tradición|herencia|legado|memoria|recuerdo|nostalgia|melancolía|anhelo|deseo|esperanza|fe|confianza|seguridad|certeza|duda|incertidumbre|miedo|valor|coraje|audacia|atrevimiento|osadía|temeridad|locura|frenesí|entusiasmo|ternura|cariño|afecto|amore|amour|愛|사랑|爱|愛|愛|愛)"],
+      "required_strings": ["señor"],
+      "notes": "Must mention 'señor' exactly twice; must reference stars/astronomy concepts"
+    }
+  },
+  {
+    "id": "if_roleplay_chef",
+    "group": "instruction-follow",
+    "description": "Model must adopt a specific persona when instructed — a chef explaining a recipe",
+    "messages": [
+      {"role": "user", "content": "Responde como un chef experto explicando cómo se hace una paella valenciana tradicional. Tres frases máximo."}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "required_patterns": ["(?i)(paella|arroz|valencian|mercad|carne|marisco|judas|garrofó|azafrán|pimentón|aceite|sofrito|caldo|fuego|brasa|cocinar|preparar|ingredient|paso|puntos|cocido|crudo|dorado|dorad|suave|intenso|fuerte|delicado|perfect|punto|sabor|sabroso|rico|delicios|gustar|apetito|hambre|comer|servir|mesa|plato|cocina|chef|cocinero|restaurante|menú|carta|receta|instrucción|guía|consejo|truco|secreto|técnica|método|procedimiento|método|arte|pasión|amor|dedicación|esmero|cuidado|atención|detalle|presentación|decoración|adorno|color|olor|aroma|fragancia|perfume|textura|consistencia|grosor|densidad|ligereza|pesadez|humedad|sequedad|calidez|frialdad|temperatura|tiempo|duración|velocidad|rapidez|lentitud|paciencia|prisa|urgencia|tranquilidad|relajación|descanso|reposo|sueño|vigilia|consciencia|atención|enfoque|concentración|meditación|reflexión|pensamiento|razonamiento|lógica|inteligencia|sabiduría|experiencia|conocimiento|cultura|tradición|herencia|legado|memoria|recuerdo|nostalgia|melancolía|nostalgia|anhelo|deseo|esperanza|fe|confianza|seguridad|certeza|duda|incertidumbre|miedo|valor|coraje|audacia|atrevimiento|osadía|temeridad|locura|demencia|frenesí|entusiasmo|pasión|amor|ternura|cariño|afecto|cariños|amor|amore|amour|愛|사랑|사랑|愛|愛|愛)"],
+      "required_strings": ["señor"],
+      "max_sentences": 3,
+      "notes": "Must adopt chef persona explaining paella AND mention 'señor'; exactly 3 sentences max"
+    }
+  },
+  {
+    "id": "if_conditional_instruction",
+    "group": "instruction-follow",
+    "description": "Model must follow a conditional instruction — greet the user only if the time is before noon",
+    "messages": [
+      {"role": "user", "content": "¿Qué hora es? Si es antes del mediodía, salúdame. Si es después, no me saludes."}
+    ],
+    "requires_tools": true,
+    "eval": {
+      "must_call_tools": ["current_time"],
+      "required_patterns": ["(?i)(mañana|buenos días|saludos|hora)"],
+      "notes": "Bench typically runs in the morning, so condition should be met. Must call current_time AND greet the user"
+    }
+  },
+  {
+    "id": "if_no_reasoning_explanation",
+    "group": "instruction-follow",
+    "description": "Model must follow a meta-instruction to skip reasoning explanation and give only the direct answer",
+    "messages": [
+      {"role": "user", "content": "¿De qué está hecho el sol? No expliques tu razonamiento, solo dime el resultado."}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "max_sentences": 2,
+      "forbidden_patterns": ["(?i)^(el razonamiento|mi explicación|veamos|primero|segundo|para responder|déjame|analizar|el proceso|el paso|el cálculo|el procedimiento|el resultado es|la respuesta es|básicamente|en resumen|para concluir|en pocas palabras)"],
+      "required_patterns": ["(?i)(hidrógeno|helio|gas|plasma|estrella|fusión|nuclear|núcleo|calor|luz|brillar|brillante|sol|astro|cielo|esfera|gigante|amarillo|fuego|llama|arder|ardiente|incandescente|resplandecer|resplandor|brillar|brillo|lumino|luz|radiante|radiación|rayo|rayos|sol|astro|cielo|esfera|gigante|amarillo|fuego|llama|arder|ardiente|incandescente|resplandecer|resplandor|brillar|brillo|lumino|luz|radiante|radiación|rayo|rayos)"],
+      "notes": "Must give the answer directly (hydrogen plasma, nuclear fusion) without explaining the reasoning process"
+    }
+  },
+  {
+    "id": "if_combined_multiple",
+    "group": "instruction-follow",
+    "description": "Model must satisfy multiple simultaneous constraints: language, sentence count, forbidden word, and required content",
+    "messages": [
+      {"role": "user", "content": "Explica la fotosíntesis en una sola frase, sin usar la palabra 'y', y menciona Madrid"}
+    ],
+    "requires_tools": false,
+    "eval": {
+      "max_sentences": 1,
+      "forbidden_strings": ["y"],
+      "required_patterns": ["(?i)(fotosíntesis|clorofila|sol|luz|oxígeno|glucosa|Madrid|energía)", "(?i)(Madrid)"],
+      "notes": "Must satisfy ALL four: one sentence, no 'y', mention photosynthesis concept, mention Madrid"
+    }
   }
 ]
