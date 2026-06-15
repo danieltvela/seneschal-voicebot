@@ -766,6 +766,64 @@ def run_mechanical_checks(fixture: dict, text: str, tool_calls: list) -> list[tu
                 )
             )
 
+    # required_all_strings — AND semantics: every string must appear
+    req_all = ev.get("required_all_strings", [])
+    if req_all:
+        found = [s for s in req_all if s.lower() in text.lower()]
+        passed = len(found) == len(req_all)
+        checks.append(
+            (
+                "required_all_strings",
+                passed,
+                f"{req_all!r}: {'all found ✓' if passed else f'found {found} ✗'}",
+            )
+        )
+
+    # min_sentences — count sentence-terminal punctuation groups
+    if "min_sentences" in ev:
+        n = len(re.findall(r"[.!?]+(?:\s|$)", text))
+        passed = n >= ev["min_sentences"]
+        checks.append(
+            ("min_sentences", passed, f"{n} sentences (min {ev['min_sentences']})")
+        )
+
+    # expected_tool_sequence — ordered subsequence check
+    expected_seq = ev.get("expected_tool_sequence", [])
+    if expected_seq:
+        actual_seq = [tc["function"]["name"] for tc in tool_calls]
+        it = iter(actual_seq)
+        passed = all(item in it for item in expected_seq)
+        checks.append(
+            (
+                "expected_tool_sequence",
+                passed,
+                f"expected {expected_seq!r}, actual {actual_seq!r}: {'✓' if passed else '✗'}",
+            )
+        )
+
+    # no_fabricated_time — fail if time-like pattern in text without current_time call
+    if ev.get("no_fabricated_time"):
+        time_patterns = [
+            r"\d{1,2}:\d{2}",
+            r"las\s+\d+",
+            r"son\s+las\s+\d+",
+            r"hour.*?\d+",
+            r"\d{1,2}\s+(am|pm)",
+            r"\d{1,2}\s+(a\.m\.|p\.m\.)",
+        ]
+        has_time_in_text = any(
+            re.search(p, text, re.IGNORECASE) for p in time_patterns
+        )
+        has_current_time_call = "current_time" in called
+        passed = not (has_time_in_text and not has_current_time_call)
+        checks.append(
+            (
+                "no_fabricated_time",
+                passed,
+                f"time in text: {has_time_in_text}, current_time called: {has_current_time_call}: {'✓' if passed else '✗ fabricated time ✗'}",
+            )
+        )
+
     return checks
 
 
