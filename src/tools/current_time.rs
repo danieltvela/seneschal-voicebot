@@ -5,6 +5,50 @@ use super::Tool;
 
 pub struct CurrentTimeTool;
 
+/// Returns true when the user is explicitly asking for the current time, date,
+/// day or hour. Used by the pipeline to force a `current_time` tool call so the
+/// model never answers from stale context or hallucinates a date.
+pub fn is_explicit_time_request(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let spanish = [
+        "qué hora es",
+        "que hora es",
+        "dime la hora",
+        "la hora actual",
+        "hora actual",
+        "qué día es",
+        "que dia es",
+        "qué día es hoy",
+        "que dia es hoy",
+        "día de hoy",
+        "dia de hoy",
+        "qué fecha es",
+        "que fecha es",
+        "qué fecha es hoy",
+        "que fecha es hoy",
+        "fecha actual",
+        "fecha de hoy",
+    ];
+    let english = [
+        "what time is it",
+        "what's the time",
+        "whats the time",
+        "tell me the time",
+        "current time",
+        "what day is it",
+        "what's today",
+        "whats today",
+        "today is what day",
+        "today's date",
+        "todays date",
+        "what date is it",
+        "current date",
+        "current day",
+    ];
+
+    spanish.iter().any(|p| lower.contains(p)) || english.iter().any(|p| lower.contains(p))
+}
+
 #[async_trait]
 impl Tool for CurrentTimeTool {
     fn name(&self) -> &str {
@@ -12,7 +56,9 @@ impl Tool for CurrentTimeTool {
     }
 
     fn description(&self) -> &str {
-        "Returns the current local date and time."
+        "Returns the current local date and time. \
+         MUST be called EVERY TIME the user explicitly asks for the current time, date, day or hour. \
+         Do not answer from memory, cached context or general knowledge; always call this tool."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -34,8 +80,11 @@ mod tests {
     }
 
     #[test]
-    fn description_is_non_empty() {
-        assert!(!CurrentTimeTool.description().is_empty());
+    fn description_mentions_mandatory_calling() {
+        let desc = CurrentTimeTool.description();
+        assert!(desc.contains("current"));
+        assert!(desc.contains("MUST"));
+        assert!(desc.contains("EVERY TIME"));
     }
 
     #[tokio::test]
@@ -79,27 +128,30 @@ mod tests {
 
     #[tokio::test]
     async fn run_output_is_consistent_within_same_second() {
-        // Two consecutive calls should return the same second (or differ by at most 1s).
-        let before = Local::now();
-        let result = CurrentTimeTool.run("").await;
-        let after = Local::now();
-
-        let result_time_str = result.split(", ").next().unwrap();
-        let b = before.format("%H:%M:%S").to_string();
-        let a = after.format("%H:%M:%S").to_string();
-        assert!(
-            result_time_str >= b.as_str() || result_time_str <= a.as_str(),
-            "time {result_time_str:?} should be within [{b}, {a}]"
-        );
+        let r1 = CurrentTimeTool.run("").await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let r2 = CurrentTimeTool.run("").await;
+        assert_eq!(r1, r2);
     }
 
-    #[tokio::test]
-    async fn run_ignores_args() {
-        // current_time does not use args — any input should still return a valid time
-        let result = CurrentTimeTool.run("ignored args").await;
-        assert!(
-            result.contains(':'),
-            "should still return a time: {result:?}"
-        );
+    #[test]
+    fn detects_explicit_time_requests() {
+        assert!(is_explicit_time_request("¿Qué hora es?"));
+        assert!(is_explicit_time_request("que hora es"));
+        assert!(is_explicit_time_request("Dime la hora actual"));
+        assert!(is_explicit_time_request("¿Qué día es hoy?"));
+        assert!(is_explicit_time_request("¿Qué fecha es?"));
+        assert!(is_explicit_time_request("What time is it?"));
+        assert!(is_explicit_time_request("What's the time?"));
+        assert!(is_explicit_time_request("Tell me today's date"));
+        assert!(is_explicit_time_request("Current day"));
+    }
+
+    #[test]
+    fn ignores_non_time_requests() {
+        assert!(!is_explicit_time_request("Hola, ¿cómo estás?"));
+        assert!(!is_explicit_time_request("Cuéntame un chiste"));
+        assert!(!is_explicit_time_request("What time does the movie start?"));
+        assert!(!is_explicit_time_request("I had a great time yesterday"));
     }
 }

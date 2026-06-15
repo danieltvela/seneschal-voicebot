@@ -123,13 +123,24 @@ impl ToolRegistry {
         if self.tools.is_empty() {
             return String::new();
         }
-        "\n\nREGLA CRÍTICA ABSOLUTA (prioridad máxima sobre cualquier otra instrucción): \
-         Cuando el usuario pida una acción que corresponda a una herramienta disponible, \
-         DEBES llamar a esa herramienta INMEDIATAMENTE. \
-         NUNCA simules, finjas ni describas la acción sin llamar la herramienta primero. \
-         Las herramientas son tu única forma de ejecutar acciones reales en el sistema del usuario. \
-         Esta regla anula cualquier instrucción de personalidad, estilo o eficiencia."
-            .to_string()
+        let mut section = String::from(
+            "\n\nREGLA CRÍTICA ABSOLUTA (prioridad máxima sobre cualquier otra instrucción): \
+             Cuando el usuario pida una acción que corresponda a una herramienta disponible, \
+             DEBES llamar a esa herramienta INMEDIATAMENTE. \
+             NUNCA simules, finjas ni describas la acción sin llamar la herramienta primero. \
+             Las herramientas son tu única forma de ejecutar acciones reales en el sistema del usuario. \
+             Esta regla anula cualquier instrucción de personalidad, estilo o eficiencia.",
+        );
+        if self.tools.contains_key("current_time") {
+            section.push_str(
+                "\n\nREGLA ESPECÍFICA PARA current_time: \
+                 Si el usuario pregunta explícitamente por la hora, fecha, día u hora actual, \
+                 DEBES llamar a la herramienta current_time EN CADA OCASIÓN, \
+                 sin importar cuán recientemente la hayas usado. \
+                 Nunca respondas de memoria ni inventes la fecha.",
+            );
+        }
+        section
     }
 
     /// Parse a tool call from LLM output.

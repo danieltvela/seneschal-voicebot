@@ -48,7 +48,7 @@ pub fn build_routing_section() -> &'static str {
       Cuando varias reglas aplican simultáneamente, prioriza la delegación \
       a Hermes si la incertidumbre supera tu confianza en las herramientas nativas.\n\n\
       EJEMPLOS:\n\
-      - \"¿Qué hora es?\" → Responde directamente.\n\
+      - \"¿Qué hora es?\" → Llama a la herramienta current_time.\n\
       - \"Busca algo rápido en la web\" → Responde directamente (búsqueda puntual). \
       Investigación profunda con múltiples fuentes → Delega a Hermes.\n\
       - \"Refactoriza el módulo de audio para usar async streams\" → \
