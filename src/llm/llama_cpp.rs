@@ -201,6 +201,7 @@ impl LlmProvider for LlamaCppLlmProvider {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
+        _forced_tool: Option<&str>,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
         let prompt = self.build_prompt(messages)?;
         let max_tokens = 1024u32; // TODO: use config or parameter

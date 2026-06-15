@@ -195,6 +195,7 @@ impl OpenAIClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
+        forced_tool: Option<&str>,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
         let mut payload = serde_json::json!({
             "model": self.model,
@@ -210,7 +211,10 @@ impl OpenAIClient {
         });
         if !tools.is_empty() {
             payload["tools"] = serde_json::json!(tools);
-            payload["tool_choice"] = serde_json::json!("auto");
+            payload["tool_choice"] = match forced_tool {
+                Some(name) => serde_json::json!({"type": "function", "function": {"name": name}}),
+                None => serde_json::json!("auto"),
+            };
             // Do NOT send chat_template_kwargs when tools are active: changing the
             // Jinja2 template can conflict with tool calling for some mlx-community
             // quantizations. ThinkFilter will strip any <think> blocks that arrive.
@@ -652,7 +656,7 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let messages = make_messages();
         let (mut rx, _handle) = client
-            .stream(&messages_to_json(&messages), &[])
+            .stream(&messages_to_json(&messages), &[], None)
             .await
             .unwrap();
 
@@ -686,7 +690,7 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let messages = make_messages();
         let (mut rx, _handle) = client
-            .stream(&messages_to_json(&messages), &[])
+            .stream(&messages_to_json(&messages), &[], None)
             .await
             .unwrap();
 
@@ -798,7 +802,7 @@ mod tests {
             .await;
 
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
-        let (mut rx, _handle) = client.stream(&[], &[]).await.unwrap();
+        let (mut rx, _handle) = client.stream(&[], &[], None).await.unwrap();
 
         let token = rx.recv().await.expect("should receive a token");
         match token {
