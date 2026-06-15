@@ -11,7 +11,7 @@ use crate::agents::ProactiveEvent;
 use crate::analysis::ContextLens;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, StreamToken};
-use crate::tools::ToolRegistry;
+use crate::tools::{ToolRegistry, current_time::is_explicit_time_request};
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
 static PIPELINE_RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -193,27 +193,37 @@ pub async fn llm_task(
         'pipeline: {
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
-                let (token_rx, stream_handle) = match llm_client.stream(&messages, &tool_defs).await
+                let forced_tool = if iter == 0
+                    && !tool_continuation
+                    && is_explicit_time_request(&text)
                 {
-                    Ok(r) => r,
-                    Err(e) => {
-                        error!(target: "llm", "LLM error: {}", e);
-                        #[cfg(feature = "tui")]
-                        tui_tx
-                            .send(crate::tui::events::TuiEvent::Error(format!(
-                                "LLM error: {e}"
-                            )))
-                            .ok();
-                        let _ = sentences_tx
-                            .send(super::frames::PipelineFrame::SentenceReady {
-                                utterance_id: pipeline_id,
-                                sentence: "Lo siento, no pude conectar con el modelo de lenguaje."
-                                    .to_string(),
-                            })
-                            .await;
-                        break 'pipeline;
-                    }
+                    info!(target: "pipeline", "Forcing current_time tool for explicit time request");
+                    Some("current_time")
+                } else {
+                    None
                 };
+                let (token_rx, stream_handle) =
+                    match llm_client.stream(&messages, &tool_defs, forced_tool).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!(target: "llm", "LLM error: {}", e);
+                            #[cfg(feature = "tui")]
+                            tui_tx
+                                .send(crate::tui::events::TuiEvent::Error(format!(
+                                    "LLM error: {e}"
+                                )))
+                                .ok();
+                            let _ = sentences_tx
+                                .send(super::frames::PipelineFrame::SentenceReady {
+                                    utterance_id: pipeline_id,
+                                    sentence:
+                                        "Lo siento, no pude conectar con el modelo de lenguaje."
+                                            .to_string(),
+                                })
+                                .await;
+                            break 'pipeline;
+                        }
+                    };
 
                 *t_llm_post_send.lock().unwrap() = Some(Instant::now());
 
