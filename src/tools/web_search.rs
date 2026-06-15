@@ -72,6 +72,37 @@ impl WebSearchTool {
     }
 }
 
+/// Returns true when the query is an explicit web-search request.
+///
+/// Matches Spanish and English starter phrases so that "Busca X",
+/// "búscame X", "search for X", etc. force the web_search tool.
+fn is_explicit_search_request(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    let spanish = [
+        "busca ",
+        "busca sobre ",
+        "buscar ",
+        "búscame ",
+        "buscame ",
+        "haz una búsqueda",
+        "hazme una búsqueda",
+        "realiza una búsqueda",
+        "investiga ",
+        "googlea ",
+        "guglea ",
+    ];
+    let english = [
+        "search ",
+        "search for ",
+        "look up ",
+        "google ",
+        "look this up",
+        "do a search",
+        "find information about ",
+    ];
+    spanish.iter().any(|p| lower.starts_with(p)) || english.iter().any(|p| lower.starts_with(p))
+}
+
 #[async_trait]
 impl Tool for WebSearchTool {
     fn name(&self) -> &str {
@@ -87,6 +118,10 @@ impl Tool for WebSearchTool {
 
     fn is_background(&self) -> bool {
         true
+    }
+
+    fn should_force_for(&self, query: &str) -> bool {
+        is_explicit_search_request(query)
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -311,5 +346,25 @@ mod tests {
     fn format_results_empty() {
         let out = format_results(&[], 5);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn detects_explicit_search_requests() {
+        let t = tool();
+        assert!(t.should_force_for("Busca noticias sobre IA"));
+        assert!(t.should_force_for("búscame recetas de pasta"));
+        assert!(t.should_force_for("Buscar información de Python"));
+        assert!(t.should_force_for("search for rust concurrency"));
+        assert!(t.should_force_for("look up the capital of France"));
+        assert!(t.should_force_for("google latest voicebot features"));
+    }
+
+    #[test]
+    fn ignores_non_search_requests() {
+        let t = tool();
+        assert!(!t.should_force_for("Hola, ¿cómo estás?"));
+        assert!(!t.should_force_for("Cuéntame un chiste"));
+        assert!(!t.should_force_for("Qué hora es"));
+        assert!(!t.should_force_for("I need to buy a bus ticket"));
     }
 }

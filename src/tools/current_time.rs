@@ -61,6 +61,10 @@ impl Tool for CurrentTimeTool {
          Do not answer from memory, cached context or general knowledge; always call this tool."
     }
 
+    fn should_force_for(&self, query: &str) -> bool {
+        is_explicit_time_request(query)
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({"type": "object", "properties": {}})
     }
