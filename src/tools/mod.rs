@@ -58,6 +58,13 @@ pub trait Tool: Send + Sync {
     fn is_silent(&self) -> bool {
         false
     }
+    /// Returns true when the user's query is an explicit request that this
+    /// tool should handle. When true, the pipeline forces a tool call via
+    /// `tool_choice` instead of leaving it to the model. Tools with risky or
+    /// ambiguous triggers should leave this as the default `false`.
+    fn should_force_for(&self, _query: &str) -> bool {
+        false
+    }
     /// Execute the tool with optional args and return the result as a string.
     async fn run(&self, args: &str) -> String;
 }
@@ -90,6 +97,16 @@ impl ToolRegistry {
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Returns the name of a registered tool whose `should_force_for` matches
+    /// the user query, if any. The pipeline uses this to set `tool_choice` to
+    /// that function and guarantee the tool is called.
+    pub fn forced_tool_for_query(&self, query: &str) -> Option<&str> {
+        self.tools
+            .values()
+            .find(|t| t.should_force_for(query))
+            .map(|t| t.name())
     }
 
     /// Returns the tools array for the OpenAI `tools` request field.
@@ -140,6 +157,13 @@ impl ToolRegistry {
                  Nunca respondas de memoria ni inventes la fecha.",
             );
         }
+        section.push_str(
+            "\n\nREGLA DE FUERZA DE HERRAMIENTAS: \
+             Cuando el usuario inicie la petición con frases explícitas como \
+             'Busca...', 'Búscame...', 'Abre...', 'Lanza...', 'Search...', 'Launch...' o similares, \
+             DEBES llamar a la herramienta correspondiente INMEDIATAMENTE \
+             y no responder directamente.",
+        );
         section
     }
 
@@ -335,6 +359,38 @@ mod tests {
     fn tool_definitions_empty_for_empty_registry() {
         let r = ToolRegistry::new();
         assert!(r.tool_definitions().is_empty());
+    }
+
+    // ── forced_tool_for_query ─────────────────────────────────────────────────
+
+    #[test]
+    fn forced_tool_for_query_returns_current_time_for_time_request() {
+        let r = registry_with_current_time();
+        assert_eq!(
+            r.forced_tool_for_query("¿Qué hora es?"),
+            Some("current_time")
+        );
+    }
+
+    #[test]
+    fn forced_tool_for_query_returns_none_for_unrelated_request() {
+        let r = registry_with_current_time();
+        assert_eq!(r.forced_tool_for_query("Cuéntame un chiste"), None);
+    }
+
+    #[test]
+    fn forced_tool_for_query_returns_first_matching_tool() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        r.register(WebSearchTool::new("http://localhost".into(), "".into()));
+        assert_eq!(
+            r.forced_tool_for_query("Busca noticias"),
+            Some("web_search")
+        );
+        assert_eq!(
+            r.forced_tool_for_query("¿Qué hora es?"),
+            Some("current_time")
+        );
     }
 
     // ── is_background ─────────────────────────────────────────────────────────
