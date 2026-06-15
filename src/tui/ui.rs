@@ -10,71 +10,38 @@ use super::app::{App, ChatMessage, Role};
 use super::events::{InputSource, PipelineState};
 use crate::tools::ConversationMode;
 
-/// Render using full viewport: [message list (scrollable)] [input] [status bar].
-/// The message list takes all available space minus input and status bar heights.
+const MAX_INPUT_ROWS: u16 = 4;
+
+/// Render the inline viewport pinned at the bottom of the terminal.
+/// Finalized messages live in the terminal scrollback above the viewport
+/// and are printed by `src/tui/mod.rs`.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let total = frame.area();
     let width = total.width as usize;
 
     // Input height: wraps at terminal width (no border so full width available).
-    let display_lines = input_display_lines(&app.input, width);
-    let input_height = (display_lines as u16).clamp(1, 4);
+    let input_height =
+        input_display_lines(&app.input, width).clamp(1, MAX_INPUT_ROWS as usize) as u16;
+    let status_height = 1u16;
 
-    // Status bar always 1 row
-    let status_height = 1;
+    let streaming_height = if app.streaming_buffer.is_empty() {
+        0
+    } else {
+        total.height.saturating_sub(input_height + status_height)
+    };
 
-    // Message list gets remaining space (top of screen)
-    let message_list_height = total.height.saturating_sub(input_height + status_height);
-
-    // Split into message list, input, and status
-    let [message_list_area, input_area, status_area] = Layout::vertical([
-        Constraint::Length(message_list_height),
+    let [streaming_area, input_area, status_area] = Layout::vertical([
+        Constraint::Length(streaming_height),
         Constraint::Length(input_height),
         Constraint::Length(status_height),
     ])
     .areas(total);
 
-    render_message_list(frame, app, message_list_area);
+    if streaming_height > 0 {
+        render_streaming(frame, app, streaming_area);
+    }
     render_input(frame, app, input_area);
     render_status(frame, app, status_area);
-}
-
-/// Render the scrollable message list.
-fn render_message_list(frame: &mut Frame, app: &mut App, area: Rect) {
-    let mut all_lines: Vec<Line<'static>> = vec![];
-
-    for msg in app.messages.iter() {
-        let lines = message_lines(msg, area.width);
-        all_lines.extend(lines);
-        all_lines.push(Line::raw(""));
-    }
-
-    if !app.streaming_buffer.is_empty() {
-        let streaming_lines = render_streaming_lines(&app.streaming_buffer, area.width as usize);
-        all_lines.extend(streaming_lines);
-        all_lines.push(Line::raw(""));
-    }
-
-    app.total_lines = all_lines.len();
-
-    let visible_height = area.height as usize;
-    let total_lines = all_lines.len();
-
-    let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll_offset = if total_lines > visible_height {
-        if app.scroll_lock {
-            app.scroll_offset.min(max_scroll) as u16
-        } else {
-            max_scroll as u16
-        }
-    } else {
-        0u16
-    };
-
-    frame.render_widget(
-        Paragraph::new(Text::from(all_lines)).scroll((scroll_offset, 0u16)),
-        area,
-    );
 }
 
 /// Render the VOICEBOT splash screen (blue, centered).
