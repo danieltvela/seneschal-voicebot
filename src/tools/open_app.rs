@@ -6,6 +6,13 @@ use super::Tool;
 /// Opens a macOS application by name using `open -a`.
 pub struct OpenAppTool;
 
+fn is_explicit_open_app_request(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    let spanish = ["abre ", "lanza ", "inicia "];
+    let english = ["launch ", "start "];
+    spanish.iter().any(|p| lower.starts_with(p)) || english.iter().any(|p| lower.starts_with(p))
+}
+
 #[async_trait]
 impl Tool for OpenAppTool {
     fn name(&self) -> &str {
@@ -16,6 +23,10 @@ impl Tool for OpenAppTool {
         "Opens a macOS application by name. \
          Use when the user asks to open, launch, or start an application. \
          Examples: 'abre Cursor', 'lanza Safari', 'abre la terminal'."
+    }
+
+    fn should_force_for(&self, query: &str) -> bool {
+        is_explicit_open_app_request(query)
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -113,5 +124,22 @@ mod tests {
         let result = OpenAppTool.run("NonexistentApp12345").await;
         // Should fail gracefully, not panic
         assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn detects_explicit_open_requests() {
+        assert!(OpenAppTool.should_force_for("Abre Safari"));
+        assert!(OpenAppTool.should_force_for("lanza Cursor"));
+        assert!(OpenAppTool.should_force_for("inicia la terminal"));
+        assert!(OpenAppTool.should_force_for("launch Mail"));
+        assert!(OpenAppTool.should_force_for("start Spotify"));
+    }
+
+    #[test]
+    fn ignores_non_open_requests() {
+        assert!(!OpenAppTool.should_force_for("Hola"));
+        assert!(!OpenAppTool.should_force_for("Cuéntame algo"));
+        assert!(!OpenAppTool.should_force_for("Qué hora es"));
+        assert!(!OpenAppTool.should_force_for("Open source is great"));
     }
 }
