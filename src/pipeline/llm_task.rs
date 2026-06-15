@@ -11,7 +11,7 @@ use crate::agents::ProactiveEvent;
 use crate::analysis::ContextLens;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, StreamToken};
-use crate::tools::{ToolRegistry, current_time::is_explicit_time_request};
+use crate::tools::ToolRegistry;
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
 static PIPELINE_RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -193,15 +193,14 @@ pub async fn llm_task(
         'pipeline: {
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
-                let forced_tool = if iter == 0
-                    && !tool_continuation
-                    && is_explicit_time_request(&text)
-                {
-                    info!(target: "pipeline", "Forcing current_time tool for explicit time request");
-                    Some("current_time")
+                let forced_tool = if iter == 0 && !tool_continuation {
+                    tools.forced_tool_for_query(&text)
                 } else {
                     None
                 };
+                if let Some(name) = forced_tool {
+                    info!(target: "pipeline", "Forcing tool '{}' for explicit request", name);
+                }
                 let (token_rx, stream_handle) =
                     match llm_client.stream(&messages, &tool_defs, forced_tool).await {
                         Ok(r) => r,
