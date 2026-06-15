@@ -1,0 +1,22 @@
+running: cd "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out/build" && CMAKE_PREFIX_PATH="" LC_ALL="C" "cmake" "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/llama.cpp" "-B" "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out/build" "-DCMAKE_OSX_ARCHITECTURES=arm64" "-DLLAMA_BUILD_TESTS=OFF" "-DLLAMA_BUILD_EXAMPLES=OFF" "-DLLAMA_BUILD_SERVER=OFF" "-DLLAMA_BUILD_TOOLS=OFF" "-DLLAMA_BUILD_COMMON=ON" "-DLLAMA_CURL=OFF" "-DCMAKE_BUILD_PARALLEL_LEVEL=14" "-DGGML_NATIVE=OFF" "-DBUILD_SHARED_LIBS=OFF" "-DGGML_BLAS=OFF" "-DGGML_OPENMP=OFF" "-DCMAKE_INSTALL_PREFIX=/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out" "-DCMAKE_C_FLAGS= -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w" "-DCMAKE_C_COMPILER=/usr/bin/cc" "-DCMAKE_CXX_FLAGS= -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w" "-DCMAKE_CXX_COMPILER=/usr/bin/c++" "-DCMAKE_ASM_FLAGS= -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w" "-DCMAKE_ASM_COMPILER=/usr/bin/cc" "-DCMAKE_BUILD_TYPE=Release"
+CMAKE_BUILD_TYPE=Release
+CMake Warning at cmake/license.cmake:18 (message):
+  License file
+  '/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/llama.cpp/LICENSE'
+  not found
+Call Stack (most recent call first):
+  CMakeLists.txt:170 (license_add_file)
+
+
+CMake Warning at common/CMakeLists.txt:31 (message):
+  Git repository not found; to enable automatic generation of build info,
+  make sure Git is installed and the project is a Git repository.
+
+
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    CMAKE_BUILD_PARALLEL_LEVEL
+
+
+running: cd "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out/build" && LC_ALL="C" "cmake" "--build" "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out/build" "--target" "install" "--config" "Release" "--parallel" "14"

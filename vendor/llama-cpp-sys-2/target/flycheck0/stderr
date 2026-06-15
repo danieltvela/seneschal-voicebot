@@ -1,0 +1,66 @@
+   0.025848125s  INFO prepare_target{force=false package_id=llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2) target="llama_cpp_sys_2"}: cargo::core::compiler::fingerprint: fingerprint error for llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2)/Check { test: false }/TargetInner { ..: lib_target("llama_cpp_sys_2", ["lib"], "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/src/lib.rs", Edition2021) }
+   0.025869125s  INFO prepare_target{force=false package_id=llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2) target="llama_cpp_sys_2"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/.fingerprint/llama-cpp-sys-2-e72c58eb538d2d04/lib-llama_cpp_sys_2`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   0.042849209s  INFO prepare_target{force=false package_id=llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2) target="llama_cpp_sys_2"}: cargo::core::compiler::fingerprint: fingerprint error for llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2)/Check { test: true }/TargetInner { ..: lib_target("llama_cpp_sys_2", ["lib"], "/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/src/lib.rs", Edition2021) }
+   0.042861000s  INFO prepare_target{force=false package_id=llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2) target="llama_cpp_sys_2"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/.fingerprint/llama-cpp-sys-2-5a4a8db13d58aa38/test-lib-llama_cpp_sys_2`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+warning: llama-cpp-sys-2@0.1.146: In file included from wrapper_oai.cpp:10:
+warning: llama-cpp-sys-2@0.1.146: In file included from ./llama.cpp/common/chat.h:7:
+warning: llama-cpp-sys-2@0.1.146: In file included from ./llama.cpp/common/jinja/parser.h:3:
+warning: llama-cpp-sys-2@0.1.146: ./llama.cpp/common/jinja/lexer.h:49:20: warning: unused function 'type_to_string' [-Wunused-function]
+warning: llama-cpp-sys-2@0.1.146:    49 | static std::string type_to_string(token::type t) {
+warning: llama-cpp-sys-2@0.1.146:       |                    ^~~~~~~~~~~~~~
+warning: llama-cpp-sys-2@0.1.146: In file included from wrapper_oai.cpp:10:
+warning: llama-cpp-sys-2@0.1.146: In file included from ./llama.cpp/common/chat.h:7:
+warning: llama-cpp-sys-2@0.1.146: In file included from ./llama.cpp/common/jinja/parser.h:4:
+warning: llama-cpp-sys-2@0.1.146: ./llama.cpp/common/jinja/runtime.h:608:20: warning: unused function 'render_string_parts' [-Wunused-function]
+warning: llama-cpp-sys-2@0.1.146:   608 | static std::string render_string_parts(const value_string & parts) {
+warning: llama-cpp-sys-2@0.1.146:       |                    ^~~~~~~~~~~~~~~~~~~
+warning: llama-cpp-sys-2@0.1.146: wrapper_oai.cpp:57:13: warning: unused function 'detect_thinking_forced_open' [-Wunused-function]
+warning: llama-cpp-sys-2@0.1.146:    57 | static bool detect_thinking_forced_open(const common_chat_params & params) {
+warning: llama-cpp-sys-2@0.1.146:       |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+warning: llama-cpp-sys-2@0.1.146: 3 warnings generated.
+    Checking llama-cpp-sys-2 v0.1.146 (/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s

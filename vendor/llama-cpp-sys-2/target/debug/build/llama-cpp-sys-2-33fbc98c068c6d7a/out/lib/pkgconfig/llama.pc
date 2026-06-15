@@ -1,0 +1,10 @@
+prefix=/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out
+exec_prefix=/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out
+libdir=/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out/lib
+includedir=/Users/danielvela/projects/ai/voicebot/vendor/llama-cpp-sys-2/target/debug/build/llama-cpp-sys-2-33fbc98c068c6d7a/out/include
+
+Name: llama
+Description: Port of Facebook's LLaMA model in C/C++
+Version: 0.0.309
+Libs: -L${libdir} -lggml -lggml-base -lllama
+Cflags: -I${includedir}
