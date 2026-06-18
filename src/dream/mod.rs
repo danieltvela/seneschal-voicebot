@@ -46,6 +46,16 @@ impl SDreamDaemon {
         })
     }
 
+    /// Runs a single S-DREAM cycle and returns.
+    ///
+    /// Intended for the `--dream` CLI launch mode: it performs one
+    /// consolidation/export pass and then exits, without entering the
+    /// background scheduling loop.
+    pub async fn run_once(self) -> Result<()> {
+        info!(target: "dream", "S-DREAM single-cycle mode starting");
+        self.run_cycle().await
+    }
+
     async fn run_loop(self) {
         info!(
             target: "dream",
@@ -147,10 +157,20 @@ impl SDreamDaemon {
         info!(target: "dream", "S-DREAM cycle starting");
 
         let session_id = self.db.get_or_create_session().await?;
+        info!(target: "dream", session=?session_id, "Session obtained");
+
         let through_id = self.db.get_summary_through_id(session_id).await?;
+        info!(target: "dream", through_id, "Summary through_id obtained");
 
         // --- Incremental JSONL export ---
         let last_processed = self.db.get_dream_last_processed(session_id).await?;
+        info!(
+            target: "dream",
+            has_last_processed = !last_processed.is_empty(),
+            last_processed = ?last_processed,
+            "Last processed state"
+        );
+
         let jsonl_messages = if last_processed.is_empty() {
             self.db
                 .get_messages_with_timestamp_after_id(session_id, through_id)
@@ -160,72 +180,110 @@ impl SDreamDaemon {
                 .get_messages_since(session_id, &last_processed)
                 .await?
         };
-        self.export_to_jsonl(session_id, &jsonl_messages).await?;
-        if let Some(last_msg) = jsonl_messages.last() {
-            self.db
-                .set_dream_last_processed(session_id, &last_msg.3)
-                .await?;
+        info!(
+            target: "dream",
+            count = jsonl_messages.len(),
+            "Messages fetched for JSONL export"
+        );
+
+        if jsonl_messages.is_empty() {
+            info!(target: "dream", "No messages to export, skipping JSONL step");
+        } else {
+            self.export_to_jsonl(session_id, &jsonl_messages).await?;
+            if let Some(last_msg) = jsonl_messages.last() {
+                self.db
+                    .set_dream_last_processed(session_id, &last_msg.3)
+                    .await?;
+                info!(target: "dream", timestamp = ?last_msg.3, "Updated last_processed timestamp");
+            }
         }
 
-        // --- Distillation (full batch since through_id) ---
-        let messages = self
-            .db
-            .get_messages_with_timestamp_after_id(session_id, through_id)
-            .await?;
-        if messages.is_empty() {
-            debug!(target: "dream", "No new messages to distil");
+        // --- Distillation (use the same messages that were exported to JSONL) ---
+        if jsonl_messages.is_empty() {
+            info!(target: "dream", "No messages to distil — early exit");
             return Ok(());
         }
 
-        let conversation_text = messages
+        let conversation_text = jsonl_messages
             .iter()
             .map(|(_, role, content, _)| format!("{}: {}", role, content))
             .collect::<Vec<_>>()
             .join("\n");
+        info!(
+            target: "dream",
+            chars = conversation_text.len(),
+            "Conversation text assembled for distillation"
+        );
 
         if let Some(client) = &self.secondary_client {
+            info!(target: "dream", "Secondary client present — starting distillation");
+
             let facts = extract_facts(client.as_ref(), "", &conversation_text).await;
-            for fact in facts {
+            info!(target: "dream", count = facts.len(), "Profile facts extracted");
+            for fact in &facts {
                 if let Err(e) = self
                     .db
                     .upsert_profile_fact(&fact.key, &fact.value, fact.confidence)
                     .await
                 {
                     warn!(target: "dream", "Failed to save profile fact: {}", e);
+                } else {
+                    info!(target: "dream", key = ?fact.key, value = ?fact.value, "Saved profile fact");
                 }
             }
 
             let existing_memories = self.db.load_active_memories().await?;
+            info!(target: "dream", count = existing_memories.len(), "Active memories loaded");
+
             let extraction =
                 extract_memories(client.as_ref(), &conversation_text, &existing_memories).await;
+            info!(
+                target: "dream",
+                new = extraction.new_memories.len(),
+                archived = extraction.archive_ids.len(),
+                "Memories extracted"
+            );
 
-            if !extraction.new_memories.is_empty()
-                && let Err(e) = self
+            if !extraction.new_memories.is_empty() {
+                if let Err(e) = self
                     .db
                     .save_memories_batch(&extraction.new_memories, session_id)
                     .await
-            {
-                warn!(target: "dream", "Failed to save memories: {}", e);
-            }
-
-            for archive_id in extraction.archive_ids {
-                if let Err(e) = self.db.deactivate_memory(archive_id).await {
-                    warn!(target: "dream", "Failed to archive memory {}: {}", archive_id, e);
+                {
+                    warn!(target: "dream", "Failed to save memories: {}", e);
+                } else {
+                    info!(target: "dream", count = extraction.new_memories.len(), "Saved new memories");
                 }
             }
 
+            for archive_id in &extraction.archive_ids {
+                if let Err(e) = self.db.deactivate_memory(*archive_id).await {
+                    warn!(target: "dream", "Failed to archive memory {}: {}", archive_id, e);
+                } else {
+                    info!(target: "dream", ?archive_id, "Archived memory");
+                }
+            }
+
+            info!(target: "dream", "Calling LLM for summary generation");
             let summary = self
                 .generate_summary(client.as_ref(), &conversation_text)
                 .await?;
-            let max_id = messages
+            info!(
+                target: "dream",
+                chars = summary.len(),
+                "Summary generated"
+            );
+            let max_id = jsonl_messages
                 .last()
                 .map(|(id, _, _, _)| *id)
                 .unwrap_or(through_id);
             self.db.save_summary(session_id, &summary, max_id).await?;
+            info!(target: "dream", max_id, "Summary saved to database");
         } else {
-            debug!(target: "dream", "No secondary client available, skipping distillation");
+            info!(target: "dream", "No secondary client available — skipping distillation (profile facts, memories, summary)");
         }
 
+        info!(target: "dream", "Detecting corrections");
         if let Err(e) = self.detect_corrections(session_id).await {
             warn!(target: "dream", "Correction detection failed: {}", e);
         }
@@ -237,6 +295,8 @@ impl SDreamDaemon {
                 "Compacted {} low-confidence profile facts",
                 compacted
             );
+        } else {
+            info!(target: "dream", "No profile facts to compact");
         }
 
         info!(target: "dream", "S-DREAM cycle complete");
@@ -682,6 +742,41 @@ mod tests {
             profile.iter().any(|(k, v, _)| k == "name" && v == "Daniel"),
             "Profile fact must be saved after cycle"
         );
+    }
+
+    #[tokio::test]
+    async fn run_once_executes_single_cycle_and_returns() {
+        let (db, _db_dir) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.save_message(sid, "user", "Me llamo Daniel.")
+            .await
+            .unwrap();
+
+        let jsonl_dir = tempfile::TempDir::new().unwrap();
+        let (tx, _rx) = mpsc::channel(1);
+        let last_activity = Arc::new(AtomicU64::new(0));
+        let daemon = SDreamDaemon {
+            config: SDreamConfig {
+                interval_secs: 3600,
+                on_idle: false,
+                idle_threshold_secs: 600,
+                scheduled_hour: None,
+                l2_min_messages: 1,
+                jsonl_dir: jsonl_dir.path().to_str().unwrap().to_string(),
+            },
+            db: db.clone(),
+            secondary_client: None,
+            proactive_tx: tx,
+            last_activity,
+        };
+
+        daemon.run_once().await.unwrap();
+
+        // The cycle exports messages; verify the archive was written.
+        let date = Local::now().format("%Y-%m-%d");
+        let base = jsonl_dir.path().join(format!("{}.jsonl", date));
+        let content = tokio::fs::read_to_string(&base).await.unwrap();
+        assert!(content.contains("Daniel"), "run_once must complete a cycle");
     }
 
     #[tokio::test]

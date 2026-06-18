@@ -11,6 +11,7 @@ mod config;
 mod control;
 mod daemon;
 mod db;
+mod dream;
 mod eyes;
 mod i18n;
 mod llm;
@@ -47,6 +48,7 @@ use crate::audio::output::AudioOutput;
 use crate::audio::speaker::SpeakerVerifier;
 use crate::config::Config;
 use crate::db::{Database, Memory};
+use crate::dream::{SDreamConfig, SDreamDaemon};
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{
     PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,
@@ -190,6 +192,17 @@ async fn async_main() -> Result<()> {
     }
 
     info!(target: "voicebot", "Language: {}", config.language);
+
+    // ── Standalone S-DREAM launch mode ────────────────────────────────────────
+    if std::env::args().any(|a| a == "--dream") {
+        info!(
+            target: "llm",
+            "Secondary LLM endpoint: {} (model={})",
+            config.secondary_llm_url.as_deref().unwrap_or(""),
+            config.secondary_llm_model,
+        );
+        return run_dream_mode(&config).await;
+    }
 
     // ── Proactive event channel ───────────────────────────────────────────────
     let (proactive_tx, proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
@@ -1301,6 +1314,58 @@ async fn async_main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Runs a single S-DREAM consolidation cycle and exits.
+///
+/// This is the implementation of `cargo run -- --dream`. It constructs the
+/// minimum dependencies needed by the daemon (database, optional secondary
+/// LLM, proactive channel, idle tracker), runs one cycle, and returns so the
+/// process can terminate.
+async fn run_dream_mode(config: &Config) -> Result<()> {
+    info!(target: "voicebot", "S-DREAM standalone mode");
+
+    let db = Database::new(&config.db_path).await?;
+
+    let secondary_llm_client: Option<Arc<dyn LlmProvider>> =
+        config.secondary_llm_url.as_ref().map(|url| {
+            let client: Arc<dyn LlmProvider> = Arc::new(
+                OpenAiLlmProvider::new(
+                    url,
+                    &config.secondary_llm_model,
+                    config.secondary_llm_max_tokens,
+                    0.3,
+                )
+                .with_api_key(&config.secondary_llm_api_key)
+                .with_thinking(config.secondary_llm_thinking),
+            );
+            client
+        });
+
+    let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
+    let last_activity = Arc::new(AtomicU64::new(0));
+
+    let dream_config = SDreamConfig {
+        interval_secs: config.s_dream_interval_secs,
+        on_idle: config.s_dream_on_idle,
+        idle_threshold_secs: config.s_dream_idle_threshold_secs,
+        scheduled_hour: config.s_dream_scheduled_hour,
+        l2_min_messages: config.s_dream_l2_min_messages,
+        jsonl_dir: config.s_dream_jsonl_dir.clone(),
+    };
+
+    SDreamDaemon {
+        config: dream_config,
+        db,
+        secondary_client: secondary_llm_client,
+        proactive_tx,
+        last_activity,
+    }
+    .run_once()
+    .await?;
+
+    info!(target: "voicebot", "S-DREAM standalone cycle complete; exiting");
     Ok(())
 }
 
