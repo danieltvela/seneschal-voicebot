@@ -174,6 +174,29 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // System prompts: one active prompt globally, associated with the
+        // session that created it. is_active is enforced in code so that only
+        // one row has the value 1 at a time.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS system_prompts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                is_active  INTEGER NOT NULL DEFAULT 0
+                    CHECK (is_active IN (0, 1)),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_system_prompts_session_id ON system_prompts(session_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         // ── FTS5 full-text search on messages ──────────────────────────────
 
         // Virtual table for fast keyword search across conversation history.
@@ -443,6 +466,99 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ── System prompts ───────────────────────────────────────────────────────
+
+    /// Return the content of the single globally active system prompt, if any.
+    pub async fn get_active_system_prompt(&self) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT content FROM system_prompts WHERE is_active = 1 ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.try_get("content").unwrap_or_default()))
+    }
+
+    /// Activate a system prompt, deactivating all others in the same transaction.
+    pub async fn activate_system_prompt(&self, prompt_id: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE system_prompts SET is_active = 0")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE system_prompts SET is_active = 1 WHERE id = ?")
+            .bind(prompt_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Insert a new system prompt row for a session.
+    ///
+    /// When `active` is true, all other prompts are deactivated first.
+    pub async fn insert_system_prompt(
+        &self,
+        session_id: Uuid,
+        content: &str,
+        active: bool,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await?;
+        if active {
+            sqlx::query("UPDATE system_prompts SET is_active = 0")
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query(
+            "INSERT INTO system_prompts (session_id, content, is_active, created_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(session_id.to_string())
+        .bind(content)
+        .bind(if active { 1 } else { 0 })
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Ensure a system prompt is active for the current session.
+    ///
+    /// Returns the currently active prompt if one exists. Otherwise, reuses the
+    /// most recent prompt stored for `session_id` and activates it. If no prompt
+    /// exists for the session, inserts `fallback_content` (typically the value
+    /// from `LLM_SYSTEM_PROMPT`) for this session, activates it, and returns it.
+    pub async fn ensure_active_system_prompt(
+        &self,
+        session_id: Uuid,
+        fallback_content: &str,
+    ) -> Result<String> {
+        if let Some(content) = self.get_active_system_prompt().await? {
+            return Ok(content);
+        }
+
+        let existing = sqlx::query(
+            "SELECT id, content FROM system_prompts
+             WHERE session_id = ?
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(session_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = existing {
+            let id: i64 = row.try_get("id")?;
+            let content: String = row.try_get("content")?;
+            self.activate_system_prompt(id).await?;
+            return Ok(content);
+        }
+
+        self.insert_system_prompt(session_id, fallback_content, true)
+            .await?;
+        Ok(fallback_content.to_string())
     }
 
     /// Return the message id at a 0-based offset within a session (ordered by id ASC),
@@ -1183,6 +1299,103 @@ mod tests {
             .unwrap();
         let under_review = db.get_profile_facts_under_review().await.unwrap();
         assert!(under_review.is_empty());
+    }
+
+    // ── System prompts ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ensure_active_system_prompt_inserts_fallback_when_empty() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        let fallback = "fallback prompt";
+        let content = db.ensure_active_system_prompt(sid, fallback).await.unwrap();
+        assert_eq!(content, fallback);
+        assert_eq!(
+            db.get_active_system_prompt().await.unwrap().as_deref(),
+            Some(fallback)
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_active_system_prompt_reuses_existing_active() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.insert_system_prompt(sid, "stored prompt", true)
+            .await
+            .unwrap();
+
+        let content = db
+            .ensure_active_system_prompt(sid, "different fallback")
+            .await
+            .unwrap();
+        assert_eq!(content, "stored prompt");
+    }
+
+    #[tokio::test]
+    async fn ensure_active_system_prompt_activates_existing_for_session() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.insert_system_prompt(sid, "inactive prompt", false)
+            .await
+            .unwrap();
+
+        let content = db
+            .ensure_active_system_prompt(sid, "fallback")
+            .await
+            .unwrap();
+        assert_eq!(content, "inactive prompt");
+        assert_eq!(
+            db.get_active_system_prompt().await.unwrap().as_deref(),
+            Some("inactive prompt")
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_system_prompt_activating_deactivates_others() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.insert_system_prompt(sid, "first", true).await.unwrap();
+        db.insert_system_prompt(sid, "second", true).await.unwrap();
+
+        let rows: Vec<(i64, i64)> =
+            sqlx::query_as("SELECT is_active, COUNT(*) FROM system_prompts GROUP BY is_active")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .any(|(active, count)| *active == 0 && *count == 1)
+        );
+        assert!(
+            rows.iter()
+                .any(|(active, count)| *active == 1 && *count == 1)
+        );
+        assert_eq!(
+            db.get_active_system_prompt().await.unwrap().as_deref(),
+            Some("second")
+        );
+    }
+
+    #[tokio::test]
+    async fn activate_system_prompt_switches_active_flag() {
+        let (db, _d) = fresh_db().await;
+        let sid = db.get_or_create_session().await.unwrap();
+        db.insert_system_prompt(sid, "first", true).await.unwrap();
+        db.insert_system_prompt(sid, "second", false).await.unwrap();
+
+        let inactive_id: i64 =
+            sqlx::query_scalar("SELECT id FROM system_prompts WHERE content = ?")
+                .bind("second")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+
+        db.activate_system_prompt(inactive_id).await.unwrap();
+        assert_eq!(
+            db.get_active_system_prompt().await.unwrap().as_deref(),
+            Some("second")
+        );
     }
 
     // ── FTS5 search ────────────────────────────────────────────────────────

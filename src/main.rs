@@ -134,7 +134,7 @@ async fn async_main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     info!(target: "voicebot", "Starting voicebot...");
-    let config = Config::from_env()?;
+    let mut config = Config::from_env()?;
 
     // ── Device listing shortcut ───────────────────────────────────────────────
     let list_devices = config.list_devices
@@ -362,6 +362,9 @@ async fn async_main() -> Result<()> {
     // ── Database ──────────────────────────────────────────────────────────────
     let db = Database::new(&config.db_path).await?;
     let session_id = db.get_or_create_session().await?;
+    config.llm_system_prompt = db
+        .ensure_active_system_prompt(session_id, &config.llm_system_prompt)
+        .await?;
     let (summary, history) = db
         .get_session_context(session_id, config.llm_history_load_limit)
         .await?;

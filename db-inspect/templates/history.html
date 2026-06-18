@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Profile History</h1>
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Key</th>
+            <th>Value</th>
+            <th>Confidence</th>
+            <th>Timestamp</th>
+            <th>Type</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr>
+            <td>{{ entry.id }}</td>
+            <td>{{ entry.key }}</td>
+            <td>{{ entry.value }}</td>
+            <td>{{ entry.confidence }}</td>
+            <td>{{ entry.timestamp }}</td>
+            <td>{{ entry.change_type }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

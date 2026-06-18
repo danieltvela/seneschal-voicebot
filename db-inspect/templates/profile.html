@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>User Profile</h1>
+<table>
+    <thead>
+        <tr>
+            <th>Key</th>
+            <th>Value</th>
+            <th>Confidence</th>
+            <th>Updated</th>
+            <th>Under Review</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr>
+            <td>{{ entry.key }}</td>
+            <td>{{ entry.value }}</td>
+            <td>{{ entry.confidence }}</td>
+            <td>{{ entry.updated_at }}</td>
+            <td>{{ entry.is_under_review }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

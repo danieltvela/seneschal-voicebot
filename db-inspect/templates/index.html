@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Voicebot DB Inspector</h1>
+<div class="dashboard-cards">
+    <a href="/sessions" class="card">
+        <div class="count">{{ session_count }}</div>
+        <div class="label">Sessions</div>
+    </a>
+    <a href="/messages" class="card">
+        <div class="count">{{ message_count }}</div>
+        <div class="label">Messages</div>
+    </a>
+    <a href="/memories" class="card">
+        <div class="count">{{ memory_count }}</div>
+        <div class="label">Memories</div>
+    </a>
+    <a href="/profile" class="card">
+        <div class="count">{{ profile_count }}</div>
+        <div class="label">Profile Keys</div>
+    </a>
+    <a href="/system-prompts" class="card">
+        <div class="count">{{ system_prompt_count }}</div>
+        <div class="label">System Prompts</div>
+    </a>
+</div>
+{% endblock %}
