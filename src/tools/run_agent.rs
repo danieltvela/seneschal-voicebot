@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -1026,8 +1027,28 @@ impl AcpWriter {
         .await
     }
 
+    /// Check whether the underlying child process is still alive.
+    pub fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Send a minimal ready-ping prompt to verify the ACP session responds.
+    ///
+    /// Uses `send_prompt` under the hood and wraps the send in a timeout.
+    /// The caller is responsible for draining the matching response from the
+    /// inbound receiver.
+    pub async fn warm_up(&mut self, session_id: &str, timeout_secs: u64) -> anyhow::Result<()> {
+        let text = "Hello, you are ready. Acknowledge with 'ready'.";
+        let _id = timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            self.send_prompt(session_id, text),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("ACP warm-up timed out after {timeout_secs}s"))??;
+        Ok(())
+    }
+
     /// Kill the subprocess (async).
-    #[allow(dead_code)]
     pub async fn kill(&mut self) {
         let _ = self.child.kill().await;
     }

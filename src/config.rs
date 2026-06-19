@@ -139,6 +139,17 @@ pub struct Config {
     /// When true, send a warmup prompt to Hermes at startup to force model load.
     /// AGENT_ACP_WARMUP=1. Only applies when agent_mode = "acp".
     pub agent_acp_warmup: bool,
+    /// When true, periodically ping the ACP process to keep it alive.
+    /// Default: true when AGENT_ACP_WARMUP=1, otherwise false.
+    pub agent_acp_keepalive_enabled: bool,
+    /// Seconds between keep-alive pings (AGENT_ACP_KEEPALIVE_INTERVAL_SECS, default 300).
+    pub agent_acp_keepalive_interval_secs: u64,
+    /// Seconds to wait for warmup response before giving up (AGENT_ACP_WARMUP_TIMEOUT_SECS, default 10).
+    pub agent_acp_warmup_timeout_secs: u64,
+    /// Initial backoff in seconds after an ACP restart (AGENT_ACP_RESTART_BACKOFF_SECS, default 2).
+    pub agent_acp_restart_backoff_secs: u64,
+    /// Maximum backoff cap in seconds (AGENT_ACP_RESTART_MAX_BACKOFF_SECS, default 60).
+    pub agent_acp_restart_max_backoff_secs: u64,
 
     // ── Inference daemon ──────────────────────────────────────────────────────
     /// Enable the background "is there anything worth saying?" loop.
@@ -432,6 +443,28 @@ impl Config {
             agent_acp_command: env::var("AGENT_ACP_COMMAND")
                 .unwrap_or_else(|_| "hermes acp".to_string()),
             agent_acp_warmup: env::var("AGENT_ACP_WARMUP").as_deref() == Ok("1"),
+            agent_acp_keepalive_enabled: {
+                let warmup = env::var("AGENT_ACP_WARMUP").as_deref() == Ok("1");
+                env::var("AGENT_ACP_KEEPALIVE_ENABLED")
+                    .map(|v| v == "1" || v.to_lowercase() == "true")
+                    .unwrap_or(warmup)
+            },
+            agent_acp_keepalive_interval_secs: env::var("AGENT_ACP_KEEPALIVE_INTERVAL_SECS")
+                .unwrap_or_else(|_| "300".to_string())
+                .parse()
+                .context("Invalid AGENT_ACP_KEEPALIVE_INTERVAL_SECS")?,
+            agent_acp_warmup_timeout_secs: env::var("AGENT_ACP_WARMUP_TIMEOUT_SECS")
+                .unwrap_or_else(|_| "10".to_string())
+                .parse()
+                .context("Invalid AGENT_ACP_WARMUP_TIMEOUT_SECS")?,
+            agent_acp_restart_backoff_secs: env::var("AGENT_ACP_RESTART_BACKOFF_SECS")
+                .unwrap_or_else(|_| "2".to_string())
+                .parse()
+                .context("Invalid AGENT_ACP_RESTART_BACKOFF_SECS")?,
+            agent_acp_restart_max_backoff_secs: env::var("AGENT_ACP_RESTART_MAX_BACKOFF_SECS")
+                .unwrap_or_else(|_| "60".to_string())
+                .parse()
+                .context("Invalid AGENT_ACP_RESTART_MAX_BACKOFF_SECS")?,
 
             // Inference daemon
             daemon_enabled: env::var("DAEMON_ENABLED")
@@ -814,5 +847,53 @@ mod tests {
                 HermesSessionViewerMode::Off
             );
         });
+    }
+
+    // ── Agent ACP config field defaults ────────────────────────────────────────
+
+    #[test]
+    fn config_defaults() {
+        temp_env::with_vars(
+            [
+                ("AGENT_ACP_WARMUP", None::<&str>),
+                ("AGENT_ACP_KEEPALIVE_ENABLED", None::<&str>),
+                ("AGENT_ACP_KEEPALIVE_INTERVAL_SECS", None::<&str>),
+                ("AGENT_ACP_WARMUP_TIMEOUT_SECS", None::<&str>),
+                ("AGENT_ACP_RESTART_BACKOFF_SECS", None::<&str>),
+                ("AGENT_ACP_RESTART_MAX_BACKOFF_SECS", None::<&str>),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert!(!config.agent_acp_warmup);
+                assert!(!config.agent_acp_keepalive_enabled);
+                assert_eq!(config.agent_acp_keepalive_interval_secs, 300);
+                assert_eq!(config.agent_acp_warmup_timeout_secs, 10);
+                assert_eq!(config.agent_acp_restart_backoff_secs, 2);
+                assert_eq!(config.agent_acp_restart_max_backoff_secs, 60);
+            },
+        );
+    }
+
+    #[test]
+    fn config_custom_values() {
+        temp_env::with_vars(
+            [
+                ("AGENT_ACP_WARMUP", Some("1")),
+                ("AGENT_ACP_KEEPALIVE_ENABLED", Some("false")),
+                ("AGENT_ACP_KEEPALIVE_INTERVAL_SECS", Some("60")),
+                ("AGENT_ACP_WARMUP_TIMEOUT_SECS", Some("30")),
+                ("AGENT_ACP_RESTART_BACKOFF_SECS", Some("5")),
+                ("AGENT_ACP_RESTART_MAX_BACKOFF_SECS", Some("120")),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert!(config.agent_acp_warmup);
+                assert!(!config.agent_acp_keepalive_enabled);
+                assert_eq!(config.agent_acp_keepalive_interval_secs, 60);
+                assert_eq!(config.agent_acp_warmup_timeout_secs, 30);
+                assert_eq!(config.agent_acp_restart_backoff_secs, 5);
+                assert_eq!(config.agent_acp_restart_max_backoff_secs, 120);
+            },
+        );
     }
 }

@@ -6,11 +6,15 @@
 /// `run_proactive_pipeline` can vocalize it.
 ///
 /// The LLM call uses `complete_short()` (no slot, no KV-cache eviction).
+use std::sync::Arc;
+use std::time::Duration;
+
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::agents::ProactiveEvent;
-use std::sync::Arc;
+use crate::agents::config::AgentConfig;
+use crate::agents::session_manager::AcpSessionManager;
 
 use crate::llm::{LlmProvider, LlmSession, Message};
 
@@ -84,6 +88,67 @@ impl InferenceDaemon {
                 }
                 Err(e) => {
                     warn!(target: "daemon", "Inference daemon LLM call failed: {}", e);
+                }
+            }
+        }
+    }
+}
+
+/// ACP keep-alive daemon — periodically pings idle ACP agent sessions to keep
+/// them warm (process alive, model loaded) without interrupting busy ones.
+pub struct AcpKeepAliveDaemon {
+    pub interval_secs: u64,
+    pub manager: Arc<AcpSessionManager>,
+    pub configs: Vec<AgentConfig>,
+}
+
+impl AcpKeepAliveDaemon {
+    /// Spawns the daemon as a background tokio task. Returns immediately.
+    pub fn spawn(self) {
+        tokio::spawn(async move {
+            self.run().await;
+        });
+    }
+
+    async fn run(self) {
+        info!(
+            target: "keepalive",
+            "ACP keep-alive daemon started (interval={}s)",
+            self.interval_secs
+        );
+
+        let mut interval = tokio::time::interval(Duration::from_secs(self.interval_secs));
+
+        loop {
+            interval.tick().await;
+
+            for config in &self.configs {
+                if config.mode != "acp" {
+                    continue;
+                }
+
+                if !self
+                    .manager
+                    .is_session_available_for_keepalive(&config.name)
+                {
+                    continue;
+                }
+
+                match self.manager.prewarm_agent(config).await {
+                    Ok(sid) => {
+                        debug!(
+                            target: "keepalive",
+                            "Keep-alive ping [{}]: ok (sid={})",
+                            config.name, sid
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            target: "keepalive",
+                            "Keep-alive ping [{}]: failed: {}",
+                            config.name, e
+                        );
+                    }
                 }
             }
         }

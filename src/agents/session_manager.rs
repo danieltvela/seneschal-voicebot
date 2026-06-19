@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use tokio::sync::{Mutex, mpsc};
 
 use super::config::AgentConfig;
-use crate::config::HermesSessionViewerMode;
+use crate::config::{Config, HermesSessionViewerMode};
 use crate::tools::run_agent::{AcpWriter, JsonRpcMessage};
 
 // ── Session events ─────────────────────────────────────────────────────────────
@@ -82,6 +82,12 @@ impl std::fmt::Display for SessionStatus {
     }
 }
 
+#[derive(Debug, Default)]
+struct BackoffState {
+    attempts: u32,
+    last_failure: Option<Instant>,
+}
+
 // ── Channel types ─────────────────────────────────────────────────────────────
 
 /// Shared type aliases for the session-event channel.
@@ -115,6 +121,7 @@ pub struct SessionEntry {
     pub created_at: Instant,
     pub last_used: Instant,
     pub task_ids: HashSet<String>,
+    pub status: SessionStatus,
 }
 
 impl std::fmt::Debug for SessionEntry {
@@ -124,6 +131,7 @@ impl std::fmt::Debug for SessionEntry {
             .field("agent_name", &self.agent_name)
             .field("created_at", &self.created_at)
             .field("last_used", &self.last_used)
+            .field("status", &self.status)
             .finish()
     }
 }
@@ -132,6 +140,7 @@ impl std::fmt::Debug for SessionEntry {
 #[derive(Debug, Default)]
 pub struct AcpSessionManager {
     sessions: DashMap<String, SessionEntry>,
+    backoff_states: DashMap<String, BackoffState>,
 }
 
 impl AcpSessionManager {
@@ -144,9 +153,17 @@ impl AcpSessionManager {
     pub async fn get_or_create_session(&self, agent_config: &AgentConfig) -> Result<SessionEntry> {
         if let Some(mut entry) = self.sessions.get_mut(&agent_config.name) {
             entry.last_used = Instant::now();
-            return Ok((*entry.value()).clone());
+            if entry.status != SessionStatus::Busy {
+                entry.status = SessionStatus::Idle;
+            }
+            drop(entry);
+            return self.get_healthy_session(agent_config).await;
         }
 
+        self.create_session(agent_config).await
+    }
+
+    async fn create_session(&self, agent_config: &AgentConfig) -> Result<SessionEntry> {
         let (mut writer, mut inbound_rx) = AcpWriter::spawn(&agent_config.acp_command).await?;
         let cwd = std::env::current_dir()
             .unwrap_or_default()
@@ -164,10 +181,59 @@ impl AcpSessionManager {
             created_at: now,
             last_used: now,
             task_ids: HashSet::new(),
+            status: SessionStatus::Idle,
         };
         self.sessions
             .insert(agent_config.name.clone(), entry.clone());
+        self.backoff_states
+            .insert(agent_config.name.clone(), BackoffState::default());
         Ok(entry)
+    }
+
+    /// Ensure the session for `agent_config.name` is healthy, respawning it
+    /// with exponential backoff if the underlying ACP process has died.
+    pub async fn get_healthy_session(&self, agent_config: &AgentConfig) -> Result<SessionEntry> {
+        loop {
+            if let Some(entry) = self.sessions.get(&agent_config.name) {
+                if entry.status == SessionStatus::Busy {
+                    return Ok(entry.clone());
+                }
+
+                let writer = entry.writer.clone();
+                let session_id = entry.session_id.clone();
+                let agent_name = entry.agent_name.clone();
+                let entry_clone = entry.clone();
+                drop(entry);
+
+                if writer.lock().await.is_alive() {
+                    self.backoff_states
+                        .insert(agent_name, BackoffState::default());
+                    return Ok(entry_clone);
+                }
+
+                self.close_session(&session_id);
+
+                let config = Config::from_env()?;
+                let base_secs = config.agent_acp_restart_backoff_secs;
+                let max_secs = config.agent_acp_restart_max_backoff_secs;
+
+                let delay_secs = {
+                    let mut state = self.backoff_states.entry(agent_name.clone()).or_default();
+                    let attempts = state.attempts;
+                    state.attempts += 1;
+                    state.last_failure = Some(Instant::now());
+                    std::cmp::min(base_secs * (2u64).saturating_pow(attempts), max_secs)
+                };
+
+                tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                continue;
+            }
+
+            let new_entry = self.create_session(agent_config).await?;
+            self.backoff_states
+                .insert(agent_config.name.clone(), BackoffState::default());
+            return Ok(new_entry);
+        }
     }
 
     /// Close and remove the session identified by `session_id`.
@@ -176,6 +242,7 @@ impl AcpSessionManager {
         let mut removed_tasks = HashSet::new();
         self.sessions.retain(|_, v| {
             if v.session_id == session_id {
+                v.status = SessionStatus::Closed;
                 removed_tasks.extend(v.task_ids.drain());
                 false
             } else {
@@ -183,6 +250,37 @@ impl AcpSessionManager {
             }
         });
         removed_tasks
+    }
+
+    /// Mark a session as idle.
+    pub fn mark_session_idle(&self, agent_name: &str) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.status = SessionStatus::Idle;
+            entry.last_used = Instant::now();
+        }
+    }
+
+    /// Mark a session as busy.
+    pub fn mark_session_busy(&self, agent_name: &str) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.status = SessionStatus::Busy;
+            entry.last_used = Instant::now();
+        }
+    }
+
+    /// Mark a session as closed.
+    pub fn mark_session_closed(&self, agent_name: &str) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.status = SessionStatus::Closed;
+        }
+    }
+
+    /// Check if a session is available for keepalive (status is Idle).
+    pub fn is_session_available_for_keepalive(&self, agent_name: &str) -> bool {
+        self.sessions
+            .get(agent_name)
+            .map(|e| e.status == SessionStatus::Idle)
+            .unwrap_or(false)
     }
 
     pub fn add_task(&self, agent_name: &str, task_id: &str) {
@@ -220,12 +318,22 @@ impl AcpSessionManager {
             .collect()
     }
 
-    /// Warm up a single agent session (calls spawn + initialize, stores result).
+    /// Warm up a single agent session (spawn + initialize + warm-up prompt).
     /// Convenience method so callers (e.g. `main.rs`) only need this type.
     pub async fn prewarm_agent(&self, config: &AgentConfig) -> Result<String> {
-        self.get_or_create_session(config)
-            .await
-            .map(|e| e.session_id)
+        let entry = self.get_or_create_session(config).await?;
+        let timeout_secs = Config::from_env()?.agent_acp_warmup_timeout_secs;
+
+        let mut writer = entry.writer.lock().await;
+        if let Err(e) = writer.warm_up(&entry.session_id, timeout_secs).await {
+            drop(writer);
+            self.close_session(&entry.session_id);
+            return Err(e);
+        }
+        drop(writer);
+
+        self.mark_session_idle(&config.name);
+        Ok(entry.session_id)
     }
 
     /// Remove all sessions idle longer than `timeout`.
@@ -261,6 +369,7 @@ mod tests {
             created_at: Instant::now(),
             last_used: Instant::now(),
             task_ids: HashSet::new(),
+            status: SessionStatus::Idle,
         }
     }
 

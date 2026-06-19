@@ -330,6 +330,28 @@ async fn async_main() -> Result<()> {
         });
     }
 
+    // ── ACP keep-alive daemon ────────────────────────────────────────────────
+    if config.agent_acp_keepalive_enabled {
+        let acp_agents: Vec<_> = agent_registry
+            .agents
+            .iter()
+            .filter(|a| a.mode == "acp")
+            .cloned()
+            .collect();
+
+        if !acp_agents.is_empty() {
+            daemon::AcpKeepAliveDaemon {
+                interval_secs: config.agent_acp_keepalive_interval_secs,
+                manager: Arc::clone(&session_manager),
+                configs: acp_agents,
+            }
+            .spawn();
+
+            info!(target: "agent", "ACP keep-alive daemon started (interval={}s)",
+                  config.agent_acp_keepalive_interval_secs);
+        }
+    }
+
     // ── MCP tools (multi-server) ──────────────────────────────────────────────
     let mcp_registry = mcp::McpRegistry::from_env();
     for server in &mcp_registry.servers {
