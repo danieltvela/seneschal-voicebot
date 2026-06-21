@@ -22,6 +22,8 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, warn};
 
+use crate::config::Config;
+
 // ── Response type ────────────────────────────────────────────────────────────
 
 /// Parsed inbound JSON-RPC response (id already matched and removed from pending map).
@@ -216,10 +218,11 @@ impl McpClient {
         let args = &parts[1..];
 
         // Redirect server stderr to voicebot.log so it doesn't clutter TUI output.
+        let log_path = Config::log_file_path();
         let stderr_sink = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("voicebot.log")
+            .open(&log_path)
             .map(std::process::Stdio::from)
             .unwrap_or_else(|_| std::process::Stdio::null());
 

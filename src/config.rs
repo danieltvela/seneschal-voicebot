@@ -2,9 +2,10 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::env;
 use std::path::PathBuf;
+use tracing::warn;
 
-/// Embedded default configuration. Keep `voicebot.toml` in sync with this constant.
-const DEFAULT_CONFIG_TOML: &str = include_str!("../voicebot.toml");
+/// Embedded default configuration. Keep `voicebot.pro.toml` in sync with this constant.
+const DEFAULT_CONFIG_TOML: &str = include_str!("../voicebot.pro.toml");
 
 /// Mode for the Hermes ACP session log viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -23,6 +24,49 @@ impl std::str::FromStr for HermesSessionViewerMode {
             "off" | "0" | "false" => Ok(Self::Off),
             "logfile" | "log-file" | "log" => Ok(Self::LogFile),
             _ => Err(format!("Invalid HermesSessionViewerMode: {s}")),
+        }
+    }
+}
+
+/// Active Voicebot runtime environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VoicebotEnv {
+    #[default]
+    Pro,
+    Dev,
+}
+
+impl VoicebotEnv {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pro => "pro",
+            Self::Dev => "dev",
+        }
+    }
+
+    pub fn from_env_var() -> Self {
+        match env::var("VOICEBOT_ENV") {
+            Ok(v) => v.parse().unwrap_or_else(|e| {
+                warn!(
+                    "Invalid VOICEBOT_ENV value '{}': {}; defaulting to pro",
+                    v, e
+                );
+                Self::Pro
+            }),
+            Err(_) => Self::Pro,
+        }
+    }
+}
+
+impl std::str::FromStr for VoicebotEnv {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "pro" | "production" => Ok(Self::Pro),
+            "dev" | "development" => Ok(Self::Dev),
+            _ => Err(format!("Invalid VoicebotEnv: {s}. Expected 'pro' or 'dev'")),
         }
     }
 }
@@ -315,7 +359,7 @@ impl Config {
         let embedded: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML)
             .context("Failed to parse embedded default config")?;
 
-        if let Some(path) = Self::resolve_config_path() {
+        if let Some(path) = Self::resolve_config_path()? {
             let contents = std::fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read config file {}", path.display()))?;
             let user: toml::Value = toml::from_str(&contents)
@@ -334,15 +378,28 @@ impl Config {
             .context("Failed to deserialize embedded default config")
     }
 
-    fn resolve_config_path() -> Option<PathBuf> {
+    fn resolve_config_path() -> Result<Option<PathBuf>> {
         if let Ok(path) = env::var("VOICEBOT_CONFIG_FILE") {
-            return Some(PathBuf::from(path));
+            return Ok(Some(PathBuf::from(path)));
         }
-        let cwd_config = PathBuf::from("voicebot.toml");
+
+        let env = VoicebotEnv::from_env_var();
+        let cwd_config = PathBuf::from(format!("voicebot.{}.toml", env.as_str()));
         if cwd_config.exists() {
-            return Some(cwd_config);
+            return Ok(Some(cwd_config));
         }
-        None
+
+        warn!(
+            "Config file {} not found; using embedded default",
+            cwd_config.display()
+        );
+        Ok(None)
+    }
+
+    /// Returns the env-specific log file path (e.g. `voicebot.pro.log`).
+    /// This is a free function because it is needed before `Config` is loaded.
+    pub fn log_file_path() -> String {
+        format!("voicebot.{}.log", VoicebotEnv::from_env_var().as_str())
     }
 
     fn merge_toml(base: toml::Value, overlay: toml::Value) -> toml::Value {
@@ -1089,5 +1146,193 @@ whisper_model = "custom.bin"
         });
 
         std::fs::remove_file(&path).ok();
+    }
+
+    // ── PRO/DEV environment isolation ──────────────────────────────────────────
+
+    #[test]
+    fn voicebot_env_from_env_var_defaults_to_pro() {
+        temp_env::with_var("VOICEBOT_ENV", None::<&str>, || {
+            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Pro);
+        });
+    }
+
+    #[test]
+    fn voicebot_env_from_env_var_explicit_pro() {
+        temp_env::with_var("VOICEBOT_ENV", Some("pro"), || {
+            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Pro);
+        });
+    }
+
+    #[test]
+    fn voicebot_env_from_env_var_explicit_dev() {
+        temp_env::with_var("VOICEBOT_ENV", Some("dev"), || {
+            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Dev);
+        });
+    }
+
+    #[test]
+    fn voicebot_env_from_env_var_invalid_defaults_to_pro() {
+        temp_env::with_var("VOICEBOT_ENV", Some("staging"), || {
+            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Pro);
+        });
+    }
+
+    #[test]
+    fn voicebot_env_from_str_case_insensitive() {
+        let pro_variants = [
+            "pro",
+            "PRO",
+            "Pro",
+            "production",
+            "PRODUCTION",
+            "Production",
+        ];
+        for variant in pro_variants {
+            assert_eq!(
+                variant.parse::<VoicebotEnv>().unwrap(),
+                VoicebotEnv::Pro,
+                "{variant} should parse as Pro"
+            );
+        }
+
+        let dev_variants = [
+            "dev",
+            "DEV",
+            "Dev",
+            "development",
+            "DEVELOPMENT",
+            "Development",
+        ];
+        for variant in dev_variants {
+            assert_eq!(
+                variant.parse::<VoicebotEnv>().unwrap(),
+                VoicebotEnv::Dev,
+                "{variant} should parse as Dev"
+            );
+        }
+    }
+
+    #[test]
+    fn voicebot_env_from_str_invalid_returns_error() {
+        let result = "invalid".parse::<VoicebotEnv>();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("Invalid VoicebotEnv"),
+            "error should mention Invalid VoicebotEnv"
+        );
+    }
+
+    #[test]
+    fn config_log_file_path_returns_pro_for_default() {
+        temp_env::with_var("VOICEBOT_ENV", None::<&str>, || {
+            assert_eq!(Config::log_file_path(), "voicebot.pro.log");
+        });
+    }
+
+    #[test]
+    fn config_log_file_path_returns_pro_for_pro() {
+        temp_env::with_var("VOICEBOT_ENV", Some("pro"), || {
+            assert_eq!(Config::log_file_path(), "voicebot.pro.log");
+        });
+    }
+
+    #[test]
+    fn config_log_file_path_returns_dev_for_dev() {
+        temp_env::with_var("VOICEBOT_ENV", Some("dev"), || {
+            assert_eq!(Config::log_file_path(), "voicebot.dev.log");
+        });
+    }
+
+    #[test]
+    fn pro_config_file_loads_with_pro_paths() {
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let pro_toml = project_root.join("voicebot.pro.toml");
+
+        temp_env::with_vars(
+            [
+                ("VOICEBOT_CONFIG_FILE", Some(pro_toml.to_str().unwrap())),
+                ("VOICEBOT_ENV", Some("pro")),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.db_path, "data/pro/voicebot.db");
+                assert_eq!(config.s_dream_jsonl_dir, "data/pro/archives");
+                assert_eq!(config.speaker_enrollment_path, "data/pro/speaker.emb");
+                assert_eq!(config.ws_port, Some(9090u16));
+                assert_eq!(config.llm_max_tokens, 1024);
+            },
+        );
+    }
+
+    #[test]
+    fn dev_config_file_loads_with_dev_paths() {
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let dev_toml = project_root.join("voicebot.dev.toml");
+
+        temp_env::with_vars(
+            [
+                ("VOICEBOT_CONFIG_FILE", Some(dev_toml.to_str().unwrap())),
+                ("VOICEBOT_ENV", Some("dev")),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.db_path, "data/dev/voicebot.db");
+                assert_eq!(config.s_dream_jsonl_dir, "data/dev/archives");
+                assert_eq!(config.speaker_enrollment_path, "data/dev/speaker.emb");
+                assert_eq!(config.ws_port, Some(9091u16));
+                assert_eq!(config.llm_max_tokens, 2048);
+            },
+        );
+    }
+
+    #[test]
+    fn config_file_override_takes_precedence_over_env_specific_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "voicebot-test-env-override-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(
+            &path,
+            r#"
+ws_port = 12345
+llm_max_tokens = 9999
+"#,
+        )
+        .unwrap();
+
+        temp_env::with_vars(
+            [
+                ("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap())),
+                ("VOICEBOT_ENV", Some("dev")),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.ws_port, Some(12345u16));
+                assert_eq!(config.llm_max_tokens, 9999);
+                assert_eq!(config.sample_rate, 16000);
+                assert_eq!(config.language, "es");
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn from_env_defaults_to_pro_on_invalid_voicebot_env() {
+        temp_env::with_vars(
+            [
+                ("VOICEBOT_ENV", Some("staging")),
+                ("VOICEBOT_CONFIG_FILE", None::<&str>),
+            ],
+            || {
+                let config = Config::from_env()
+                    .expect("invalid VOICEBOT_ENV should default to pro, not error");
+                assert_eq!(config.db_path, "data/pro/voicebot.db");
+                assert_eq!(config.s_dream_jsonl_dir, "data/pro/archives");
+            },
+        );
     }
 }

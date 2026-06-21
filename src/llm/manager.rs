@@ -3,6 +3,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+use crate::config::Config;
+
 const MAX_RESTARTS: u32 = 3;
 const READY_POLL_INTERVAL_MS: u64 = 1000;
 const READY_TIMEOUT_SECS: u64 = 120;
@@ -81,10 +83,11 @@ fn spawn_process(command: &str) -> Result<Child> {
     let program = parts.first().context("LLM_COMMAND is empty")?;
     let args = &parts[1..];
 
+    let log_path = Config::log_file_path();
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("voicebot.log")
+        .open(&log_path)
         .map(std::process::Stdio::from)
         .unwrap_or_else(|_| std::process::Stdio::null());
 

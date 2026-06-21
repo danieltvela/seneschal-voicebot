@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::Tool;
 use crate::agents::{AcpSessionManager, AgentConfig, ProactiveEvent};
-use crate::config::HermesSessionViewerMode;
+use crate::config::{Config, HermesSessionViewerMode};
 
 use crate::llm::{LlmProvider, Message};
 
@@ -687,10 +687,11 @@ impl AcpWriter {
             .ok_or_else(|| anyhow::anyhow!("ACP: AGENT_ACP_COMMAND is empty"))?;
         let args = &parts[1..];
 
+        let log_path = Config::log_file_path();
         let stderr_sink = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("voicebot.log")
+            .open(&log_path)
             .map(std::process::Stdio::from)
             .unwrap_or_else(|_| std::process::Stdio::null());
 

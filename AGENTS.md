@@ -148,14 +148,28 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 
 ## Config File
 
-Default configuration values live in `voicebot.toml` at the project root. The file is also embedded into the binary, so a missing local file falls back to the compiled defaults.
+Default configuration values live in `voicebot.pro.toml` (PRO) or `voicebot.dev.toml` (DEV), selected by the `VOICEBOT_ENV` environment variable. The file is also embedded into the binary, so a missing local file falls back to the compiled defaults.
 
 Precedence (highest first):
 1. Environment variables (existing names unchanged)
-2. External config file (`voicebot.toml` in the current directory, or the path in `VOICEBOT_CONFIG_FILE`)
-3. Embedded default config
+2. Explicit config file path (`VOICEBOT_CONFIG_FILE`)
+3. Environment-specific config file (`voicebot.{env}.toml` in the current directory)
+4. Embedded default config
 
 Use `VOICEBOT_CONFIG_FILE=/path/to/custom.toml` to load an alternate file. Partial files are merged with embedded defaults, so only changed values need to be specified.
+
+### Migration from single-voicebot.toml
+
+If you have an existing `data/voicebot.db`, manually move it to `data/pro/voicebot.db`:
+
+```bash
+mkdir -p data/pro
+mv data/voicebot.db data/pro/voicebot.db
+mv data/archives data/pro/archives  # if exists
+mv data/speaker.emb data/pro/speaker.emb  # if exists
+```
+
+Rename your `voicebot.toml` to `voicebot.pro.toml` and update data paths to `data/pro/`.
 
 ---
 
@@ -165,6 +179,7 @@ Read from `.env` (dotenvy loads automatically):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `VOICEBOT_ENV` | `pro` | Environment: pro (default) or dev. Selects voicebot.{env}.toml and data/{env}/ paths. |
 | `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
 | `AUDIO_CHANNELS` | `1` | Audio channels |
 | `VOICEBOT_LANGUAGE` | `es` | Language (`es` or `en`) |
@@ -187,7 +202,7 @@ Read from `.env` (dotenvy loads automatically):
 | `S_DREAM_IDLE_THRESHOLD_SECS` | `600` | Idle seconds before consolidation triggers |
 | `S_DREAM_SCHEDULED_HOUR` | `3` | Scheduled daily hour (0-23); set empty to disable |
 | `S_DREAM_L2_MIN_MESSAGES` | `50` | Min L2 messages before consolidation triggers |
-| `S_DREAM_JSONL_DIR` | `data/archives` | Directory for archived JSONL consolidation files |
+| `S_DREAM_JSONL_DIR` | `data/{env}/archives` | Directory for archived JSONL consolidation files (default: data/{env}/archives) |
 
 ---
 

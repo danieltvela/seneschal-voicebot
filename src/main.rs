@@ -46,7 +46,7 @@ use crate::audio::audio_transform::resample_nearest;
 use crate::audio::buffer::AudioBuffer;
 use crate::audio::output::AudioOutput;
 use crate::audio::speaker::SpeakerVerifier;
-use crate::config::Config;
+use crate::config::{Config, VoicebotEnv};
 use crate::db::{Database, Memory};
 use crate::dream::{SDreamConfig, SDreamDaemon};
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
@@ -114,10 +114,15 @@ async fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
+    let active_env = VoicebotEnv::from_env_var();
+
     #[cfg(feature = "tui")]
     {
-        let log_file =
-            std::fs::File::create("voicebot.log").expect("failed to create voicebot.log");
+        let log_path = Config::log_file_path();
+        let log_file = std::fs::File::create(&log_path)
+            .unwrap_or_else(|e| panic!("failed to create {}: {e}", log_path));
         tracing_subscriber::fmt()
             .with_env_filter(
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -133,8 +138,7 @@ async fn async_main() -> Result<()> {
         )
         .init();
 
-    dotenvy::dotenv().ok();
-
+    info!(target: "voicebot", "Active environment: {}", active_env.as_str());
     info!(target: "voicebot", "Starting voicebot...");
     let mut config = Config::from_env()?;
 

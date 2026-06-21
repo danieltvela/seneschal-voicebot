@@ -1,4 +1,4 @@
-# Voicebot default configuration.
+# Voicebot PRO environment configuration.
 # This file is compiled into the binary as the fallback default source.
 # Environment variables override any value defined here.
 # Use VOICEBOT_CONFIG_FILE to point to an alternative file.
@@ -94,7 +94,7 @@ web_search_enabled = true
 # ── Speaker verification ──────────────────────────────────────────────────────
 # speaker_model defaults to None at runtime; the env override checks whether
 # models/speaker_embedding.onnx exists when no value is configured.
-speaker_enrollment_path = "data/speaker.emb"
+speaker_enrollment_path = "data/pro/speaker.emb"
 speaker_similarity_min = 0.45
 
 # ── Conversation mode ─────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ mcp_tool_timeout_secs = 30
 llm_self_managed = false
 
 # ── Persistence ───────────────────────────────────────────────────────────────
-db_path = "data/voicebot.db"
+db_path = "data/pro/voicebot.db"
 
 # ── Hermes ACP session log viewer ─────────────────────────────────────────────
 hermes_session_viewer = "off"
@@ -125,4 +125,7 @@ s_dream_on_idle = true
 s_dream_idle_threshold_secs = 600
 s_dream_scheduled_hour = 3
 s_dream_l2_min_messages = 50
-s_dream_jsonl_dir = "data/archives"
+s_dream_jsonl_dir = "data/pro/archives"
+
+# ── Remote device (WebSocket) ─────────────────────────────────────────────────
+ws_port = 9090
