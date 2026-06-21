@@ -1,8 +1,14 @@
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::env;
+use std::path::PathBuf;
+
+/// Embedded default configuration. Keep `voicebot.toml` in sync with this constant.
+const DEFAULT_CONFIG_TOML: &str = include_str!("../voicebot.toml");
 
 /// Mode for the Hermes ACP session log viewer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HermesSessionViewerMode {
     #[default]
     Off,
@@ -21,7 +27,7 @@ impl std::str::FromStr for HermesSessionViewerMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct Config {
     // ── Audio input ──────────────────────────────────────────────────────────
@@ -300,360 +306,422 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let config = Self {
-            // Audio
-            sample_rate: env::var("AUDIO_SAMPLE_RATE")
-                .unwrap_or_else(|_| "16000".to_string())
-                .parse()
-                .context("Invalid AUDIO_SAMPLE_RATE")?,
-            channels: env::var("AUDIO_CHANNELS")
-                .unwrap_or_else(|_| "1".to_string())
-                .parse()
-                .context("Invalid AUDIO_CHANNELS")?,
-            chunk_ms: env::var("AUDIO_CHUNK_MS")
-                .unwrap_or_else(|_| "100".to_string())
-                .parse()
-                .context("Invalid AUDIO_CHUNK_MS")?,
-            audio_input_device: env::var("AUDIO_INPUT_DEVICE").ok(),
-            audio_output_device: env::var("AUDIO_OUTPUT_DEVICE").ok(),
-            list_devices: env::var("LIST_AUDIO_DEVICES")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
-            list_voices: env::var("LIST_VOICES")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
+        let mut config = Self::load_defaults()?;
+        config.apply_env_overrides()?;
+        Ok(config)
+    }
 
-            // VAD
-            vad_silence_ms: env::var("VAD_SILENCE_MS")
-                .unwrap_or_else(|_| "300".to_string())
-                .parse()
-                .context("Invalid VAD_SILENCE_MS")?,
-            vad_start_threshold: env::var("VAD_START_THRESHOLD")
-                .or_else(|_| env::var("VAD_THRESHOLD"))
-                .unwrap_or_else(|_| "0.65".to_string())
-                .parse()
-                .context("Invalid VAD_START_THRESHOLD")?,
-            vad_end_threshold: env::var("VAD_END_THRESHOLD")
-                .unwrap_or_else(|_| "0.45".to_string())
-                .parse()
-                .context("Invalid VAD_END_THRESHOLD")?,
-            vad_model: env::var("VAD_MODEL")
-                .unwrap_or_else(|_| "models/ggml-silero-vad.bin".to_string()),
+    fn load_defaults() -> Result<Self> {
+        let embedded: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML)
+            .context("Failed to parse embedded default config")?;
 
-            // Language
-            language: env::var("VOICEBOT_LANGUAGE").unwrap_or_else(|_| "es".to_string()),
+        if let Some(path) = Self::resolve_config_path() {
+            let contents = std::fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read config file {}", path.display()))?;
+            let user: toml::Value = toml::from_str(&contents)
+                .with_context(|| format!("Failed to parse config file {}", path.display()))?;
+            let merged = Self::merge_toml(embedded, user);
+            return merged.try_into::<Self>().with_context(|| {
+                format!(
+                    "Failed to deserialize merged config from {}",
+                    path.display()
+                )
+            });
+        }
 
-            // STT
-            stt_provider: env::var("STT_PROVIDER")
-                .unwrap_or_else(|_| "whisper".to_string())
-                .to_lowercase(),
-            whisper_model: env::var("WHISPER_MODEL")
-                .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string()),
-            parakeet_model_dir: env::var("PARAKEET_MODEL_DIR").ok(),
-            whisper_threads: env::var("WHISPER_THREADS")
-                .unwrap_or_else(|_| "0".to_string())
-                .parse()
-                .context("Invalid WHISPER_THREADS")?,
-            // A1 Conservative Early Reuse (reserved for future use)
-            stt_early_reuse_enabled: env::var("STT_EARLY_REUSE_ENABLED")
-                .unwrap_or_else(|_| "false".to_string())
-                .parse()
-                .context("Invalid STT_EARLY_REUSE_ENABLED")?,
-            stt_early_min_tokens: env::var("STT_EARLY_MIN_TOKENS")
-                .unwrap_or_else(|_| "6".to_string())
-                .parse()
-                .context("Invalid STT_EARLY_MIN_TOKENS")?,
-            stt_early_require_punctuation: env::var("STT_EARLY_REQUIRE_PUNCTUATION")
-                .unwrap_or_else(|_| "true".to_string())
-                .parse()
-                .context("Invalid STT_EARLY_REQUIRE_PUNCTUATION")?,
+        embedded
+            .try_into::<Self>()
+            .context("Failed to deserialize embedded default config")
+    }
 
-            // LLM
-            llm_provider: env::var("LLM_PROVIDER").unwrap_or_else(|_| "openai".to_string()),
-            llm_url: env::var("LLM_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
-            llm_api_key: env::var("LLM_API_KEY").unwrap_or_default(),
-            llm_model: env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string()),
-            llm_max_tokens: env::var("LLM_MAX_TOKENS")
-                .unwrap_or_else(|_| "1024".to_string())
-                .parse()
-                .context("Invalid LLM_MAX_TOKENS")?,
-            llm_system_prompt: env::var("LLM_SYSTEM_PROMPT").unwrap_or_else(|_| {
-                "Eres un asistente de voz útil y conciso. \
-                 Responde siempre en el mismo idioma que el usuario. \
-                 Habla de forma natural y directa, sin listas ni formato markdown. \
-                 Empieza siempre con la respuesta directa, sin preámbulos. \
-                 Por defecto, limita tus respuestas a 2-3 frases cortas. \
-                 Si el usuario pide expresamente más detalle, una explicación completa \
-                 o un resumen extenso, responde con la profundidad necesaria."
-                    .to_string()
-            }),
-            llm_temperature: env::var("LLM_TEMPERATURE")
-                .unwrap_or_else(|_| "0.3".to_string())
-                .parse()
-                .context("Invalid LLM_TEMPERATURE")?,
+    fn resolve_config_path() -> Option<PathBuf> {
+        if let Ok(path) = env::var("VOICEBOT_CONFIG_FILE") {
+            return Some(PathBuf::from(path));
+        }
+        let cwd_config = PathBuf::from("voicebot.toml");
+        if cwd_config.exists() {
+            return Some(cwd_config);
+        }
+        None
+    }
 
-            // TTS
-            tts_provider: env::var("TTS_PROVIDER").unwrap_or_else(|_| "avspeech".to_string()),
-            avspeech_voice: env::var("AVSPEECH_VOICE")
-                .unwrap_or_else(|_| "Jorge (Enhanced)".to_string()),
-            avspeech_rate: env::var("AVSPEECH_RATE")
-                .unwrap_or_else(|_| "0.55".to_string())
-                .parse()
-                .context("Invalid AVSPEECH_RATE")?,
-            kokoro_model: env::var("KOKORO_MODEL")
-                .unwrap_or_else(|_| "models/kokoro-v1.0.onnx".to_string()),
-            kokoro_voices: env::var("KOKORO_VOICES")
-                .unwrap_or_else(|_| "models/voices-v1.0.bin".to_string()),
-            kokoro_voice: env::var("KOKORO_VOICE").unwrap_or_else(|_| "af_bella".to_string()),
-            kokoro_language: env::var("KOKORO_LANGUAGE").unwrap_or_else(|_| "en-us".to_string()),
-
-            // Context consolidation
-            llm_context_tokens: env::var("LLM_CONTEXT_TOKENS")
-                .unwrap_or_else(|_| "8192".to_string())
-                .parse()
-                .context("Invalid LLM_CONTEXT_TOKENS")?,
-            llm_summary_keep_turns: env::var("LLM_SUMMARY_KEEP_TURNS")
-                .unwrap_or_else(|_| "6".to_string())
-                .parse()
-                .context("Invalid LLM_SUMMARY_KEEP_TURNS")?,
-            llm_consolidation_threshold_pct: env::var("LLM_CONSOLIDATION_THRESHOLD_PCT")
-                .unwrap_or_else(|_| "80".to_string())
-                .parse()
-                .context("Invalid LLM_CONSOLIDATION_THRESHOLD_PCT")?,
-            llm_idle_consolidation_secs: env::var("LLM_IDLE_CONSOLIDATION_SECS")
-                .unwrap_or_else(|_| "900".to_string())
-                .parse()
-                .context("Invalid LLM_IDLE_CONSOLIDATION_SECS")?,
-            llm_idle_min_context_pct: env::var("LLM_IDLE_MIN_CONTEXT_PCT")
-                .unwrap_or_else(|_| "20".to_string())
-                .parse()
-                .context("Invalid LLM_IDLE_MIN_CONTEXT_PCT")?,
-            llm_history_load_limit: env::var("LLM_HISTORY_LOAD_LIMIT")
-                .unwrap_or_else(|_| "0".to_string())
-                .parse()
-                .context("Invalid LLM_HISTORY_LOAD_LIMIT")?,
-
-            // Agent delegation
-            agent_command: env::var("AGENT_COMMAND").ok(),
-            agent_timeout_secs: env::var("AGENT_TIMEOUT_SECS")
-                .unwrap_or_else(|_| "120".to_string())
-                .parse()
-                .context("Invalid AGENT_TIMEOUT_SECS")?,
-            agent_mode: env::var("AGENT_MODE").unwrap_or_else(|_| "cli".to_string()),
-            agent_acp_command: env::var("AGENT_ACP_COMMAND")
-                .unwrap_or_else(|_| "hermes acp".to_string()),
-            agent_acp_warmup: env::var("AGENT_ACP_WARMUP").as_deref() == Ok("1"),
-            agent_acp_keepalive_enabled: {
-                let warmup = env::var("AGENT_ACP_WARMUP").as_deref() == Ok("1");
-                env::var("AGENT_ACP_KEEPALIVE_ENABLED")
-                    .map(|v| v == "1" || v.to_lowercase() == "true")
-                    .unwrap_or(warmup)
-            },
-            agent_acp_keepalive_interval_secs: env::var("AGENT_ACP_KEEPALIVE_INTERVAL_SECS")
-                .unwrap_or_else(|_| "300".to_string())
-                .parse()
-                .context("Invalid AGENT_ACP_KEEPALIVE_INTERVAL_SECS")?,
-            agent_acp_warmup_timeout_secs: env::var("AGENT_ACP_WARMUP_TIMEOUT_SECS")
-                .unwrap_or_else(|_| "10".to_string())
-                .parse()
-                .context("Invalid AGENT_ACP_WARMUP_TIMEOUT_SECS")?,
-            agent_acp_restart_backoff_secs: env::var("AGENT_ACP_RESTART_BACKOFF_SECS")
-                .unwrap_or_else(|_| "2".to_string())
-                .parse()
-                .context("Invalid AGENT_ACP_RESTART_BACKOFF_SECS")?,
-            agent_acp_restart_max_backoff_secs: env::var("AGENT_ACP_RESTART_MAX_BACKOFF_SECS")
-                .unwrap_or_else(|_| "60".to_string())
-                .parse()
-                .context("Invalid AGENT_ACP_RESTART_MAX_BACKOFF_SECS")?,
-
-            // Inference daemon
-            daemon_enabled: env::var("DAEMON_ENABLED")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
-            daemon_interval_secs: env::var("DAEMON_INTERVAL_SECS")
-                .unwrap_or_else(|_| "300".to_string())
-                .parse()
-                .context("Invalid DAEMON_INTERVAL_SECS")?,
-
-            // EYES
-            eyes_interval_secs: env::var("EYES_INTERVAL_SECS")
-                .unwrap_or_else(|_| "0".to_string())
-                .parse()
-                .context("Invalid EYES_INTERVAL_SECS")?,
-
-            // Secondary LLM
-            secondary_llm_url: env::var("SECONDARY_LLM_URL").ok(),
-            secondary_llm_model: env::var("SECONDARY_LLM_MODEL")
-                .unwrap_or_else(|_| "local-model".to_string()),
-            secondary_llm_max_tokens: env::var("SECONDARY_LLM_MAX_TOKENS")
-                .unwrap_or_else(|_| "1024".to_string())
-                .parse()
-                .context("Invalid SECONDARY_LLM_MAX_TOKENS")?,
-            secondary_llm_api_key: env::var("SECONDARY_LLM_API_KEY").unwrap_or_default(),
-            secondary_llm_thinking: env::var("SECONDARY_LLM_THINKING")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
-
-            // Shell tool
-            shell_enabled: env::var("SHELL_ENABLED")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
-            shell_timeout_secs: env::var("SHELL_TIMEOUT_SECS")
-                .unwrap_or_else(|_| "30".to_string())
-                .parse()
-                .context("Invalid SHELL_TIMEOUT_SECS")?,
-
-            // Web Search (native API providers)
-            tavily_api_key: env::var("TAVILY_API_KEY").ok(),
-            tavily_max_tokens: env::var("TAVILY_MAX_TOKENS")
-                .unwrap_or_else(|_| "512".to_string())
-                .parse()
-                .context("Invalid TAVILY_MAX_TOKENS")?,
-            exa_api_key: env::var("EXA_API_KEY").ok(),
-
-            // Web Search (SearXNG)
-            searxng_url: env::var("SEARXNG_URL").ok(),
-            searxng_secret: env::var("SEARXNG_SECRET").unwrap_or_default(),
-            web_search_enabled: env::var("WEB_SEARCH_ENABLED")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(true),
-
-            // Speaker verification
-            speaker_model: {
-                let default = "models/speaker_embedding.onnx";
-                match env::var("SPEAKER_MODEL") {
-                    Ok(v) => Some(v),
-                    Err(_) => {
-                        if std::path::Path::new(default).exists() {
-                            Some(default.into())
-                        } else {
-                            None
-                        }
-                    }
+    fn merge_toml(base: toml::Value, overlay: toml::Value) -> toml::Value {
+        match (base, overlay) {
+            (toml::Value::Table(mut base_table), toml::Value::Table(overlay_table)) => {
+                for (key, value) in overlay_table {
+                    let entry = base_table
+                        .entry(key)
+                        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                    *entry = Self::merge_toml(entry.clone(), value);
                 }
-            },
-            speaker_enrollment_path: env::var("SPEAKER_ENROLLMENT_PATH")
-                .unwrap_or_else(|_| "data/speaker.emb".to_string()),
-            speaker_similarity_min: env::var("SPEAKER_SIMILARITY_MIN")
-                .unwrap_or_else(|_| "0.45".to_string())
+                toml::Value::Table(base_table)
+            }
+            (_, overlay) => overlay,
+        }
+    }
+
+    fn apply_env_overrides(&mut self) -> Result<()> {
+        // Audio
+        if let Ok(v) = env::var("AUDIO_SAMPLE_RATE") {
+            self.sample_rate = v.parse().context("Invalid AUDIO_SAMPLE_RATE")?;
+        }
+        if let Ok(v) = env::var("AUDIO_CHANNELS") {
+            self.channels = v.parse().context("Invalid AUDIO_CHANNELS")?;
+        }
+        if let Ok(v) = env::var("AUDIO_CHUNK_MS") {
+            self.chunk_ms = v.parse().context("Invalid AUDIO_CHUNK_MS")?;
+        }
+        if let Ok(v) = env::var("AUDIO_INPUT_DEVICE") {
+            self.audio_input_device = Some(v);
+        }
+        if let Ok(v) = env::var("AUDIO_OUTPUT_DEVICE") {
+            self.audio_output_device = Some(v);
+        }
+        if let Ok(v) = env::var("LIST_AUDIO_DEVICES") {
+            self.list_devices = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("LIST_VOICES") {
+            self.list_voices = v == "1" || v.to_lowercase() == "true";
+        }
+
+        // VAD
+        if let Ok(v) = env::var("VAD_START_THRESHOLD") {
+            self.vad_start_threshold = v.parse().context("Invalid VAD_START_THRESHOLD")?;
+        } else if let Ok(v) = env::var("VAD_THRESHOLD") {
+            self.vad_start_threshold = v.parse().context("Invalid VAD_THRESHOLD")?;
+        }
+        if let Ok(v) = env::var("VAD_END_THRESHOLD") {
+            self.vad_end_threshold = v.parse().context("Invalid VAD_END_THRESHOLD")?;
+        }
+        if let Ok(v) = env::var("VAD_SILENCE_MS") {
+            self.vad_silence_ms = v.parse().context("Invalid VAD_SILENCE_MS")?;
+        }
+        if let Ok(v) = env::var("VAD_MODEL") {
+            self.vad_model = v;
+        }
+
+        // Language
+        if let Ok(v) = env::var("VOICEBOT_LANGUAGE") {
+            self.language = v;
+        }
+
+        // STT
+        if let Ok(v) = env::var("STT_PROVIDER") {
+            self.stt_provider = v.to_lowercase();
+        }
+        if let Ok(v) = env::var("WHISPER_MODEL") {
+            self.whisper_model = v;
+        }
+        if let Ok(v) = env::var("PARAKEET_MODEL_DIR") {
+            self.parakeet_model_dir = Some(v);
+        }
+        if let Ok(v) = env::var("WHISPER_THREADS") {
+            self.whisper_threads = v.parse().context("Invalid WHISPER_THREADS")?;
+        }
+        if let Ok(v) = env::var("STT_EARLY_REUSE_ENABLED") {
+            self.stt_early_reuse_enabled = v.parse().context("Invalid STT_EARLY_REUSE_ENABLED")?;
+        }
+        if let Ok(v) = env::var("STT_EARLY_MIN_TOKENS") {
+            self.stt_early_min_tokens = v.parse().context("Invalid STT_EARLY_MIN_TOKENS")?;
+        }
+        if let Ok(v) = env::var("STT_EARLY_REQUIRE_PUNCTUATION") {
+            self.stt_early_require_punctuation =
+                v.parse().context("Invalid STT_EARLY_REQUIRE_PUNCTUATION")?;
+        }
+
+        // LLM
+        if let Ok(v) = env::var("LLM_PROVIDER") {
+            self.llm_provider = v;
+        }
+        if let Ok(v) = env::var("LLM_URL") {
+            self.llm_url = v;
+        }
+        if let Ok(v) = env::var("LLM_API_KEY") {
+            self.llm_api_key = v;
+        }
+        if let Ok(v) = env::var("LLM_MODEL") {
+            self.llm_model = v;
+        }
+        if let Ok(v) = env::var("LLM_MAX_TOKENS") {
+            self.llm_max_tokens = v.parse().context("Invalid LLM_MAX_TOKENS")?;
+        }
+        if let Ok(v) = env::var("LLM_SYSTEM_PROMPT") {
+            self.llm_system_prompt = v;
+        }
+        if let Ok(v) = env::var("LLM_TEMPERATURE") {
+            self.llm_temperature = v.parse().context("Invalid LLM_TEMPERATURE")?;
+        }
+
+        // TTS
+        if let Ok(v) = env::var("TTS_PROVIDER") {
+            self.tts_provider = v;
+        }
+        if let Ok(v) = env::var("AVSPEECH_VOICE") {
+            self.avspeech_voice = v;
+        }
+        if let Ok(v) = env::var("AVSPEECH_RATE") {
+            self.avspeech_rate = v.parse().context("Invalid AVSPEECH_RATE")?;
+        }
+        if let Ok(v) = env::var("KOKORO_MODEL") {
+            self.kokoro_model = v;
+        }
+        if let Ok(v) = env::var("KOKORO_VOICES") {
+            self.kokoro_voices = v;
+        }
+        if let Ok(v) = env::var("KOKORO_VOICE") {
+            self.kokoro_voice = v;
+        }
+        if let Ok(v) = env::var("KOKORO_LANGUAGE") {
+            self.kokoro_language = v;
+        }
+
+        // Context consolidation
+        if let Ok(v) = env::var("LLM_CONTEXT_TOKENS") {
+            self.llm_context_tokens = v.parse().context("Invalid LLM_CONTEXT_TOKENS")?;
+        }
+        if let Ok(v) = env::var("LLM_SUMMARY_KEEP_TURNS") {
+            self.llm_summary_keep_turns = v.parse().context("Invalid LLM_SUMMARY_KEEP_TURNS")?;
+        }
+        if let Ok(v) = env::var("LLM_CONSOLIDATION_THRESHOLD_PCT") {
+            self.llm_consolidation_threshold_pct = v
                 .parse()
-                .context("Invalid SPEAKER_SIMILARITY_MIN")?,
+                .context("Invalid LLM_CONSOLIDATION_THRESHOLD_PCT")?;
+        }
+        if let Ok(v) = env::var("LLM_IDLE_CONSOLIDATION_SECS") {
+            self.llm_idle_consolidation_secs =
+                v.parse().context("Invalid LLM_IDLE_CONSOLIDATION_SECS")?;
+        }
+        if let Ok(v) = env::var("LLM_IDLE_MIN_CONTEXT_PCT") {
+            self.llm_idle_min_context_pct =
+                v.parse().context("Invalid LLM_IDLE_MIN_CONTEXT_PCT")?;
+        }
+        if let Ok(v) = env::var("LLM_HISTORY_LOAD_LIMIT") {
+            self.llm_history_load_limit = v.parse().context("Invalid LLM_HISTORY_LOAD_LIMIT")?;
+        }
 
-            // Conversation mode
-            wake_word: env::var("WAKE_WORD")
-                .unwrap_or_else(|_| "jarvis".to_string())
-                .to_lowercase(),
-            ambient_clear_secs: env::var("AMBIENT_CLEAR_SECS")
-                .unwrap_or_else(|_| "300".to_string())
+        // Agent delegation
+        if let Ok(v) = env::var("AGENT_COMMAND") {
+            self.agent_command = Some(v);
+        }
+        if let Ok(v) = env::var("AGENT_TIMEOUT_SECS") {
+            self.agent_timeout_secs = v.parse().context("Invalid AGENT_TIMEOUT_SECS")?;
+        }
+        if let Ok(v) = env::var("AGENT_MODE") {
+            self.agent_mode = v;
+        }
+        if let Ok(v) = env::var("AGENT_ACP_COMMAND") {
+            self.agent_acp_command = v;
+        }
+        if let Ok(v) = env::var("AGENT_ACP_WARMUP") {
+            self.agent_acp_warmup = v == "1";
+        }
+        if let Ok(v) = env::var("AGENT_ACP_KEEPALIVE_ENABLED") {
+            self.agent_acp_keepalive_enabled = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("AGENT_ACP_KEEPALIVE_INTERVAL_SECS") {
+            self.agent_acp_keepalive_interval_secs = v
                 .parse()
-                .context("Invalid AMBIENT_CLEAR_SECS")?,
-            speaker_ambient_trigger: env::var("SPEAKER_AMBIENT_TRIGGER")
-                .unwrap_or_else(|_| "1".to_string())
+                .context("Invalid AGENT_ACP_KEEPALIVE_INTERVAL_SECS")?;
+        }
+        if let Ok(v) = env::var("AGENT_ACP_WARMUP_TIMEOUT_SECS") {
+            self.agent_acp_warmup_timeout_secs =
+                v.parse().context("Invalid AGENT_ACP_WARMUP_TIMEOUT_SECS")?;
+        }
+        if let Ok(v) = env::var("AGENT_ACP_RESTART_BACKOFF_SECS") {
+            self.agent_acp_restart_backoff_secs = v
                 .parse()
-                .context("Invalid SPEAKER_AMBIENT_TRIGGER")?,
-
-            // Ambient context buffer
-            speaker_max_profiles: env::var("SPEAKER_MAX_PROFILES")
-                .unwrap_or_else(|_| "5".to_string())
+                .context("Invalid AGENT_ACP_RESTART_BACKOFF_SECS")?;
+        }
+        if let Ok(v) = env::var("AGENT_ACP_RESTART_MAX_BACKOFF_SECS") {
+            self.agent_acp_restart_max_backoff_secs = v
                 .parse()
-                .context("Invalid SPEAKER_MAX_PROFILES")?,
-            ambient_buffer_minutes: env::var("AMBIENT_BUFFER_MINUTES")
-                .unwrap_or_else(|_| "3".to_string())
-                .parse()
-                .context("Invalid AMBIENT_BUFFER_MINUTES")?,
-            ambient_buffer_max_entries: env::var("AMBIENT_BUFFER_MAX_ENTRIES")
-                .unwrap_or_else(|_| "30".to_string())
-                .parse()
-                .context("Invalid AMBIENT_BUFFER_MAX_ENTRIES")?,
+                .context("Invalid AGENT_ACP_RESTART_MAX_BACKOFF_SECS")?;
+        }
 
-            // MCP
-            mcp_command: env::var("MCP_COMMAND").ok(),
-            mcp_tool_timeout_secs: env::var("MCP_TOOL_TIMEOUT_SECS")
-                .unwrap_or_else(|_| "30".to_string())
-                .parse()
-                .context("Invalid MCP_TOOL_TIMEOUT_SECS")?,
+        // Inference daemon
+        if let Ok(v) = env::var("DAEMON_ENABLED") {
+            self.daemon_enabled = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("DAEMON_INTERVAL_SECS") {
+            self.daemon_interval_secs = v.parse().context("Invalid DAEMON_INTERVAL_SECS")?;
+        }
 
-            // Remote device (WebSocket)
-            ws_port: env::var("WS_PORT")
-                .ok()
-                .map(|v| v.parse::<u16>())
-                .transpose()
-                .context("Invalid WS_PORT")?,
+        // EYES
+        if let Ok(v) = env::var("EYES_INTERVAL_SECS") {
+            self.eyes_interval_secs = v.parse().context("Invalid EYES_INTERVAL_SECS")?;
+        }
 
-            #[cfg(feature = "control")]
-            control_port: env::var("CONTROL_PORT")
-                .ok()
-                .map(|v| v.parse::<u16>())
-                .transpose()
-                .context("Invalid CONTROL_PORT")?,
+        // Secondary LLM
+        if let Ok(v) = env::var("SECONDARY_LLM_URL") {
+            self.secondary_llm_url = Some(v);
+        }
+        if let Ok(v) = env::var("SECONDARY_LLM_MODEL") {
+            self.secondary_llm_model = v;
+        }
+        if let Ok(v) = env::var("SECONDARY_LLM_MAX_TOKENS") {
+            self.secondary_llm_max_tokens =
+                v.parse().context("Invalid SECONDARY_LLM_MAX_TOKENS")?;
+        }
+        if let Ok(v) = env::var("SECONDARY_LLM_API_KEY") {
+            self.secondary_llm_api_key = v;
+        }
+        if let Ok(v) = env::var("SECONDARY_LLM_THINKING") {
+            self.secondary_llm_thinking = v == "1" || v.to_lowercase() == "true";
+        }
 
-            // Self-managed LLM process
-            llm_self_managed: env::var("LLM_SELF_MANAGED")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
-            llm_command: env::var("LLM_COMMAND").ok(),
+        // Shell tool
+        if let Ok(v) = env::var("SHELL_ENABLED") {
+            self.shell_enabled = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("SHELL_TIMEOUT_SECS") {
+            self.shell_timeout_secs = v.parse().context("Invalid SHELL_TIMEOUT_SECS")?;
+        }
 
-            // DB
-            db_path: env::var("DB_PATH").unwrap_or_else(|_| "data/voicebot.db".to_string()),
+        // Web Search (native API providers)
+        if let Ok(v) = env::var("TAVILY_API_KEY") {
+            self.tavily_api_key = Some(v);
+        }
+        if let Ok(v) = env::var("TAVILY_MAX_TOKENS") {
+            self.tavily_max_tokens = v.parse().context("Invalid TAVILY_MAX_TOKENS")?;
+        }
+        if let Ok(v) = env::var("EXA_API_KEY") {
+            self.exa_api_key = Some(v);
+        }
 
-            // Hermes ACP session log viewer
-            hermes_session_viewer: env::var("HERMES_SESSION_VIEWER")
-                .ok()
-                .and_then(|v| v.parse::<HermesSessionViewerMode>().ok())
-                .unwrap_or(HermesSessionViewerMode::Off),
+        // Web Search (SearXNG)
+        if let Ok(v) = env::var("SEARXNG_URL") {
+            self.searxng_url = Some(v);
+        }
+        if let Ok(v) = env::var("SEARXNG_SECRET") {
+            self.searxng_secret = v;
+        }
+        if let Ok(v) = env::var("WEB_SEARCH_ENABLED") {
+            self.web_search_enabled = v == "1" || v.to_lowercase() == "true";
+        }
 
-            // Cold Path Memory (S-DREAM)
-            s_dream_interval_secs: env::var("S_DREAM_INTERVAL_SECS")
-                .unwrap_or_else(|_| "3600".to_string())
-                .parse()
-                .context("Invalid S_DREAM_INTERVAL_SECS")?,
-            s_dream_on_idle: env::var("S_DREAM_ON_IDLE")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(true),
-            s_dream_idle_threshold_secs: env::var("S_DREAM_IDLE_THRESHOLD_SECS")
-                .unwrap_or_else(|_| "600".to_string())
-                .parse()
-                .context("Invalid S_DREAM_IDLE_THRESHOLD_SECS")?,
-            s_dream_scheduled_hour: env::var("S_DREAM_SCHEDULED_HOUR")
-                .ok()
-                .map(|v| v.parse::<u8>())
-                .transpose()
-                .context("Invalid S_DREAM_SCHEDULED_HOUR")?,
-            s_dream_l2_min_messages: env::var("S_DREAM_L2_MIN_MESSAGES")
-                .unwrap_or_else(|_| "50".to_string())
-                .parse()
-                .context("Invalid S_DREAM_L2_MIN_MESSAGES")?,
-            s_dream_jsonl_dir: env::var("S_DREAM_JSONL_DIR")
-                .unwrap_or_else(|_| "data/archives".to_string()),
+        // Speaker verification
+        if let Ok(v) = env::var("SPEAKER_MODEL") {
+            self.speaker_model = Some(v);
+        } else if self.speaker_model.is_none() {
+            let default = "models/speaker_embedding.onnx";
+            if std::path::Path::new(default).exists() {
+                self.speaker_model = Some(default.into());
+            }
+        }
+        if let Ok(v) = env::var("SPEAKER_ENROLLMENT_PATH") {
+            self.speaker_enrollment_path = v;
+        }
+        if let Ok(v) = env::var("SPEAKER_SIMILARITY_MIN") {
+            self.speaker_similarity_min = v.parse().context("Invalid SPEAKER_SIMILARITY_MIN")?;
+        }
 
-            // NOOP tool
-            noop_tool_instructions: env::var("NOOP_TOOL_INSTRUCTIONS").unwrap_or_else(|_| {
-                "Llamar a la herramienta noop cuando el usuario mencione a Siri, Alexa \
-                 u otro asistente de voz, o cuando pida algo que claramente requiere \
-                 otro asistente. La herramienta noop detiene la respuesta actual \
-                 sin output de voz."
-                    .to_string()
-            }),
-        };
+        // Conversation mode
+        if let Ok(v) = env::var("WAKE_WORD") {
+            self.wake_word = v.to_lowercase();
+        }
+        if let Ok(v) = env::var("AMBIENT_CLEAR_SECS") {
+            self.ambient_clear_secs = v.parse().context("Invalid AMBIENT_CLEAR_SECS")?;
+        }
+        if let Ok(v) = env::var("SPEAKER_AMBIENT_TRIGGER") {
+            self.speaker_ambient_trigger = v.parse().context("Invalid SPEAKER_AMBIENT_TRIGGER")?;
+        }
 
-        if config.llm_self_managed && config.llm_command.is_none() {
+        // Ambient context buffer
+        if let Ok(v) = env::var("SPEAKER_MAX_PROFILES") {
+            self.speaker_max_profiles = v.parse().context("Invalid SPEAKER_MAX_PROFILES")?;
+        }
+        if let Ok(v) = env::var("AMBIENT_BUFFER_MINUTES") {
+            self.ambient_buffer_minutes = v.parse().context("Invalid AMBIENT_BUFFER_MINUTES")?;
+        }
+        if let Ok(v) = env::var("AMBIENT_BUFFER_MAX_ENTRIES") {
+            self.ambient_buffer_max_entries =
+                v.parse().context("Invalid AMBIENT_BUFFER_MAX_ENTRIES")?;
+        }
+
+        // MCP
+        if let Ok(v) = env::var("MCP_COMMAND") {
+            self.mcp_command = Some(v);
+        }
+        if let Ok(v) = env::var("MCP_TOOL_TIMEOUT_SECS") {
+            self.mcp_tool_timeout_secs = v.parse().context("Invalid MCP_TOOL_TIMEOUT_SECS")?;
+        }
+
+        // Remote device (WebSocket)
+        if let Ok(v) = env::var("WS_PORT") {
+            self.ws_port = Some(v.parse().context("Invalid WS_PORT")?);
+        }
+
+        #[cfg(feature = "control")]
+        if let Ok(v) = env::var("CONTROL_PORT") {
+            self.control_port = Some(v.parse().context("Invalid CONTROL_PORT")?);
+        }
+
+        // Self-managed LLM process
+        if let Ok(v) = env::var("LLM_SELF_MANAGED") {
+            self.llm_self_managed = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("LLM_COMMAND") {
+            self.llm_command = Some(v);
+        }
+
+        // DB
+        if let Ok(v) = env::var("DB_PATH") {
+            self.db_path = v;
+        }
+
+        // Hermes ACP session log viewer
+        if let Ok(v) = env::var("HERMES_SESSION_VIEWER") {
+            self.hermes_session_viewer = v
+                .parse::<HermesSessionViewerMode>()
+                .unwrap_or(HermesSessionViewerMode::Off);
+        }
+
+        // Cold Path Memory (S-DREAM)
+        if let Ok(v) = env::var("S_DREAM_INTERVAL_SECS") {
+            self.s_dream_interval_secs = v.parse().context("Invalid S_DREAM_INTERVAL_SECS")?;
+        }
+        if let Ok(v) = env::var("S_DREAM_ON_IDLE") {
+            self.s_dream_on_idle = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("S_DREAM_IDLE_THRESHOLD_SECS") {
+            self.s_dream_idle_threshold_secs =
+                v.parse().context("Invalid S_DREAM_IDLE_THRESHOLD_SECS")?;
+        }
+        if let Ok(v) = env::var("S_DREAM_SCHEDULED_HOUR") {
+            self.s_dream_scheduled_hour =
+                Some(v.parse().context("Invalid S_DREAM_SCHEDULED_HOUR")?);
+        }
+        if let Ok(v) = env::var("S_DREAM_L2_MIN_MESSAGES") {
+            self.s_dream_l2_min_messages = v.parse().context("Invalid S_DREAM_L2_MIN_MESSAGES")?;
+        }
+        if let Ok(v) = env::var("S_DREAM_JSONL_DIR") {
+            self.s_dream_jsonl_dir = v;
+        }
+
+        // NOOP tool
+        if let Ok(v) = env::var("NOOP_TOOL_INSTRUCTIONS") {
+            self.noop_tool_instructions = v;
+        }
+
+        // Validation
+        if self.llm_self_managed && self.llm_command.is_none() {
             anyhow::bail!("LLM_COMMAND must be set when LLM_SELF_MANAGED=1");
         }
 
-        if !matches!(config.stt_provider.as_str(), "whisper" | "parakeet") {
+        if !matches!(self.stt_provider.as_str(), "whisper" | "parakeet") {
             anyhow::bail!(
                 "Invalid STT_PROVIDER '{}'. Supported values: whisper, parakeet",
-                config.stt_provider
+                self.stt_provider
             );
         }
 
-        if let Some(hour) = config.s_dream_scheduled_hour
+        if let Some(hour) = self.s_dream_scheduled_hour
             && hour > 23
         {
             anyhow::bail!("Invalid S_DREAM_SCHEDULED_HOUR: {hour}. Must be between 0 and 23.");
         }
 
-        Ok(config)
+        Ok(())
     }
 
     pub fn samples_per_chunk(&self) -> usize {
@@ -895,5 +963,131 @@ mod tests {
                 assert_eq!(config.agent_acp_restart_max_backoff_secs, 120);
             },
         );
+    }
+
+    // ── Config file loading ────────────────────────────────────────────────────
+
+    #[test]
+    fn config_loads_project_defaults_from_file() {
+        // With no env overrides, Config::from_env() should read the project's
+        // voicebot.toml (cwd) and produce the documented defaults.
+        temp_env::with_vars(
+            [
+                ("AUDIO_SAMPLE_RATE", None::<&str>),
+                ("VOICEBOT_LANGUAGE", None::<&str>),
+                ("WHISPER_MODEL", None::<&str>),
+                ("VOICEBOT_CONFIG_FILE", None::<&str>),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.sample_rate, 16000);
+                assert_eq!(config.language, "es");
+                assert_eq!(config.whisper_model, "models/ggml-large-v3-turbo.bin");
+                assert_eq!(config.stt_provider, "whisper");
+            },
+        );
+    }
+
+    #[test]
+    fn env_var_overrides_config_file() {
+        temp_env::with_vars(
+            [
+                ("AUDIO_SAMPLE_RATE", Some("48000")),
+                ("VOICEBOT_LANGUAGE", Some("en")),
+                ("WHISPER_MODEL", Some("custom.bin")),
+                ("VOICEBOT_CONFIG_FILE", None::<&str>),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.sample_rate, 48000);
+                assert_eq!(config.language, "en");
+                assert_eq!(config.whisper_model, "custom.bin");
+            },
+        );
+    }
+
+    #[test]
+    fn custom_config_file_via_env_var() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "voicebot-test-custom-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(
+            &path,
+            r#"
+sample_rate = 48000
+language = "en"
+whisper_model = "custom.bin"
+"#,
+        )
+        .unwrap();
+
+        temp_env::with_vars(
+            [
+                ("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap())),
+                ("AUDIO_SAMPLE_RATE", None::<&str>),
+                ("VOICEBOT_LANGUAGE", None::<&str>),
+                ("WHISPER_MODEL", None::<&str>),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.sample_rate, 48000);
+                assert_eq!(config.language, "en");
+                assert_eq!(config.whisper_model, "custom.bin");
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn partial_config_file_keeps_embedded_defaults() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "voicebot-test-partial-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, "sample_rate = 48000\n").unwrap();
+
+        temp_env::with_vars(
+            [
+                ("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap())),
+                ("AUDIO_SAMPLE_RATE", None::<&str>),
+                ("VOICEBOT_LANGUAGE", None::<&str>),
+                ("WHISPER_MODEL", None::<&str>),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert_eq!(config.sample_rate, 48000);
+                assert_eq!(config.language, "es");
+                assert_eq!(config.whisper_model, "models/ggml-large-v3-turbo.bin");
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn malformed_config_file_returns_error() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "voicebot-test-bad-{}-{:?}.toml",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, "sample_rate = \"not-a-number\"\n").unwrap();
+
+        temp_env::with_var("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap()), || {
+            let result = Config::from_env();
+            assert!(
+                result.is_err(),
+                "malformed config file must produce an error"
+            );
+        });
+
+        std::fs::remove_file(&path).ok();
     }
 }

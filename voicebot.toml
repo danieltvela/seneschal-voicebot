@@ -1,0 +1,128 @@
+# Voicebot default configuration.
+# This file is compiled into the binary as the fallback default source.
+# Environment variables override any value defined here.
+# Use VOICEBOT_CONFIG_FILE to point to an alternative file.
+
+# ── Audio input ───────────────────────────────────────────────────────────────
+sample_rate = 16000
+channels = 1
+chunk_ms = 100
+list_devices = false
+list_voices = false
+
+# ── VAD ───────────────────────────────────────────────────────────────────────
+vad_silence_ms = 300
+vad_start_threshold = 0.65
+vad_end_threshold = 0.45
+vad_model = "models/ggml-silero-vad.bin"
+
+# ── Language ──────────────────────────────────────────────────────────────────
+language = "es"
+
+# ── STT ───────────────────────────────────────────────────────────────────────
+stt_provider = "whisper"
+whisper_model = "models/ggml-large-v3-turbo.bin"
+whisper_threads = 0
+stt_early_reuse_enabled = false
+stt_early_min_tokens = 6
+stt_early_require_punctuation = true
+
+# ── LLM ───────────────────────────────────────────────────────────────────────
+llm_provider = "openai"
+llm_url = "http://127.0.0.1:8000"
+llm_api_key = ""
+llm_model = "local-model"
+llm_max_tokens = 1024
+llm_system_prompt = """Eres un asistente de voz útil y conciso. Responde siempre en el mismo idioma que el usuario. Habla de forma natural y directa, sin listas ni formato markdown. Empieza siempre con la respuesta directa, sin preámbulos. Por defecto, limita tus respuestas a 2-3 frases cortas. Si el usuario pide expresamente más detalle, una explicación completa o un resumen extenso, responde con la profundidad necesaria."""
+llm_temperature = 0.3
+
+# ── TTS ───────────────────────────────────────────────────────────────────────
+tts_provider = "avspeech"
+avspeech_voice = "Jorge (Enhanced)"
+avspeech_rate = 0.55
+kokoro_model = "models/kokoro-v1.0.onnx"
+kokoro_voices = "models/voices-v1.0.bin"
+kokoro_voice = "af_bella"
+kokoro_language = "en-us"
+
+# ── Context consolidation ─────────────────────────────────────────────────────
+llm_context_tokens = 8192
+llm_summary_keep_turns = 6
+llm_consolidation_threshold_pct = 80
+llm_idle_consolidation_secs = 900
+llm_idle_min_context_pct = 20
+llm_history_load_limit = 0
+
+# ── Agent delegation ──────────────────────────────────────────────────────────
+agent_timeout_secs = 120
+agent_mode = "cli"
+agent_acp_command = "hermes acp"
+agent_acp_warmup = false
+agent_acp_keepalive_enabled = false
+agent_acp_keepalive_interval_secs = 300
+agent_acp_warmup_timeout_secs = 10
+agent_acp_restart_backoff_secs = 2
+agent_acp_restart_max_backoff_secs = 60
+
+# ── Inference daemon ──────────────────────────────────────────────────────────
+daemon_enabled = false
+daemon_interval_secs = 300
+
+# ── EYES ──────────────────────────────────────────────────────────────────────
+eyes_interval_secs = 0
+
+# ── Secondary LLM ─────────────────────────────────────────────────────────────
+secondary_llm_model = "local-model"
+secondary_llm_max_tokens = 1024
+secondary_llm_api_key = ""
+secondary_llm_thinking = false
+
+# ── Shell tool ────────────────────────────────────────────────────────────────
+shell_enabled = false
+shell_timeout_secs = 30
+
+# ── NOOP tool ─────────────────────────────────────────────────────────────────
+noop_tool_instructions = """Llamar a la herramienta noop cuando el usuario mencione a Siri, Alexa u otro asistente de voz, o cuando pida algo que claramente requiere otro asistente. La herramienta noop detiene la respuesta actual sin output de voz."""
+
+# ── Web Search (native API providers) ─────────────────────────────────────────
+tavily_max_tokens = 512
+
+# ── Web Search (SearXNG fallback) ─────────────────────────────────────────────
+searxng_secret = ""
+web_search_enabled = true
+
+# ── Speaker verification ──────────────────────────────────────────────────────
+# speaker_model defaults to None at runtime; the env override checks whether
+# models/speaker_embedding.onnx exists when no value is configured.
+speaker_enrollment_path = "data/speaker.emb"
+speaker_similarity_min = 0.45
+
+# ── Conversation mode ─────────────────────────────────────────────────────────
+wake_word = "jarvis"
+ambient_clear_secs = 300
+speaker_ambient_trigger = 3
+
+# ── Ambient context buffer ────────────────────────────────────────────────────
+speaker_max_profiles = 5
+ambient_buffer_minutes = 3
+ambient_buffer_max_entries = 30
+
+# ── MCP ───────────────────────────────────────────────────────────────────────
+mcp_tool_timeout_secs = 30
+
+# ── Self-managed LLM process ──────────────────────────────────────────────────
+llm_self_managed = false
+
+# ── Persistence ───────────────────────────────────────────────────────────────
+db_path = "data/voicebot.db"
+
+# ── Hermes ACP session log viewer ─────────────────────────────────────────────
+hermes_session_viewer = "off"
+
+# ── Cold Path Memory (S-DREAM) ────────────────────────────────────────────────
+s_dream_interval_secs = 3600
+s_dream_on_idle = true
+s_dream_idle_threshold_secs = 600
+s_dream_scheduled_hour = 3
+s_dream_l2_min_messages = 50
+s_dream_jsonl_dir = "data/archives"

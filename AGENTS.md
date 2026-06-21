@@ -146,6 +146,19 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 
 ---
 
+## Config File
+
+Default configuration values live in `voicebot.toml` at the project root. The file is also embedded into the binary, so a missing local file falls back to the compiled defaults.
+
+Precedence (highest first):
+1. Environment variables (existing names unchanged)
+2. External config file (`voicebot.toml` in the current directory, or the path in `VOICEBOT_CONFIG_FILE`)
+3. Embedded default config
+
+Use `VOICEBOT_CONFIG_FILE=/path/to/custom.toml` to load an alternate file. Partial files are merged with embedded defaults, so only changed values need to be specified.
+
+---
+
 ## Environment Variables (critical)
 
 Read from `.env` (dotenvy loads automatically):
