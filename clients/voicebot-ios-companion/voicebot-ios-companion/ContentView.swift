@@ -9,20 +9,30 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = CompanionViewModel()
-    
+
+    private var isConnected: Bool {
+        viewModel.connectionState == .connected || viewModel.connectionState == .connecting
+    }
+
     var body: some View {
-        TabView {
-            ConnectionView()
-                .tabItem {
-                    Label("Connect", systemImage: "wifi")
+        NavigationStack {
+            VStack(spacing: 0) {
+                if isConnected {
+                    ConnectedHeaderView()
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                } else {
+                    ConnectionControlsView()
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
-            
-            ConversationView()
-                .tabItem {
-                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
-                }
+
+                Divider()
+
+                ConversationView()
+            }
+            .animation(.easeInOut(duration: 0.3), value: viewModel.connectionState)
+            .navigationTitle("Voicebot")
+            .environmentObject(viewModel)
         }
-        .environmentObject(viewModel)
     }
 }
 

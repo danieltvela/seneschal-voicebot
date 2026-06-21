@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-struct ConnectionView: View {
+struct ConnectionControlsView: View {
     @EnvironmentObject var vm: CompanionViewModel
     @State private var tempHost = ""
     @State private var tempPort = ""
@@ -37,17 +37,13 @@ struct ConnectionView: View {
             }
 
             Section {
-                Button(vm.connectionState == .connected ? "Disconnect" : "Connect") {
+                Button("Connect") {
                     dismissKeyboard()
                     saveConnectionSettings()
                     vm.selectedHost = tempHost
                     vm.selectedPort = tempPort
                     vm.selectedControlPort = tempControlPort
-                    if vm.connectionState == .connected {
-                        vm.disconnect()
-                    } else {
-                        Task { await vm.connect() }
-                    }
+                    Task { await vm.connect() }
                 }
                 .accessibilityIdentifier("connectButton")
                 .disabled(tempHost.isEmpty)
@@ -61,18 +57,7 @@ struct ConnectionView: View {
                 }
             }
         }
-        .navigationTitle("Voicebot")
         .onAppear(perform: loadConnectionSettings)
-        .onChange(of: vm.connectionState) { _ in
-            switch vm.connectionState {
-            case .connected:
-                tempHost = vm.selectedHost
-                tempPort = vm.selectedPort
-                tempControlPort = vm.selectedControlPort
-            default:
-                break
-            }
-        }
     }
 
     private func loadConnectionSettings() {
@@ -89,6 +74,24 @@ struct ConnectionView: View {
 
     private func dismissKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
+struct ConnectedHeaderView: View {
+    @EnvironmentObject var vm: CompanionViewModel
+
+    var body: some View {
+        HStack {
+            ConnectionStateBadge(state: vm.connectionState)
+            Spacer()
+            Button("Disconnect") {
+                vm.disconnect()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding()
+        .background(Color(.systemGray6))
     }
 }
 
@@ -282,8 +285,5 @@ struct ConnectionStateBadge: View {
 }
 
 #Preview {
-    NavigationStack {
-        ConnectionView()
-            .environmentObject(CompanionViewModel())
-    }
+    ContentView()
 }
