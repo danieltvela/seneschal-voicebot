@@ -28,6 +28,7 @@ struct ContentView: View {
                 Divider()
 
                 ConversationView()
+                    .opacity(isConnected ? 1.0 : 0.4)
             }
             .animation(.easeInOut(duration: 0.3), value: viewModel.connectionState)
             .navigationTitle("Voicebot")
