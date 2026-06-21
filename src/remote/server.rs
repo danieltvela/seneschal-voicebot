@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tracing::{error, info, trace, warn};
 
+#[cfg(feature = "control")]
+use crate::control::broadcast::ControlEvent;
+
 use crate::audio::audio_capture::AudioChunk;
 
 use super::protocol::{ClientMessage, ServerMessage, TtsAudioPacket};
@@ -30,13 +33,21 @@ pub struct RemoteState {
     pub tts_audio_tx: Arc<Mutex<Option<mpsc::Sender<TtsAudioPacket>>>>,
     /// True when a remote client is connected.
     pub connected: AtomicBool,
+    /// Control event broadcast (transcript, LLM tokens, etc).
+    #[cfg(feature = "control")]
+    pub control_broadcast_tx: broadcast::Sender<ControlEvent>,
+}
+
+/// Build the WebSocket router. Used standalone or merged with control routes.
+pub fn router(state: Arc<RemoteState>) -> Router {
+    Router::new()
+        .route("/ws", get(ws_upgrade))
+        .with_state(state)
 }
 
 /// Start the WebSocket server. Returns a JoinHandle for the server task.
 pub async fn start_server(port: u16, state: Arc<RemoteState>) -> anyhow::Result<()> {
-    let app = Router::new()
-        .route("/ws", get(ws_upgrade))
-        .with_state(state);
+    let app = router(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!(target: "remote", "WebSocket server listening on {addr}");
@@ -183,6 +194,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
 
     // Task: TTS audio → WS binary frames.
     let play_cancel_sink = Arc::clone(&state.play_cancel);
+    let ws_write_events = Arc::clone(&ws_write);
     let ws_write_sink = ws_write;
     let sink_handle = tokio::spawn(async move {
         // We need to send binary frames from tts_rx through ws_write_sink.
@@ -239,12 +251,38 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
         }
     });
 
+    // ── Task: forward control events (transcript, LLM tokens) to WS ──────
+    #[cfg(feature = "control")]
+    let events_handle = {
+        let mut control_rx = state.control_broadcast_tx.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = control_rx.recv().await {
+                let msg: Option<ServerMessage> = match event {
+                    ControlEvent::Transcript { text, .. } => Some(ServerMessage::Transcript { text }),
+                    ControlEvent::LlmToken { token, .. } => Some(ServerMessage::ResponseText { text: token }),
+                    ControlEvent::LlmDone { .. } => Some(ServerMessage::ResponseEnd),
+                    ControlEvent::Error { message } => Some(ServerMessage::Error { message }),
+                    _ => None,
+                };
+                if let Some(server_msg) = msg {
+                    let json = serde_json::to_string(&server_msg).unwrap();
+                    let mut tx = ws_write_events.lock().await;
+                    if tx.send(Message::Text(json.into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        })
+    };
+
     // Wait for reader to finish (client disconnected).
     let _ = reader_handle.await;
 
     // Clean up.
     audio_handle.abort();
     sink_handle.abort();
+    #[cfg(feature = "control")]
+    events_handle.abort();
 
     // Remove TTS routing — audio goes back to local speakers.
     {

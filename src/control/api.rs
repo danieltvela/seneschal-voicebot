@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -11,8 +11,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::Stream;
 use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::error;
+use uuid::Uuid;
 
 use super::broadcast::ControlEvent;
 use super::state::ControlState;
@@ -22,6 +24,8 @@ const MAX_SSE_BUFFER_SIZE: usize = 1024 * 1024;
 
 pub fn router(state: Arc<ControlState>) -> Router {
     Router::new()
+        .route("/control/sessions", get(get_sessions))
+        .route("/control/sessions/{id}/messages", get(get_session_messages))
         .route("/control/events", get(sse_events))
         .route("/control/state", get(get_state))
         .route("/control/history", get(get_history))
@@ -34,7 +38,7 @@ pub fn router(state: Arc<ControlState>) -> Router {
 
 pub async fn start_control_server(port: u16, state: Arc<ControlState>) -> anyhow::Result<()> {
     let app = router(state);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(target: "control", "Control API listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -135,4 +139,75 @@ async fn post_input(
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     StatusCode::NO_CONTENT
+}
+
+// ── History API responses ────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SessionListEntry {
+    id: String,
+    created_at: String,
+    is_active: bool,
+}
+
+#[derive(Serialize)]
+struct MessageListEntry {
+    id: i64,
+    role: String,
+    content: String,
+    timestamp: String,
+}
+
+async fn get_sessions(
+    State(state): State<Arc<ControlState>>,
+) -> impl IntoResponse {
+    match state.db.list_sessions_with_active().await {
+        Ok(sessions) => {
+            let entries: Vec<SessionListEntry> = sessions
+                .into_iter()
+                .map(|(id, created_at, is_active)| SessionListEntry {
+                    id,
+                    created_at,
+                    is_active,
+                })
+                .collect();
+            Json(entries)
+        }
+        Err(e) => {
+            tracing::error!(target: "control", "Failed to list sessions: {e}");
+            Json(Vec::<SessionListEntry>::new())
+        }
+    }
+}
+
+async fn get_session_messages(
+    State(state): State<Arc<ControlState>>,
+    Path(session_id_str): Path<String>,
+) -> impl IntoResponse {
+    let session_id = match Uuid::parse_str(&session_id_str) {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!(target: "control", "Invalid session ID '{session_id_str}': {e}");
+            return Json(Vec::<MessageListEntry>::new());
+        }
+    };
+
+    match state.db.get_messages_with_timestamp_after_id(session_id, 0).await {
+        Ok(messages) => {
+            let entries: Vec<MessageListEntry> = messages
+                .into_iter()
+                .map(|(id, role, content, timestamp)| MessageListEntry {
+                    id,
+                    role,
+                    content,
+                    timestamp,
+                })
+                .collect();
+            Json(entries)
+        }
+        Err(e) => {
+            tracing::error!(target: "control", "Failed to get messages for session {session_id_str}: {e}");
+            Json(Vec::<MessageListEntry>::new())
+        }
+    }
 }

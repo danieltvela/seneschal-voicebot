@@ -942,6 +942,8 @@ async fn async_main() -> Result<()> {
             play_cancel: Arc::clone(&play_cancel),
             tts_audio_tx: Arc::clone(&remote_tts_tx),
             connected: AtomicBool::new(false),
+            #[cfg(feature = "control")]
+            control_broadcast_tx: control_broadcast.tx.clone(),
         });
         tokio::spawn(async move {
             if let Err(e) = remote::server::start_server(ws_port, remote_state).await {
@@ -961,6 +963,7 @@ async fn async_main() -> Result<()> {
             barge_in_tx: events.barge_in_tx.clone(),
             transcript_tx: transcript_tx.clone(),
             llm_session: Arc::clone(&llm_session),
+            db: db.clone(),
         });
         tokio::spawn(async move {
             if let Err(e) = control::api::start_control_server(ctrl_port, ctrl_state).await {

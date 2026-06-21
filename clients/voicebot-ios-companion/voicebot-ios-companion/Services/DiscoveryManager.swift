@@ -23,6 +23,7 @@ final class DiscoveryManager: ObservableObject, Sendable {
     @Published var discoveredServices: [VoicebotService] = []
     @Published var selectedHost: String = ""
     @Published var selectedPort: String = "9090"
+    @Published var selectedControlPort: String = "9090"
     
     init() {
         loadLastUsedHost()
@@ -57,6 +58,7 @@ final class DiscoveryManager: ObservableObject, Sendable {
     private func saveLastUsedHost() {
         UserDefaults.standard.set(selectedHost, forKey: "lastUsedHost")
         UserDefaults.standard.set(selectedPort, forKey: "lastUsedPort")
+        UserDefaults.standard.set(selectedControlPort, forKey: "lastUsedControlPort")
     }
     
     private func loadLastUsedHost() {
@@ -65,6 +67,9 @@ final class DiscoveryManager: ObservableObject, Sendable {
         }
         if let port = UserDefaults.standard.string(forKey: "lastUsedPort") {
             selectedPort = port
+        }
+        if let controlPort = UserDefaults.standard.string(forKey: "lastUsedControlPort") {
+            selectedControlPort = controlPort
         }
     }
 }

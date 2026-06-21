@@ -875,6 +875,24 @@ impl Database {
         Ok(sessions)
     }
 
+    /// List sessions with active status (for API history endpoints).
+    pub async fn list_sessions_with_active(&self) -> Result<Vec<(String, String, bool)>> {
+        let rows = sqlx::query(
+            "SELECT id, created_at, is_active FROM sessions ORDER BY created_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            let id: String = row.try_get("id")?;
+            let created_at: String = row.try_get("created_at")?;
+            let is_active: bool = row.try_get("is_active")?;
+            sessions.push((id, created_at, is_active));
+        }
+        Ok(sessions)
+    }
+
     // ── Memories ──────────────────────────────────────────────────────────────
 
     /// Load all active memories, most recently updated first.

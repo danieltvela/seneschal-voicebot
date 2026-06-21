@@ -143,7 +143,7 @@ final class WebSocketManager: ObservableObject {
         guard let webSocketTask else {
             throw WebSocketError.sendFailed
         }
-        Self.logger.debug("WS send binary: \(audioData.count) bytes \(Self.formatBuffer(audioData))")
+//        Self.logger.debug("WS send binary: \(audioData.count) bytes \(Self.formatBuffer(audioData))")
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             webSocketTask.send(.data(audioData)) { error in
                 if let error {
@@ -173,7 +173,7 @@ final class WebSocketManager: ObservableObject {
         switch webSocketMessage {
         case .data(let data):
             // The server sends TTS audio as binary frames. JSON messages arrive as .string.
-            Self.logger.debug("WS recv binary: \(data.count) bytes \(Self.formatBuffer(data))")
+//            Self.logger.debug("WS recv binary: \(data.count) bytes \(Self.formatBuffer(data))")
             audioContinuation?.yield(data)
             
         case .string(let string):
