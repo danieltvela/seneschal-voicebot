@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import WatchKit
+import WatchConnectivity
 
 /// Bridges audio between the Watch (WCSession) and Voicebot (WebSocket).
 ///
@@ -51,7 +51,7 @@ final class WatchRelayService: NSObject {
         audioRoutingTask = Task {
             for await audioData in self.websocketManager.audioData {
                 // Route audio based on Watch connectivity
-                if self.session.isComplicationEnabled {
+                if self.session.isReachable {
                     // Watch connected - forward to Watch
                     self.forwardToWatch(audioData)
                 } else {
@@ -75,6 +75,18 @@ final class WatchRelayService: NSObject {
         }
     }
     
+    /// Notify the Watch that the LLM response has ended.
+    func notifyWatchResponseEnd() {
+        guard session.isReachable else { return }
+        session.sendMessage(
+            ["type": "response_end"],
+            replyHandler: nil,
+            errorHandler: { error in
+                NSLog("WatchRelayService: response_end failed: \(error.localizedDescription)")
+            }
+        )
+    }
+    
     /// Forward audio to Watch.
     private func forwardToWatch(_ audioData: Data) {
         guard session.isReachable else { return }
@@ -84,7 +96,7 @@ final class WatchRelayService: NSObject {
         
         do {
             try audioData.write(to: fileURL, options: .atomic)
-            try session.transferFile(fileURL)
+            session.transferFile(fileURL, metadata: nil)
         } catch {
             NSLog("WatchRelayService: transfer failed: \(error.localizedDescription)")
         }
@@ -106,10 +118,10 @@ extension WatchRelayService: WCSessionDelegate {
         }
     }
     
-    func session(_ session: WCSession, didReceiveMessageData messageData: Data, handler: @escaping (Data) -> Void) {
+    func session(_ session: WCSession, didReceiveMessageData messageData: Data, replyHandler: @escaping (Data) -> Void) {
         // Audio from Watch → forward to WebSocket
         self.forwardToWebSocket(messageData)
-        handler(Data())
+        replyHandler(Data())
     }
     
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
@@ -128,4 +140,15 @@ extension WatchRelayService: WCSessionDelegate {
     func sessionReachabilityDidChange(_ session: WCSession) {
         NSLog("WatchRelayService: reachability changed: \(session.isReachable)")
     }
+    
+    #if os(iOS)
+    func sessionDidBecomeInactive(_ session: WCSession) {
+        NSLog("WatchRelayService: session became inactive")
+    }
+    
+    func sessionDidDeactivate(_ session: WCSession) {
+        NSLog("WatchRelayService: session deactivated")
+        session.activate()
+    }
+    #endif
 }

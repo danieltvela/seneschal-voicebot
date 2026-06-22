@@ -34,10 +34,17 @@ struct ContentView: View {
                 viewModel.startRecording()
             }
         }) {
-            Circle()
-                .fill(buttonColor)
-                .frame(width: 80, height: 80)
+            ZStack {
+                Circle()
+                    .fill(buttonColor)
+                    .frame(width: 80, height: 80)
+                
+                Image(systemName: "mic.fill")
+                    .font(.title2)
+                    .foregroundColor(.white)
+            }
         }
+        .buttonStyle(.plain)
         .disabled(!viewModel.isConnected)
     }
     

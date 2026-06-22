@@ -69,7 +69,7 @@ final class CompanionViewModel: ObservableObject {
         }
         
         webSocketManager = WebSocketManager(url: url)
-        relayService = WatchRelayService(webSocketManager!)
+        relayService = WatchRelayService(websocketManager: webSocketManager!)
         relayService?.setAudioCallback { [weak self] data in
             self?.handleIncomingAudio(data)
         }
@@ -234,6 +234,7 @@ final class CompanionViewModel: ObservableObject {
 
         case .responseEnd:
             isGenerating = false
+            relayService?.notifyWatchResponseEnd()
 
         case .audioStart:
             break

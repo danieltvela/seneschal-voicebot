@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import WatchConnectivity
 import WatchKit
 import Combine
 
@@ -16,7 +17,7 @@ enum WatchAppState: String {
 }
 
 @MainActor
-final class WatchViewModel: ObservableObject {
+final class WatchViewModel: NSObject, ObservableObject {
     @Published var appState: WatchAppState = .idle
     @Published var isConnected = false
     @Published var isRecording = false
@@ -24,17 +25,18 @@ final class WatchViewModel: ObservableObject {
     
     private var audioManager: WatchAudioManager?
     
-    init() {
+    override init() {
+        super.init()
         setupSession()
     }
     
     private func setupSession() {
-        WCSession.default.delegate = self
-        if WCSession.default.isComplicationEnabled {
-            self.isConnected = true
-            self.appState = .connected
-            self.statusText = "Tap to Talk"
+        guard WCSession.isSupported() else {
+            self.statusText = "Unavailable"
+            return
         }
+        WCSession.default.delegate = self
+        WCSession.default.activate()
     }
     
     func startRecording() {
@@ -49,13 +51,27 @@ final class WatchViewModel: ObservableObject {
                 self.isRecording = true
                 self.appState = .recording
                 self.statusText = "Listening..."
+                WKInterfaceDevice.current().play(.start)
                 
                 // Notify iPhone that recording started
-                try? WCSession.default.sendMessage(["type": "recording_started"], replyHandler: nil)
+                WCSession.default.sendMessage(
+                    ["type": "recording_started"],
+                    replyHandler: nil,
+                    errorHandler: { error in
+                        NSLog("Watch: sendMessage error: \(error.localizedDescription)")
+                    }
+                )
                 
-                // Send audio chunks to iPhone
+                // Send audio chunks to iPhone via transferUserInfo (reliable, queued delivery)
                 for await audioData in am.capturedAudio {
-                    try? WCSession.default.sendMessageData(audioData, timeout: 1.0)
+                    guard WCSession.default.isReachable else { break }
+                    WCSession.default.sendMessageData(
+                        audioData,
+                        replyHandler: nil,
+                        errorHandler: { error in
+                            NSLog("Watch: sendMessageData error: \(error.localizedDescription)")
+                        }
+                    )
                 }
             } catch {
                 self.appState = .connected
@@ -70,8 +86,15 @@ final class WatchViewModel: ObservableObject {
         self.isRecording = false
         
         // Notify iPhone that recording stopped
-        try? WCSession.default.sendMessage(["type": "recording_stopped"], replyHandler: nil)
+        WCSession.default.sendMessage(
+            ["type": "recording_stopped"],
+            replyHandler: nil,
+            errorHandler: { error in
+                NSLog("Watch: sendMessage error: \(error.localizedDescription)")
+            }
+        )
         
+        WKInterfaceDevice.current().play(.stop)
         self.appState = .responding
         self.statusText = "Responding..."
     }
@@ -83,6 +106,10 @@ extension WatchViewModel: WCSessionDelegate {
             self.isConnected = true
             self.appState = .connected
             self.statusText = "Tap to Talk"
+        } else {
+            self.isConnected = false
+            self.appState = .idle
+            self.statusText = "Disconnected"
         }
     }
     
@@ -91,6 +118,7 @@ extension WatchViewModel: WCSessionDelegate {
             if type == "response_end" {
                 self.appState = .connected
                 self.statusText = "Tap to Talk"
+                WKInterfaceDevice.current().play(.success)
             }
         }
     }
@@ -99,6 +127,18 @@ extension WatchViewModel: WCSessionDelegate {
         // Received audio from iPhone - play it
         if let am = audioManager {
             am.playAudio(data)
+        }
+    }
+    
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        if !session.isReachable {
+            self.isConnected = false
+            self.appState = .idle
+            self.statusText = "Disconnected"
+        } else if session.activationState == .activated {
+            self.isConnected = true
+            self.appState = .connected
+            self.statusText = "Tap to Talk"
         }
     }
 }
