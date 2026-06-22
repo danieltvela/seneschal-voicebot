@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -239,6 +239,7 @@ pub struct RunAgentTool {
     synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
     hermes_viewer_mode: HermesSessionViewerMode,
+    tool_name: OnceLock<&'static str>,
 }
 
 impl RunAgentTool {
@@ -256,6 +257,7 @@ impl RunAgentTool {
             synthesis_client: None,
             session_manager: None,
             hermes_viewer_mode: HermesSessionViewerMode::Off,
+            tool_name: OnceLock::new(),
         }
     }
 
@@ -544,7 +546,8 @@ impl RunAgentTool {
 #[async_trait]
 impl Tool for RunAgentTool {
     fn name(&self) -> &str {
-        "run_agent"
+        self.tool_name
+            .get_or_init(|| Box::leak(format!("run_{}", self.config.name).into_boxed_str()))
     }
 
     fn description(&self) -> &str {
@@ -1484,7 +1487,7 @@ mod tests {
     fn tool_name_and_description() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
         let tool = cli_tool("echo", empty_history(), tx);
-        assert_eq!(tool.name(), "run_agent");
+        assert_eq!(tool.name(), "run_hermes");
         assert!(!tool.description().is_empty());
     }
 

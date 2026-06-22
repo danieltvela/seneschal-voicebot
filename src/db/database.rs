@@ -877,11 +877,10 @@ impl Database {
 
     /// List sessions with active status (for API history endpoints).
     pub async fn list_sessions_with_active(&self) -> Result<Vec<(String, String, bool)>> {
-        let rows = sqlx::query(
-            "SELECT id, created_at, is_active FROM sessions ORDER BY created_at DESC"
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT id, created_at, is_active FROM sessions ORDER BY created_at DESC")
+                .fetch_all(&self.pool)
+                .await?;
 
         let mut sessions = Vec::new();
         for row in rows {

@@ -10,11 +10,12 @@ pub mod read_file;
 pub mod recover_historical_context;
 pub mod run_agent;
 pub mod run_shell;
+pub mod switch_plugin;
 pub mod take_screenshot;
 pub mod web_search;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use tracing::info;
@@ -35,6 +36,7 @@ pub use run_agent::{
     AcpWriter, ActiveTask, JsonRpcMessage, PendingInteractionEntry, RunAgentTool, format_history,
 };
 pub use run_shell::RunShellTool;
+pub use switch_plugin::SwitchPluginTool;
 pub use take_screenshot::TakeScreenshotTool;
 pub use web_search::WebSearchTool;
 
@@ -71,7 +73,7 @@ pub trait Tool: Send + Sync {
 
 /// Registry of available tools and tool-call parser.
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn Tool>>,
     cached_tool_defs: Mutex<Option<Vec<serde_json::Value>>>,
 }
 
@@ -90,8 +92,22 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {
-        self.tools.insert(tool.name().to_string(), Box::new(tool));
+        self.tools.insert(tool.name().to_string(), Arc::new(tool));
         *self.cached_tool_defs.lock().unwrap() = None;
+    }
+
+    /// Remove a tool by name. Returns true if removed, false if not found.
+    pub fn unregister(&mut self, name: &str) -> bool {
+        let removed = self.tools.remove(name).is_some();
+        if removed {
+            *self.cached_tool_defs.lock().unwrap() = None;
+        }
+        removed
+    }
+
+    /// List all registered tool names.
+    pub fn list_registered(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
     }
 
     #[allow(dead_code)]
@@ -204,18 +220,24 @@ impl ToolRegistry {
         self.tools.get(name).map(|t| t.as_ref())
     }
 
+    /// Returns a cloned Arc to the named tool if it is registered.
+    /// Use this when you need to hold the tool across an async boundary
+    /// without keeping a MutexGuard alive.
+    pub fn get_tool_arc(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.get(name).cloned()
+    }
+
     /// Execute a registered tool by name with the given args.
     pub async fn execute(&self, name: &str, args: &str) -> String {
-        match self.tools.get(name) {
-            Some(tool) => {
-                info!(target: "tools", "Executing tool: {} args={}", name, args);
-                tool.run(args).await
-            }
+        let tool = match self.tools.get(name) {
+            Some(t) => Arc::clone(t),
             None => {
                 info!(target: "tools", "Unknown tool requested: {}", name);
-                format!("Unknown tool: {name}")
+                return format!("Unknown tool: {name}");
             }
-        }
+        };
+        info!(target: "tools", "Executing tool: {} args={}", name, args);
+        tool.run(args).await
     }
 }
 
@@ -447,5 +469,66 @@ mod tests {
         assert!(!result.is_empty());
         // Result should look like a time (contains ':')
         assert!(result.contains(':'));
+    }
+
+    // ── unregister ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn unregister_removes_tool_and_returns_true() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        assert!(r.get_tool("current_time").is_some());
+
+        let removed = r.unregister("current_time");
+        assert!(removed);
+        assert!(r.get_tool("current_time").is_none());
+    }
+
+    #[test]
+    fn unregister_returns_false_for_unknown_tool() {
+        let mut r = ToolRegistry::new();
+        let removed = r.unregister("nonexistent");
+        assert!(!removed);
+    }
+
+    #[test]
+    fn unregister_removes_from_list_registered() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        assert!(r.list_registered().contains(&"current_time".to_string()));
+
+        r.unregister("current_time");
+        assert!(!r.list_registered().contains(&"current_time".to_string()));
+    }
+
+    #[test]
+    fn unregister_clears_cached_tool_definitions() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        let _defs = r.tool_definitions();
+
+        r.unregister("current_time");
+        let defs_after = r.tool_definitions();
+        assert!(defs_after.is_empty());
+    }
+
+    #[test]
+    fn unregister_does_not_affect_other_tools() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+        r.register(NoopTool::new("test".to_string()));
+
+        r.unregister("current_time");
+        assert!(r.get_tool("current_time").is_none());
+        assert!(r.get_tool("noop").is_some());
+    }
+
+    #[test]
+    fn unregister_twice_returns_false_second_time() {
+        let mut r = ToolRegistry::new();
+        r.register(CurrentTimeTool);
+
+        assert!(r.unregister("current_time"));
+        assert!(!r.unregister("current_time"));
     }
 }

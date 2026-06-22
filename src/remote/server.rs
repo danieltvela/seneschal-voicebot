@@ -258,8 +258,12 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
         tokio::spawn(async move {
             while let Ok(event) = control_rx.recv().await {
                 let msg: Option<ServerMessage> = match event {
-                    ControlEvent::Transcript { text, .. } => Some(ServerMessage::Transcript { text }),
-                    ControlEvent::LlmToken { token, .. } => Some(ServerMessage::ResponseText { text: token }),
+                    ControlEvent::Transcript { text, .. } => {
+                        Some(ServerMessage::Transcript { text })
+                    }
+                    ControlEvent::LlmToken { token, .. } => {
+                        Some(ServerMessage::ResponseText { text: token })
+                    }
                     ControlEvent::LlmDone { .. } => Some(ServerMessage::ResponseEnd),
                     ControlEvent::Error { message } => Some(ServerMessage::Error { message }),
                     _ => None,

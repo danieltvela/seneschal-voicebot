@@ -12,6 +12,7 @@ use crate::db::{Database, Memory};
 use crate::i18n;
 use crate::llm::{LlmProvider, LlmSession};
 use crate::memory::{build_memory_context, extract_memories};
+use crate::plugins::PluginPromptSections;
 use crate::profile::{ProfileFact, build_profile_context, extract_facts};
 
 /// Returns the routing instructions section for the system prompt.
@@ -119,17 +120,33 @@ pub fn build_system_prompt(
     agent_section: &str,
     tool_section: &str,
     corrections: &[crate::profile::Correction],
+    plugin_sections: &PluginPromptSections,
 ) -> String {
-    format!(
-        "{}{}{}{}{}{}{}",
-        base_prompt,
-        tool_section,
-        crate::profile::build_corrections_context(corrections),
-        build_profile_context(profile_facts),
-        build_memory_context(memories),
-        build_routing_section(),
-        agent_section,
-    )
+    if !plugin_sections.replace.is_empty() {
+        format!(
+            "{}{}{}{}{}{}{}",
+            plugin_sections.replace,
+            tool_section,
+            crate::profile::build_corrections_context(corrections),
+            build_profile_context(profile_facts),
+            build_memory_context(memories),
+            build_routing_section(),
+            agent_section,
+        )
+    } else {
+        format!(
+            "{}{}{}{}{}{}{}{}{}",
+            plugin_sections.prepend,
+            base_prompt,
+            plugin_sections.append,
+            tool_section,
+            crate::profile::build_corrections_context(corrections),
+            build_profile_context(profile_facts),
+            build_memory_context(memories),
+            build_routing_section(),
+            agent_section,
+        )
+    }
 }
 
 /// Core consolidation work: extract profile facts + memories, summarize old
@@ -262,6 +279,7 @@ pub async fn run_consolidation_cycle(
         agent_section,
         tool_section,
         &[],
+        &PluginPromptSections::default(),
     );
 
     // Emit L1 saturation event if context exceeds the threshold (at most once
@@ -578,7 +596,15 @@ mod tests {
             confidence: 1.0,
         }];
 
-        let prompt = build_system_prompt(base, &facts, &mems, agents, tools, &corrections);
+        let prompt = build_system_prompt(
+            base,
+            &facts,
+            &mems,
+            agents,
+            tools,
+            &corrections,
+            &PluginPromptSections::default(),
+        );
 
         let pos_base = prompt.find(base).unwrap();
         let pos_tools = prompt.find(tools).unwrap();
@@ -606,26 +632,114 @@ mod tests {
             correction_text: "Daniel".into(),
             confidence: 1.0,
         }];
-        let prompt = build_system_prompt("base", &[], &[], "", "", &corrections);
+        let prompt = build_system_prompt(
+            "base",
+            &[],
+            &[],
+            "",
+            "",
+            &corrections,
+            &PluginPromptSections::default(),
+        );
         assert!(prompt.contains("[IMMUTABLE RULES]"));
         assert!(prompt.contains("name -> Daniel"));
     }
 
     #[test]
     fn build_system_prompt_omits_corrections_when_empty() {
-        let prompt = build_system_prompt("base", &[], &[], "", "", &[]);
+        let prompt = build_system_prompt(
+            "base",
+            &[],
+            &[],
+            "",
+            "",
+            &[],
+            &PluginPromptSections::default(),
+        );
         assert!(!prompt.contains("[IMMUTABLE RULES]"));
     }
 
     #[test]
     fn build_system_prompt_omits_profile_when_no_facts() {
-        let prompt = build_system_prompt("base", &[], &[], "", "", &[]);
+        let prompt = build_system_prompt(
+            "base",
+            &[],
+            &[],
+            "",
+            "",
+            &[],
+            &PluginPromptSections::default(),
+        );
         assert!(!prompt.contains("[USER PROFILE]"));
     }
 
     #[test]
     fn build_system_prompt_omits_memories_when_empty() {
-        let prompt = build_system_prompt("base", &[], &[], "", "", &[]);
+        let prompt = build_system_prompt(
+            "base",
+            &[],
+            &[],
+            "",
+            "",
+            &[],
+            &PluginPromptSections::default(),
+        );
         assert!(!prompt.contains("[MEMORIES]"));
+    }
+
+    #[test]
+    fn build_system_prompt_replace_mode_replaces_base() {
+        let sections = PluginPromptSections {
+            replace: "REPLACEMENT_CONTENT".to_string(),
+            prepend: String::new(),
+            append: String::new(),
+        };
+        let prompt = build_system_prompt("ORIGINAL_BASE", &[], &[], "", "", &[], &sections);
+        assert!(prompt.contains("REPLACEMENT_CONTENT"));
+        assert!(!prompt.contains("ORIGINAL_BASE"));
+    }
+
+    #[test]
+    fn build_system_prompt_append_mode_inserts_after_base() {
+        let sections = PluginPromptSections {
+            replace: String::new(),
+            prepend: String::new(),
+            append: "APPEND_SECTION".to_string(),
+        };
+        let prompt = build_system_prompt("BASE_PROMPT", &[], &[], "", "", &[], &sections);
+        assert!(prompt.contains("BASE_PROMPT"));
+        assert!(prompt.contains("APPEND_SECTION"));
+        let pos_base = prompt.find("BASE_PROMPT").unwrap();
+        let pos_append = prompt.find("APPEND_SECTION").unwrap();
+        assert!(pos_base < pos_append);
+    }
+
+    #[test]
+    fn build_system_prompt_prepend_mode_inserts_before_base() {
+        let sections = PluginPromptSections {
+            replace: String::new(),
+            prepend: "PREPEND_SECTION".to_string(),
+            append: String::new(),
+        };
+        let prompt = build_system_prompt("BASE_PROMPT", &[], &[], "", "", &[], &sections);
+        assert!(prompt.contains("BASE_PROMPT"));
+        assert!(prompt.contains("PREPEND_SECTION"));
+        let pos_prepend = prompt.find("PREPEND_SECTION").unwrap();
+        let pos_base = prompt.find("BASE_PROMPT").unwrap();
+        assert!(pos_prepend < pos_base);
+    }
+
+    #[test]
+    fn build_system_prompt_both_modes_ordered_correctly() {
+        let sections = PluginPromptSections {
+            replace: String::new(),
+            prepend: "PREPEND".to_string(),
+            append: "APPEND".to_string(),
+        };
+        let prompt = build_system_prompt("BASE", &[], &[], "", "", &[], &sections);
+        let pos_prepend = prompt.find("PREPEND").unwrap();
+        let pos_base = prompt.find("BASE").unwrap();
+        let pos_append = prompt.find("APPEND").unwrap();
+        assert!(pos_prepend < pos_base && pos_base < pos_append);
     }
 }

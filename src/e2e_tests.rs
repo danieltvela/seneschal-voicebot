@@ -70,7 +70,7 @@ struct E2eHarness {
     pub audio_output: Arc<AudioOutput>,
     pub db: Database,
     pub session_id: Uuid,
-    pub tools: Arc<ToolRegistry>,
+    pub tools: Arc<std::sync::Mutex<ToolRegistry>>,
     pub shared_history: Arc<RwLock<String>>,
     // Kept alive so the temp directory isn't deleted before the test ends.
     _db_dir: tempfile::TempDir,
@@ -105,7 +105,7 @@ impl E2eHarness {
         let db = Database::new(db_path.to_str().unwrap()).await.unwrap();
         let session_id = db.get_or_create_session().await.unwrap();
 
-        let tools = Arc::new(ToolRegistry::new());
+        let tools = Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
         let shared_history = Arc::new(RwLock::new(String::new()));
 
         let events = Arc::new(PipelineEvents::new());

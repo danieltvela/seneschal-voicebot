@@ -33,7 +33,7 @@ pub async fn llm_task(
     llm_client: Arc<dyn LlmProvider>,
     db: Database,
     session_id: uuid::Uuid,
-    tools: Arc<ToolRegistry>,
+    tools: Arc<std::sync::Mutex<ToolRegistry>>,
     shared_history: Arc<RwLock<String>>,
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
@@ -164,7 +164,7 @@ pub async fn llm_task(
 
         // (assistant_text / llm_post_finished flags removed; channel carries this now)
 
-        let tool_defs = tools.tool_definitions();
+        let tool_defs = tools.lock().unwrap().tool_definitions();
         info!(
             target: "pipeline",
             "LLM request: {} tool(s) available: {:?}",
@@ -194,35 +194,40 @@ pub async fn llm_task(
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
                 let forced_tool = if iter == 0 && !tool_continuation {
-                    tools.forced_tool_for_query(&text)
+                    tools
+                        .lock()
+                        .unwrap()
+                        .forced_tool_for_query(&text)
+                        .map(|s| s.to_string())
                 } else {
                     None
                 };
-                if let Some(name) = forced_tool {
+                if let Some(ref name) = forced_tool {
                     info!(target: "pipeline", "Forcing tool '{}' for explicit request", name);
                 }
-                let (token_rx, stream_handle) =
-                    match llm_client.stream(&messages, &tool_defs, forced_tool).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!(target: "llm", "LLM error: {}", e);
-                            #[cfg(feature = "tui")]
-                            tui_tx
-                                .send(crate::tui::events::TuiEvent::Error(format!(
-                                    "LLM error: {e}"
-                                )))
-                                .ok();
-                            let _ = sentences_tx
-                                .send(super::frames::PipelineFrame::SentenceReady {
-                                    utterance_id: pipeline_id,
-                                    sentence:
-                                        "Lo siento, no pude conectar con el modelo de lenguaje."
-                                            .to_string(),
-                                })
-                                .await;
-                            break 'pipeline;
-                        }
-                    };
+                let (token_rx, stream_handle) = match llm_client
+                    .stream(&messages, &tool_defs, forced_tool.as_deref())
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!(target: "llm", "LLM error: {}", e);
+                        #[cfg(feature = "tui")]
+                        tui_tx
+                            .send(crate::tui::events::TuiEvent::Error(format!(
+                                "LLM error: {e}"
+                            )))
+                            .ok();
+                        let _ = sentences_tx
+                            .send(super::frames::PipelineFrame::SentenceReady {
+                                utterance_id: pipeline_id,
+                                sentence: "Lo siento, no pude conectar con el modelo de lenguaje."
+                                    .to_string(),
+                            })
+                            .await;
+                        break 'pipeline;
+                    }
+                };
 
                 *t_llm_post_send.lock().unwrap() = Some(Instant::now());
 
@@ -314,7 +319,7 @@ pub async fn llm_task(
 
                 match tool_call {
                     Some((name, args)) => {
-                        if tools.is_background(&name) {
+                        if tools.lock().unwrap().is_background(&name) {
                             let ack = match name.as_str() {
                                 "web_search" => "Buscando.",
                                 "run_shell" => "Ejecutando.",
@@ -370,9 +375,13 @@ pub async fn llm_task(
                             let args_c = args.clone();
                             let proactive_c = proactive_tx.clone();
                             let tc_id_c = tc_id.clone();
+                            let tool_arc = tools_c.lock().unwrap().get_tool_arc(&name);
                             tokio::spawn(async move {
                                 info!(target: "pipeline", "Background tool `{}` started", name_c);
-                                let result = tools_c.execute(&name_c, &args_c).await;
+                                let result = match tool_arc {
+                                    Some(tool) => tool.run(&args_c).await,
+                                    None => format!("Unknown tool: {name_c}"),
+                                };
                                 info!(
                                     target: "pipeline",
                                     "Background tool `{}` finished ({} chars): {:?}",
@@ -393,13 +402,19 @@ pub async fn llm_task(
                             break 'pipeline;
                         }
 
-                        let result = tools.execute(&name, &args).await;
+                        let tool_for_exec = tools.lock().unwrap().get_tool_arc(&name);
+                        let is_silent = tool_for_exec
+                            .as_ref()
+                            .map(|t| t.is_silent())
+                            .unwrap_or(false);
+                        let result = match tool_for_exec {
+                            Some(tool) => tool.run(&args).await,
+                            None => format!("Unknown tool: {name}"),
+                        };
                         info!(target: "pipeline", "Tool[{}] `{}` → {}", iter, name, result);
 
                         // Silent tools (e.g. NOOP) suppress all response output.
-                        if let Some(t) = tools.get_tool(&name)
-                            && t.is_silent()
-                        {
+                        if is_silent {
                             info!(
                                 target: "pipeline",
                                 "Tool `{}` is silent — suppressing response", name,

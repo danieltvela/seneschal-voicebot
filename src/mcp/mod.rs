@@ -154,7 +154,6 @@ fn load_mcp_from_env(name: &str) -> Option<McpConfig> {
 
 struct McpWriter {
     stdin: ChildStdin,
-    #[allow(dead_code)]
     child: Child,
     next_id: u64,
 }
@@ -407,6 +406,28 @@ impl McpClient {
 
         let result = resp.result.unwrap_or_default();
         Ok(extract_text_content(&result))
+    }
+
+    /// Send exit notification, close stdin, and wait for child to exit.
+    pub async fn disconnect(self) {
+        let mut writer = self.writer.lock().await;
+        let _ = writer
+            .send_notification("exit", serde_json::json!({}))
+            .await;
+        drop(writer);
+
+        self.pending.lock().await.clear();
+
+        let McpWriter { mut child, .. } = self.writer.into_inner();
+
+        match child.wait().await {
+            Ok(status) => {
+                debug!(target: "mcp", "MCP server exited with status: {}", status);
+            }
+            Err(e) => {
+                warn!(target: "mcp", "MCP server wait error: {e}");
+            }
+        }
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────

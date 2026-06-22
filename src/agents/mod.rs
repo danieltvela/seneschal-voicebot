@@ -46,6 +46,9 @@ pub enum ProactiveEvent {
         total_chars: usize,
         threshold: usize,
     },
+    /// The LLM invoked the switch_plugin tool — the pipeline should rebuild
+    /// tool registry, MCP servers, agents, and config for the new plugin.
+    PluginSwitch { plugin_id: String },
 }
 
 impl std::fmt::Debug for ProactiveEvent {
@@ -73,6 +76,9 @@ impl std::fmt::Debug for ProactiveEvent {
                     f,
                     "L1Saturated(total_chars={total_chars}, threshold={threshold})"
                 )
+            }
+            Self::PluginSwitch { plugin_id } => {
+                write!(f, "PluginSwitch(plugin_id={plugin_id})")
             }
         }
     }

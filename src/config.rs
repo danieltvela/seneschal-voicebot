@@ -346,6 +346,22 @@ pub struct Config {
     /// Directory path for archived JSONL consolidations.
     /// Default: "data/archives". (S_DREAM_JSONL_DIR)
     pub s_dream_jsonl_dir: String,
+
+    // ── Plugins ───────────────────────────────────────────────────────────────
+    /// Paths to plugin directories or files (VOICEBOT_PLUGINS, comma-separated).
+    pub plugins: Vec<PathBuf>,
+    /// Name of the currently active plugin (VOICEBOT_ACTIVE_PLUGIN).
+    /// Empty string in TOML maps to None.
+    #[serde(deserialize_with = "deserialize_empty_string_as_none")]
+    pub active_plugin: Option<String>,
+}
+
+fn deserialize_empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(if s.is_empty() { None } else { Some(s) })
 }
 
 impl Config {
@@ -758,6 +774,19 @@ impl Config {
         // NOOP tool
         if let Ok(v) = env::var("NOOP_TOOL_INSTRUCTIONS") {
             self.noop_tool_instructions = v;
+        }
+
+        // Plugins
+        if let Ok(v) = env::var("VOICEBOT_PLUGINS") {
+            self.plugins = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect();
+        }
+        if let Ok(v) = env::var("VOICEBOT_ACTIVE_PLUGIN") {
+            self.active_plugin = if v.is_empty() { None } else { Some(v) };
         }
 
         // Validation

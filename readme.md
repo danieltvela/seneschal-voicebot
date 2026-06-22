@@ -59,6 +59,7 @@ Voicebot is built from the ground up for voice interaction:
 - EYES visual awareness - periodic screen captures analyzed by a vision-capable secondary LLM
 - Inference daemon - proactive suggestions and background reasoning ("is there anything worth saying?")
 - MCP (Model Context Protocol) - dynamically registered tools from any MCP stdio server
+- **Plugin System** - self-contained plugin directories that bundle MCP servers, agents, prompts, and config overrides. LLM can switch active plugins at runtime via `switch_plugin` tool
 - HTTP Control API + SSE (feature flag) - manage Voicebot from external apps or web dashboards
 
 ### Control API (HTTP + SSE)
@@ -90,6 +91,60 @@ curl -X POST http://127.0.0.1:9001/control/barge_in
 curl -X POST http://127.0.0.1:9001/control/input \
   -H 'Content-Type: application/json' -d '{"text":"hola"}'
 ```
+
+### Plugin System
+
+Voicebot supports a **plugin system** that lets you bundle MCP servers, agents, system prompt instructions, and config overrides into self-contained directories. Plugins can be activated at startup or switched at runtime by the LLM itself.
+
+**What a plugin can do:**
+- Add MCP servers alongside base MCPs (not replacing them)
+- Register additional agents with custom instructions
+- Inject prompt instructions (replace base prompt, append after it, or both)
+- Override LLM config values (temperature, max tokens, context tokens, language)
+
+**How it works:**
+- Each plugin is a directory containing a `manifest.toml`
+- Available plugins are configured in `voicebot.{env}.toml` via `plugins` array
+- One plugin can be active at a time (set via `active_plugin` config field)
+- The LLM can switch plugins at runtime using the `switch_plugin` tool
+- Plugin config overrides are cleanly reverted when deactivated
+
+**Quick start:**
+
+1. Create a plugin directory with `manifest.toml`:
+
+```toml
+name = "my_plugin"
+assistant_name = "My Assistant"
+description = "My custom plugin"
+version = "0.1.0"
+
+[prompt]
+mode = "append"
+content = "You are a specialized assistant. Be concise."
+
+[[mcp_servers]]
+name = "my_tool"
+command = "bunx my-mcp-server"
+tool_timeout_secs = 30
+
+[config_overrides]
+llm_temperature = 0.1
+llm_max_tokens = 2048
+```
+
+2. Configure in `voicebot.dev.toml`:
+
+```toml
+plugins = ["path/to/my-plugin"]
+active_plugin = "my_plugin"
+```
+
+3. The plugin activates at startup. The LLM can switch plugins via the `switch_plugin` tool.
+
+**Example plugins:** See `examples/plugins/medical-assistant/` (full example) and `examples/plugins/minimal-plugin/` (minimal example).
+
+---
 
 ### Roadmap
 

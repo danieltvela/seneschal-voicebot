@@ -129,3 +129,7 @@ s_dream_jsonl_dir = "data/dev/archives"
 
 # ── Remote device (WebSocket) ─────────────────────────────────────────────────
 ws_port = 9091
+
+# ── Plugins ───────────────────────────────────────────────────────────────────
+plugins = []
+active_plugin = ""

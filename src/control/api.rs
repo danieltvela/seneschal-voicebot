@@ -158,9 +158,7 @@ struct MessageListEntry {
     timestamp: String,
 }
 
-async fn get_sessions(
-    State(state): State<Arc<ControlState>>,
-) -> impl IntoResponse {
+async fn get_sessions(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
     match state.db.list_sessions_with_active().await {
         Ok(sessions) => {
             let entries: Vec<SessionListEntry> = sessions
@@ -192,7 +190,11 @@ async fn get_session_messages(
         }
     };
 
-    match state.db.get_messages_with_timestamp_after_id(session_id, 0).await {
+    match state
+        .db
+        .get_messages_with_timestamp_after_id(session_id, 0)
+        .await
+    {
         Ok(messages) => {
             let entries: Vec<MessageListEntry> = messages
                 .into_iter()

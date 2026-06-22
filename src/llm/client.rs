@@ -212,7 +212,7 @@ impl OpenAIClient {
         if !tools.is_empty() {
             payload["tools"] = serde_json::json!(tools);
             payload["tool_choice"] = match forced_tool {
-                Some(name) => serde_json::json!("required"),
+                Some(_name) => serde_json::json!("required"),
                 None => serde_json::json!("auto"),
             };
             // Do NOT send chat_template_kwargs when tools are active: changing the

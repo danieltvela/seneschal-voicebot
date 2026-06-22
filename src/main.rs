@@ -18,6 +18,7 @@ mod llm;
 mod mcp;
 mod memory;
 mod pipeline;
+mod plugins;
 mod profile;
 #[cfg(feature = "remote")]
 mod remote;
@@ -30,6 +31,7 @@ mod tui;
 
 use anyhow::{Context, Result};
 use async_channel::bounded;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
@@ -55,13 +57,19 @@ use crate::pipeline::{
     check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
     sen_task, tts_task,
 };
+use crate::plugins::{
+    OriginalConfigSnapshot, PluginManager, PluginPromptSections, PluginSwitchEvent,
+    SpawnedMcpServers,
+    agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents},
+    build_plugin_prompt_section,
+};
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
     ActiveTask, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy, NoopTool,
     OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool,
     RecoverHistoricalContextTool, RunAgentTool, RunShellTool, SetClipboardTool,
-    SetConversationModeTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
+    SetConversationModeTool, SwitchPluginTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -196,6 +204,11 @@ async fn async_main() -> Result<()> {
     }
 
     info!(target: "voicebot", "Language: {}", config.language);
+
+    // ── Plugin manager ────────────────────────────────────────────────────────
+    let plugin_manager = Arc::new(PluginManager::new(&config.plugins));
+    let plugin_manager_clone = Arc::clone(&plugin_manager);
+    let mut plugin_sections = PluginPromptSections::default();
 
     // ── Standalone S-DREAM launch mode ────────────────────────────────────────
     if std::env::args().any(|a| a == "--dream") {
@@ -398,6 +411,131 @@ async fn async_main() -> Result<()> {
         }
     }
 
+    // ── Plugin activation, MCP spawn, agent registration ────────────────────
+    if let Some(ref active_plugin_id) = config.active_plugin {
+        let available = plugin_manager.list_available();
+        if !available.contains(active_plugin_id) {
+            warn!(
+                plugin_id = %active_plugin_id,
+                available = ?available,
+                "active_plugin is not available, ignoring"
+            );
+            config.active_plugin = None;
+        } else {
+            let activated = plugin_manager.activate(
+                active_plugin_id,
+                OriginalConfigSnapshot::from_config(&config),
+            );
+            if let Some(activated) = activated {
+                let activated_prompt_configs = activated.prompt.clone();
+                let activated_mcp_servers = activated.mcp_servers.clone();
+                let activated_agents = activated.agents.clone();
+
+                let prompt = &activated_prompt_configs;
+                plugin_sections = PluginPromptSections {
+                    replace: match prompt.mode {
+                        crate::plugins::manifest::PromptMode::Replace => {
+                            prompt.content.clone() + "\n"
+                        }
+                        _ => String::new(),
+                    },
+                    prepend: match prompt.mode {
+                        crate::plugins::manifest::PromptMode::Both if prompt.prepend => {
+                            prompt.content.clone() + "\n"
+                        }
+                        _ => String::new(),
+                    },
+                    append: match prompt.mode {
+                        crate::plugins::manifest::PromptMode::Append
+                        | crate::plugins::manifest::PromptMode::Both
+                            if !prompt.prepend =>
+                        {
+                            prompt.content.clone() + "\n"
+                        }
+                        _ => String::new(),
+                    },
+                };
+
+                let existing_agent_names: HashSet<String> = agent_registry
+                    .agents
+                    .iter()
+                    .map(|a| a.name.clone())
+                    .collect();
+                let (plugin_agents, skipped) =
+                    resolve_plugin_agents(&activated_agents, &existing_agent_names);
+                if !skipped.is_empty() {
+                    warn!(
+                        skipped = ?skipped,
+                        "Plugin agent names conflict with existing agents, skipping"
+                    );
+                }
+                if !plugin_agents.is_empty() {
+                    info!(agents = ?plugin_agents.iter().map(|a| &a.name).collect::<Vec<_>>(),
+                          "Resolved plugin agents");
+                }
+
+                // Spawn plugin MCP servers and register tools
+                if !activated_mcp_servers.is_empty() {
+                    let spawned = SpawnedMcpServers::spawn_and_register(
+                        &activated_mcp_servers,
+                        &mut tool_registry,
+                    )
+                    .await;
+                    let tool_count = spawned.tool_names().len();
+                    if tool_count > 0 {
+                        info!(
+                            target: "plugin",
+                            count = tool_count,
+                            plugin_id = %active_plugin_id,
+                            "Registered plugin MCP tools"
+                        );
+                    }
+                    // Store spawned servers handle for potential cleanup later
+                    let _spawned_mcp_handles = spawned;
+                }
+
+                // Register plugin agent tools
+                if !plugin_agents.is_empty() {
+                    let registered_names = register_plugin_agent_tools(
+                        &plugin_agents,
+                        &mut tool_registry,
+                        shared_history.clone(),
+                        proactive_tx.clone(),
+                        Some(Arc::clone(&session_manager)),
+                        secondary_llm_client.clone(),
+                        config.hermes_session_viewer,
+                    );
+                    info!(
+                        target: "plugin",
+                        count = registered_names.len(),
+                        names = ?registered_names,
+                        "Registered plugin agent tools"
+                    );
+                }
+
+                info!(
+                    target: "plugin",
+                    plugin_id = %active_plugin_id,
+                    "Plugin activated at startup"
+                );
+            }
+        }
+    }
+
+    // Plugin switch event channel — processed between conversation turns
+    let (plugin_switch_tx, mut plugin_switch_rx) =
+        tokio::sync::mpsc::channel::<PluginSwitchEvent>(8);
+    let mut pending_plugin_switch: Option<PluginSwitchEvent> = None;
+
+    // Register switch_plugin tool if any plugins are available
+    if !plugin_manager.list_available().is_empty() {
+        tool_registry.register(SwitchPluginTool::new(
+            (*plugin_manager).clone(),
+            plugin_switch_tx,
+        ));
+        info!(target: "voicebot", "switch_plugin tool enabled");
+    }
+
     // ── Database ──────────────────────────────────────────────────────────────
     let db = Database::new(&config.db_path).await?;
     let session_id = db.get_or_create_session().await?;
@@ -443,7 +581,7 @@ async fn async_main() -> Result<()> {
         config.noop_tool_instructions,
     );
 
-    let tools = Arc::new(tool_registry);
+    let tools = Arc::new(std::sync::Mutex::new(tool_registry));
 
     // ── LLM session ───────────────────────────────────────────────────────────
     let immutable_rules: Vec<crate::profile::Correction> = db
@@ -457,7 +595,7 @@ async fn async_main() -> Result<()> {
         })
         .collect();
 
-    let tool_section = tools.system_prompt_section();
+    let tool_section = tools.lock().unwrap().system_prompt_section();
     let system_prompt = build_system_prompt(
         &config.llm_system_prompt,
         &profile_facts,
@@ -465,6 +603,7 @@ async fn async_main() -> Result<()> {
         &agent_section,
         &tool_section,
         &immutable_rules,
+        &plugin_sections,
     );
 
     // Check if the initial context is already saturated and emit event if so.
@@ -1010,6 +1149,10 @@ async fn async_main() -> Result<()> {
             .ok();
     }
 
+    // Plugin runtime state — tracks active plugin resources for cleanup on switch
+    let mut plugin_runtime_active_id: Option<String> = config.active_plugin.clone();
+    let mut plugin_runtime_spawned_mcp: Option<SpawnedMcpServers> = None;
+
     let mut proactive_rx = proactive_rx;
     tokio::select! {
         _ = async {
@@ -1107,10 +1250,106 @@ async fn async_main() -> Result<()> {
                                     .replace("{opts_str}", &opts_str);
                                 transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
                             }
+                            ProactiveEvent::PluginSwitch { .. } => {
+                                // No-op: handled via dedicated plugin_switch_rx channel
+                            }
                         }
                         continue;
                     },
+                    Some(switch_event) = plugin_switch_rx.recv() => {
+                        // Queue switch event — apply between turns only
+                        pending_plugin_switch = Some(switch_event);
+                        continue;
+                    },
                 };
+
+                // Process pending plugin switch when pipeline is idle
+                if !pipeline_state_rx.borrow().is_busy()
+                    && let Some(switch_event) = pending_plugin_switch.take()
+                {
+                    match switch_event {
+                        PluginSwitchEvent::Activate { plugin_id } => {
+                            if let Some(activated) = plugin_manager.activate(
+                                &plugin_id,
+                                OriginalConfigSnapshot::from_config(&config),
+                            ) {
+                                // Cleanup previous plugin's tools
+                                for name in &activated.previous_tool_names {
+                                    tools.lock().unwrap().unregister(name);
+                                }
+                                for name in &activated.previous_agent_names {
+                                    tools.lock().unwrap().unregister(name);
+                                }
+                                // Drop previous MCP servers (they die when handle is dropped)
+                                plugin_runtime_spawned_mcp = None;
+
+                                // Spawn new MCP servers and register tools
+                                if !activated.mcp_servers.is_empty() {
+                                    let (clients, proxies, names) =
+                                        SpawnedMcpServers::spawn_clients(&activated.mcp_servers).await;
+                                    let spawned = {
+                                        let mut tools_guard = tools.lock().unwrap();
+                                        SpawnedMcpServers::from_parts(
+                                            clients,
+                                            proxies,
+                                            names,
+                                            &mut tools_guard,
+                                        )
+                                    };
+                                    plugin_runtime_spawned_mcp = Some(spawned);
+                                }
+
+                                // Rebuild system prompt with new plugin sections
+                                let p_sections = build_plugin_prompt_section(&[&activated.prompt]);
+                                let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                let new_sys_prompt = build_system_prompt(
+                                    &config.llm_system_prompt,
+                                    &profile_facts,
+                                    &memories,
+                                    &agent_section,
+                                    &tool_sec,
+                                    &immutable_rules,
+                                    &p_sections,
+                                );
+                                llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+                                plugin_runtime_active_id = Some(plugin_id);
+
+                                info!(target: "pipeline", plugin = %activated.id, "Plugin activated between turns");
+                            }
+                        }
+                        PluginSwitchEvent::Deactivate => {
+                            if let Some(deactivated) = plugin_manager.deactivate(
+                                OriginalConfigSnapshot::from_config(&config),
+                            ) {
+                                // Unregister plugin tools
+                                for name in &deactivated.tool_names {
+                                    tools.lock().unwrap().unregister(name);
+                                }
+                                for name in &deactivated.agent_names {
+                                    tools.lock().unwrap().unregister(name);
+                                }
+                                // Drop MCP servers
+                                plugin_runtime_spawned_mcp = None;
+
+                                // Rebuild system prompt without plugin sections
+                                let empty_sections = PluginPromptSections::default();
+                                let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                let new_sys_prompt = build_system_prompt(
+                                    &config.llm_system_prompt,
+                                    &profile_facts,
+                                    &memories,
+                                    &agent_section,
+                                    &tool_sec,
+                                    &immutable_rules,
+                                    &empty_sections,
+                                );
+                                llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+
+                                info!(target: "pipeline", plugin = %deactivated.id, "Plugin deactivated between turns");
+                            }
+                        }
+                    }
+                }
 
                 let mono: Vec<f32> = if chunk.channels > 1 {
                     chunk.samples

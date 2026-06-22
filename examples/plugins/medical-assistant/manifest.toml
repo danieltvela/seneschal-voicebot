@@ -1,0 +1,32 @@
+# Medical Assistant Plugin for Voicebot
+# A reference example showing all plugin system capabilities.
+
+name = "medical_assistant"
+assistant_name = "Doctor Helper"
+description = "Medical consultation assistant for doctors"
+version = "0.1.0"
+
+[prompt]
+mode = "append"
+content = """
+You are a medical assistant helping a doctor conduct consultations.
+When the doctor asks about a patient, use the medical_db MCP tools
+to retrieve medical history. Always present information concisely.
+When setting prescriptions, confirm the medication name and dosage.
+"""
+
+[[mcp_servers]]
+name = "medical_db"
+command = "bunx medical-mcp-server --port 3000"
+tool_timeout_secs = 30
+
+[[agents]]
+name = "diagnostician"
+mode = "acp"
+acp_command = "hermes acp --role diagnostician"
+when_to_use = "When complex differential diagnosis is needed"
+instructions = "You are a diagnostic assistant. Analyze symptoms and suggest conditions."
+
+[config_overrides]
+llm_temperature = 0.1
+llm_max_tokens = 2048
