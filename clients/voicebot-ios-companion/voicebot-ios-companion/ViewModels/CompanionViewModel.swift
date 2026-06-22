@@ -33,6 +33,7 @@ final class CompanionViewModel: ObservableObject {
     private let discoveryManager: DiscoveryManager
     private let messageStore: MessageStore
     private var webSocketManager: WebSocketManager?
+    private var relayService: WatchRelayService?
     private let audioManager: AudioManager
     private var historyClient: HistoryClient?
     private var cancellables = Set<AnyCancellable>()
@@ -55,26 +56,31 @@ final class CompanionViewModel: ObservableObject {
 
     func connect() async {
         disconnect()
-
+        
         let granted = await audioManager.requestMicrophonePermission()
         guard granted else {
             errorMessage = "Microphone permission required"
             return
         }
-
+        
         guard let url = URL(string: "ws://\(selectedHost):\(selectedPort)/ws") else {
             errorMessage = "Invalid server address"
             return
         }
-
+        
         webSocketManager = WebSocketManager(url: url)
+        relayService = WatchRelayService(webSocketManager!)
+        relayService?.setAudioCallback { [weak self] data in
+            self?.handleIncomingAudio(data)
+        }
+        relayService?.startRelay()
         historyClient = HistoryClient(host: selectedHost, controlPort: selectedControlPort)
         setupBindings()
-
+        
         messageTask = Task {
             await webSocketManager?.connect()
         }
-
+        
         connectionState = .connecting
     }
 
@@ -87,11 +93,13 @@ final class CompanionViewModel: ObservableObject {
         bindingTasks.forEach { $0.cancel() }
         bindingTasks.removeAll()
 
+        relayService?.stopRelay()
         webSocketManager?.disconnect()
         audioManager.stopCapture()
         audioManager.stopPlayback()
 
         webSocketManager = nil
+        relayService = nil
         connectionState = .disconnected
     }
 
@@ -172,6 +180,15 @@ final class CompanionViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Audio Playback
+
+    private func handleIncomingAudio(_ data: Data) {
+        Task { @MainActor in
+            let samples = int16ToFloat(data)
+            await self.audioManager.play(samples)
+        }
+    }
+
     // MARK: - Bindings
 
     private func setupBindings() {
@@ -193,15 +210,6 @@ final class CompanionViewModel: ObservableObject {
             }
         }
         bindingTasks.append(errorBinding)
-
-        let audioBinding = Task {
-            for await data in ws.audioData {
-                guard !Task.isCancelled else { break }
-                let samples = int16ToFloat(data)
-                await audioManager.play(samples)
-            }
-        }
-        bindingTasks.append(audioBinding)
     }
 
     private func handleMessage(_ message: RemoteMessage) async {

@@ -1,0 +1,103 @@
+//
+//  WatchViewModel.swift
+//  voicebot-watchos-companion Watch App
+//
+
+import Foundation
+import WatchKit
+
+enum WatchAppState: String {
+    case idle
+    case connecting
+    case connected
+    case recording
+    case responding
+}
+
+@MainActor
+final class WatchViewModel: ObservableObject {
+    @Published var appState: WatchAppState = .idle
+    @Published var isConnected = false
+    @Published var isRecording = false
+    @Published var statusText = "Tap to Start"
+    
+    private var audioManager: WatchAudioManager?
+    
+    init() {
+        setupSession()
+    }
+    
+    private func setupSession() {
+        WCSession.default.delegate = self
+        if WCSession.default.isComplicationEnabled {
+            self.isConnected = true
+            self.appState = .connected
+            self.statusText = "Tap to Talk"
+        }
+    }
+    
+    func startRecording() {
+        guard isConnected else { return }
+        
+        Task {
+            do {
+                let am = WatchAudioManager()
+                try am.startCapture()
+                self.audioManager = am
+                
+                self.isRecording = true
+                self.appState = .recording
+                self.statusText = "Listening..."
+                
+                // Notify iPhone that recording started
+                try? WCSession.default.sendMessage(["type": "recording_started"], replyHandler: nil)
+                
+                // Send audio chunks to iPhone
+                for await audioData in am.capturedAudio {
+                    try? WCSession.default.sendMessageData(audioData, timeout: 1.0)
+                }
+            } catch {
+                self.appState = .connected
+                self.statusText = "Tap to Talk"
+            }
+        }
+    }
+    
+    func stopRecording() {
+        audioManager?.stopCapture()
+        audioManager = nil
+        self.isRecording = false
+        
+        // Notify iPhone that recording stopped
+        try? WCSession.default.sendMessage(["type": "recording_stopped"], replyHandler: nil)
+        
+        self.appState = .responding
+        self.statusText = "Responding..."
+    }
+}
+
+extension WatchViewModel: WCSessionDelegate {
+    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        if activationState == .activated {
+            self.isConnected = true
+            self.appState = .connected
+            self.statusText = "Tap to Talk"
+        }
+    }
+    
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        if let type = message["type"] as? String {
+            if type == "response_end" {
+                self.appState = .connected
+                self.statusText = "Tap to Talk"
+            }
+        }
+    }
+    
+    func session(_ session: WCSession, didReceiveMessageData data: Data) {
+        // Received audio from iPhone - play it
+        if let am = audioManager {
+            am.playAudio(data)
+        }
+    }
+}
