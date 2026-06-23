@@ -111,5 +111,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install test deps
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends espeak-ng
+
       - name: Run installer smoke test
         run: bash scripts/test-installers.sh
