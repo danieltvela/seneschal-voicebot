@@ -1067,7 +1067,7 @@ mod tests {
             || {
                 let config = Config::from_env().unwrap();
                 assert_eq!(config.sample_rate, 16000);
-                assert_eq!(config.language, "es");
+                assert_eq!(config.language, "en");
                 assert_eq!(config.whisper_model, "models/ggml-large-v3-turbo.bin");
                 assert_eq!(config.stt_provider, "whisper");
             },
@@ -1148,7 +1148,7 @@ whisper_model = "custom.bin"
             || {
                 let config = Config::from_env().unwrap();
                 assert_eq!(config.sample_rate, 48000);
-                assert_eq!(config.language, "es");
+                assert_eq!(config.language, "en");
                 assert_eq!(config.whisper_model, "models/ggml-large-v3-turbo.bin");
             },
         );
@@ -1289,7 +1289,7 @@ whisper_model = "custom.bin"
                 assert_eq!(config.s_dream_jsonl_dir, "data/pro/archives");
                 assert_eq!(config.speaker_enrollment_path, "data/pro/speaker.emb");
                 assert_eq!(config.ws_port, Some(9090u16));
-                assert_eq!(config.llm_max_tokens, 1024);
+                assert_eq!(config.llm_max_tokens, 400);
             },
         );
     }
@@ -1310,7 +1310,7 @@ whisper_model = "custom.bin"
                 assert_eq!(config.s_dream_jsonl_dir, "data/dev/archives");
                 assert_eq!(config.speaker_enrollment_path, "data/dev/speaker.emb");
                 assert_eq!(config.ws_port, Some(9091u16));
-                assert_eq!(config.llm_max_tokens, 2048);
+                assert_eq!(config.llm_max_tokens, 400);
             },
         );
     }
@@ -1342,7 +1342,7 @@ llm_max_tokens = 9999
                 assert_eq!(config.ws_port, Some(12345u16));
                 assert_eq!(config.llm_max_tokens, 9999);
                 assert_eq!(config.sample_rate, 16000);
-                assert_eq!(config.language, "es");
+                assert_eq!(config.language, "en");
             },
         );
 

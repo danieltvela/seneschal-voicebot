@@ -146,9 +146,16 @@ impl AvSpeechTts {
 
 /// Iterate installed voices and return the system identifier for the one whose
 /// display name matches `voice_name` exactly.
+/// If `voice_name` is empty or blank, return the first available voice (system default).
 fn find_voice_identifier(voice_name: &str) -> Option<String> {
     autoreleasepool(|_pool| unsafe {
         let voices = AVSpeechSynthesisVoice::speechVoices();
+
+        if voice_name.trim().is_empty()
+            && let Some(first_voice) = voices.iter().next()
+        {
+            return Some(first_voice.identifier().to_string());
+        }
         for voice in voices.iter() {
             let name = voice.name().to_string();
             if name == voice_name {
