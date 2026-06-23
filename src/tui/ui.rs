@@ -322,8 +322,8 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
         (0u16, 2u16 + char_pos as u16)
     } else {
         let prefix_offset = 2; // "│ " is 2 characters
-        let line_num = char_pos / width;
-        let col_in_line = char_pos % width;
+        let line_num = char_pos.checked_div(width).unwrap_or(0);
+        let col_in_line = char_pos.checked_rem(width).unwrap_or(0);
         (line_num as u16, prefix_offset as u16 + col_in_line as u16)
     };
     frame.set_cursor_position((area.x + col, area.y + row));
