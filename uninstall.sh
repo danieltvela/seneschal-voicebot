@@ -1,6 +1,6 @@
 #!/bin/sh
 # Voicebot uninstaller
-# Reverses everything created by install.sh / install-gitea.sh.
+# Reverses everything created by install.
 #
 # Usage:
 #   ./uninstall.sh           # interactive confirmation

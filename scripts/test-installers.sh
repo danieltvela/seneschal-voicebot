@@ -1,7 +1,7 @@
 #!/bin/bash
 # Voicebot installer smoke-test harness
 #
-# Tests install.sh and install-gitea.sh without real network access by
+# Tests install.sh without real network access by
 # placing a mock curl and a mock `say` on PATH that serve local fixture files.
 #
 # The installers are run with stdin redirected from /dev/null, which forces
@@ -253,49 +253,6 @@ if [ "$ERR" = "1" ]; then
 fi
 echo ""
 echo "  [+] install.sh test passed"
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Test 2 — install-gitea.sh (non-interactive)
-# ═══════════════════════════════════════════════════════════════════════════════
-echo ""
-echo "═══════════════════════════════════════════════"
-echo "  Test 2: install-gitea.sh (non-interactive)"
-echo "═══════════════════════════════════════════════"
-echo ""
-
-GITEA_INSTALL_DIR="$TEST_DIR/install-gitea-test"
-
-run_installer_noninteractive "$PROJECT_ROOT/install-gitea.sh" \
-    "VOICEBOT_HOME=$GITEA_INSTALL_DIR" \
-    "BIN_DIR=$GITEA_INSTALL_DIR/launcher" \
-    "GITEA_URL=http://localhost:9876" \
-    "GITEA_REPO=danielvela/voicebot" \
-    "VOICEBOT_VERSION=" \
-    "WHISPER_MODEL_URL=http://localhost:9876/ggml-large-v3-turbo.bin" \
-    "VAD_MODEL_URL=http://localhost:9876/silero_vad.onnx" \
-    "KOKORO_MODEL_URL=http://localhost:9876/kokoro-v1.0.onnx" \
-    "KOKORO_VOICES_URL=http://localhost:9876/voices-v1.0.bin"
-
-echo ""
-echo "--- Verifying install-gitea.sh ---"
-ERR=0
-check_file "$GITEA_INSTALL_DIR/bin/voicebot"                   "Binary installed"        || ERR=1
-check_file "$GITEA_INSTALL_DIR/models/ggml-large-v3-turbo.bin" "Whisper model"           || ERR=1
-check_file "$GITEA_INSTALL_DIR/models/ggml-silero-vad.bin"     "VAD model"               || ERR=1
-check_file "$GITEA_INSTALL_DIR/.env"                           "Default config"          || ERR=1
-
-if [ "$(uname -s)" = "Linux" ]; then
-    check_file "$GITEA_INSTALL_DIR/models/kokoro-v1.0.onnx"  "Kokoro model (Linux)"   || ERR=1
-    check_file "$GITEA_INSTALL_DIR/models/voices-v1.0.bin"   "Kokoro voices (Linux)"  || ERR=1
-fi
-
-if [ "$ERR" = "1" ]; then
-    echo ""
-    echo "FAILED: install-gitea.sh test — missing files"
-    exit 1
-fi
-echo ""
-echo "  [+] install-gitea.sh test passed"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 3 — custom Whisper model (tiny) via env override

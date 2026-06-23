@@ -365,18 +365,6 @@ The output depends on the `TTS_PROVIDER` setting:
 
 ---
 
-### Private / Internal Install
-
-Internal teams with access to the private Gitea instance can use the Gitea installer instead:
-
-```bash
-curl -fsSL <gitea_url>/danielvela/voicebot/releases/latest/download/install-gitea.sh | sh
-```
-
-This installer is functionally identical to the GitHub installer but pulls from the internal repository.
-
----
-
 ## Architecture
 
 Voicebot is intentionally **narrow in scope**: it owns the audio pipeline and conversational experience. Complex tasks are delegated to an external agent via stdin/stdout protocol.
