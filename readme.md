@@ -242,7 +242,7 @@ wget https://github.com/leloykun/kokoro/releases/download/v1.0/voices-v1.0.bin -
 ### Quick Install (recommended for end users)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/refs/heads/master/install.sh | sh
 ```
 
 The installer downloads all required models and sets up a working configuration.
@@ -252,7 +252,7 @@ The installer downloads all required models and sets up a working configuration.
 #### 1. Clone the repository
 
 ```bash
-git clone https://github.com/madcato/voicebot.git
+git clone https://github.com/danieltvela/voicebot.git
 cd voicebot
 ```
 
