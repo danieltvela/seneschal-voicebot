@@ -25,6 +25,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
+COPY voicebot.pro.toml ./
 COPY src ./src
 COPY tests ./tests
 COPY patches ./patches
