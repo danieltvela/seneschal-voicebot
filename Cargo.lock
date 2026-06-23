@@ -2053,8 +2053,6 @@ dependencies = [
 [[package]]
 name = "kokorox"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee518f872faf806af10b5af8b4da727e3e2ede0b1b1b9e8ed4fe8d19cd3247f4"
 dependencies = [
  "dirs",
  "espeak-rs",

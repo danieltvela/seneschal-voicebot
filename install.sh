@@ -1,9 +1,9 @@
 #!/bin/sh
 # Voicebot installer — GitHub release edition
-# Usage: curl -fsSL https://github.com/madcato/voicebot/releases/latest/download/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/main/install.sh | sh
 #
 # Environment overrides:
-#   GITHUB_REPO       — GitHub owner/repo (default: danielvela/voicebot)
+#   GITHUB_REPO       — GitHub owner/repo (default: danieltvela/voicebot)
 #   VOICEBOT_HOME     — where models/data/config live (default: ~/.voicebot)
 #   BIN_DIR           — where to place the `voicebot` launcher (default: ~/.local/bin)
 #   VOICEBOT_VERSION  — pin a release tag, e.g. v1.2.0 (default: latest)
@@ -13,7 +13,7 @@
 set -e
 
 # ── Caller contract for the common lib ──────────────────────────────────────
-GITHUB_REPO="${GITHUB_REPO:-danielvela/voicebot}"
+GITHUB_REPO="${GITHUB_REPO:-danieltvela/voicebot}"
 VOICEBOT_VERSION="${VOICEBOT_VERSION:-latest}"
 
 if [ "$VOICEBOT_VERSION" = "latest" ]; then
