@@ -8,8 +8,8 @@ servers:
         token: ""
         models:
           # - Step-3.7-Flash
-          # - Qwen3.6-27B-FP8
-          - Qwen3.6-27B-NVFP4
+          - Qwen3.6-27B-FP8
+          # - Qwen3.6-27B-NVFP4
           # - gemma-4-31B-it-NVFP4
           # - Qwen3.6-35B-A3B
           # - Qwen3.6-35B-A3B-FP8
@@ -21,8 +21,8 @@ servers:
       vllm-gemma:
         port: 8006
         token: ""
-        models:
-          - Qwen3.6-35B-A3B-NVFP4
+        models: []
+          # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
           # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
@@ -31,8 +31,8 @@ servers:
       llama-server:
         port: 8000
         token: ""
-        models:
-          - gemma-4-12b-it-UD-Q4_K_XL
+        models: []
+          # - gemma-4-12b-it-UD-Q4_K_XL
       # llama-server-gemma:
       #   port: 8001
       #   token: ""
@@ -93,20 +93,3 @@ servers:
         models: []
           # - mlx-community/gemma-4-26b-a4b-it-4bit
           # - mlx-community/gemma-4-26B-A4B-it-qat-nvfp4
-
-
-# Evaluator model used to judge quality benchmark responses.
-# This model scores each fixture response against a rubric and is NOT itself
-# a benchmark target — it must be a capable, instruction-following model
-# (ideally larger or higher-quality than the models under test).
-# The quality benchmark script reads this section separately from `servers`.
-evaluator:
-  host: "http://tesla.local"
-  runtime: "llama-server-nvidia"
-  port: 8005
-  token: ""
-  model: Qwen3.6-27B-NVFP4
-  # temperature: 0.0 — evaluator always runs at zero temperature for determinism
-  temperature: 0.0
-  # max_tokens: budget for the evaluator's JSON verdict per fixture
-  max_tokens: 512
