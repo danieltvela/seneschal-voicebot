@@ -27,7 +27,6 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY tests ./tests
-COPY vendor ./vendor
 
 RUN . "$CARGO_HOME/env" \
     && cargo build --release --bin voicebot --features "tui,remote,control"

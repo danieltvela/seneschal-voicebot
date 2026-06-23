@@ -135,7 +135,16 @@ mod tests {
         let r1 = CurrentTimeTool.run("").await;
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let r2 = CurrentTimeTool.run("").await;
-        assert_eq!(r1, r2);
+        // Format: "HH:MM:SS, Weekday DD Month YYYY"
+        // Extract seconds (char [6..8]) and date part (char 8+)
+        let r1_sec: u32 = r1[6..8].parse().expect("r1 seconds");
+        let r2_sec: u32 = r2[6..8].parse().expect("r2 seconds");
+        assert!(
+            r2_sec == r1_sec || r2_sec == (r1_sec + 1) % 60,
+            "seconds jumped by more than 1: r1={r1} r2={r2}"
+        );
+        // Date part (after the comma) must match
+        assert_eq!(r1[8..], r2[8..], "date part changed: r1={r1} r2={r2}");
     }
 
     #[test]
