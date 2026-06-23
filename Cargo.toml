@@ -139,6 +139,9 @@ path = "src/bin/acp_agent_chat.rs"
 [dependencies.hound]
 version = "3"
 
+[patch.crates-io]
+kokorox = { path = "patches/kokorox" }
+
 [dev-dependencies]
 # Mock HTTP server for LLM client integration tests
 wiremock = "0.6"
