@@ -234,14 +234,16 @@ check_file "$INSTALL_DIR/models/ggml-large-v3-turbo.bin"        "Whisper model (
 check_file "$INSTALL_DIR/models/ggml-silero-vad.bin"            "VAD model"               || ERR=1
 check_file "$INSTALL_DIR/.env"                                  "Default config"          || ERR=1
 check_file "$INSTALL_DIR/launcher/voicebot"                     "Launcher script"         || ERR=1
-check_grep "$INSTALL_DIR/.env" "^AVSPEECH_VOICE="               ".env has AVSPEECH_VOICE (macOS path)" || ERR=1
-check_grep "$INSTALL_DIR/.env" "^TTS_PROVIDER=avspeech"         ".env has TTS_PROVIDER=avspeech"         || ERR=1
 check_grep "$INSTALL_DIR/launcher/voicebot" "voicebot"          "Launcher references binary"            || ERR=1
 
 if [ "$(uname -s)" = "Linux" ]; then
     check_file "$INSTALL_DIR/models/kokoro-v1.0.onnx"  "Kokoro model (Linux)"   || ERR=1
     check_file "$INSTALL_DIR/models/voices-v1.0.bin"   "Kokoro voices (Linux)"  || ERR=1
     check_grep "$INSTALL_DIR/.env" "^KOKORO_VOICE="   ".env has KOKORO_VOICE (Linux path)"  || ERR=1
+    check_grep "$INSTALL_DIR/.env" "^TTS_PROVIDER=kokoro" ".env has TTS_PROVIDER=kokoro (Linux path)" || ERR=1
+else
+    check_grep "$INSTALL_DIR/.env" "^AVSPEECH_VOICE="  ".env has AVSPEECH_VOICE (macOS path)" || ERR=1
+    check_grep "$INSTALL_DIR/.env" "^TTS_PROVIDER=avspeech" ".env has TTS_PROVIDER=avspeech"    || ERR=1
 fi
 
 if [ "$ERR" = "1" ]; then
