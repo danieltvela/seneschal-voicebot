@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod memory;
 pub mod plugins;
 pub mod profile;
+pub mod screen_capture;
 pub mod search;
 pub mod stt;
 pub mod tools;

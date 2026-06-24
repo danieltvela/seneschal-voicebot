@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tracing::{info, warn};
 
 use crate::llm::LlmProvider;
+use crate::screen_capture;
 
 use super::Tool;
 
@@ -26,23 +27,7 @@ impl TakeScreenshotTool {
 
     /// Capture the screen to a temp file and return its PNG bytes.
     async fn capture_screen() -> Result<Vec<u8>, String> {
-        let path = "/tmp/voicebot_screenshot.png";
-
-        // -x: no shutter sound; -t png: force PNG format
-        let output = tokio::process::Command::new("screencapture")
-            .args(["-x", "-t", "png", path])
-            .output()
-            .await
-            .map_err(|e| format!("screencapture failed to launch: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("screencapture error: {stderr}"));
-        }
-
-        tokio::fs::read(path)
-            .await
-            .map_err(|e| format!("failed to read screenshot file: {e}"))
+        screen_capture::capture_screen().await
     }
 
     /// Send the PNG to the vision model and return its description.

@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::agents::ProactiveEvent;
 use crate::llm::LlmProvider;
+use crate::screen_capture;
 
 const EYES_PROMPT: &str = "\
 You are a background visual monitor for a voice assistant called Jarvis. \
@@ -69,7 +70,7 @@ impl EyesDaemon {
 
             debug!(target: "eyes", "EYES tick — capturing screen");
 
-            let png_bytes = match capture_screen().await {
+            let png_bytes = match screen_capture::capture_screen().await {
                 Ok(b) => b,
                 Err(e) => {
                     warn!(target: "eyes", "Screenshot failed: {}", e);
@@ -111,25 +112,6 @@ impl EyesDaemon {
             }
         }
     }
-}
-
-/// Capture the screen silently to a temp file and return the PNG bytes.
-async fn capture_screen() -> Result<Vec<u8>, String> {
-    let path = "/tmp/voicebot_eyes.png";
-    let output = tokio::process::Command::new("screencapture")
-        .args(["-x", "-t", "png", path])
-        .output()
-        .await
-        .map_err(|e| format!("screencapture failed to launch: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("screencapture error: {stderr}"));
-    }
-
-    tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("failed to read screenshot file: {e}"))
 }
 
 /// Parse the structured EYES response.

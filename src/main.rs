@@ -22,6 +22,7 @@ mod plugins;
 mod profile;
 #[cfg(feature = "remote")]
 mod remote;
+mod screen_capture;
 mod search;
 mod stt;
 mod tools;
