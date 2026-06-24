@@ -676,7 +676,7 @@ test_voice_macos() {
         return
     fi
     info "  Testing voice with 'say'..."
-    if say -v "$_voice" "Hola, soy voicebot. Esta es una prueba de mi voz." 2>/dev/null; then
+    if say -v "$_voice" "Hi, I'm voicebot. This is a test of my voice." 2>/dev/null; then
         info "  Voice test played."
     else
         warn "  'say' test failed — voice may not be installed."

@@ -253,6 +253,7 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | `SECONDARY_LLM_MODEL` | — | Model name for secondary LLM requests |
 | `SECONDARY_LLM_MAX_TOKENS` | `1024` | Max tokens for secondary LLM responses |
 | `SECONDARY_LLM_API_KEY` | _(empty)_ | Bearer token for secondary LLM API |
+| `LLM_THINKING` | `0` | Enable Qwen3 thinking mode on main LLM (auto-strips thinking tags from output) |
 | `SECONDARY_LLM_THINKING` | `0` | Enable Qwen3 thinking mode on secondary LLM (auto-strips thinking tags) |
 | `MCP_COMMAND` | — | Command to spawn MCP server subprocess (e.g. `bunx apple-mcp@latest`). Unset = MCP disabled. |
 | `MCP_TOOL_TIMEOUT_SECS` | `30` | Hard timeout in seconds per MCP tool call |

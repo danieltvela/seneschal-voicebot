@@ -486,6 +486,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `SECONDARY_LLM_MAX_TOKENS` | `512` | Max tokens for secondary LLM responses (vision). |
 | `SECONDARY_LLM_API_KEY` | - | Bearer token for secondary LLM API. |
 | `SECONDARY_LLM_PROVIDER` | `mlx` | Backend for secondary LLM (mlx-lm or omlx). |
+| `LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the main LLM. Strips thinking tags from streamed output. |
 | `SECONDARY_LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the secondary LLM. Strips thinking tags from output. |
 | **EYES (visual awareness)** | | |
 | `EYES_INTERVAL_SECS` | `0` (disabled) | Seconds between automatic screen captures. Set to e.g. `15` to enable. Requires `SECONDARY_LLM_URL` (vision model). Voicebot speaks when something important is detected on screen. |

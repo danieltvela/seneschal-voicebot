@@ -114,7 +114,8 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn LlmProvider>> {
                 config.llm_max_tokens,
                 config.llm_temperature,
             )
-            .with_api_key(&config.llm_api_key);
+            .with_api_key(&config.llm_api_key)
+            .with_thinking(config.llm_thinking);
             Ok(Arc::new(provider))
         }
         other => bail!("Invalid LLM_PROVIDER '{other}'. Supported values: openai"),

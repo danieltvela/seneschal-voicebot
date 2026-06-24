@@ -219,9 +219,11 @@ impl OpenAIClient {
             // Jinja2 template can conflict with tool calling for some mlx-community
             // quantizations. ThinkFilter will strip any <think> blocks that arrive.
         } else {
-            // No tools → safe to disable thinking. Eliminates ~700ms of invisible
-            // <think>…</think> overhead that ThinkFilter would otherwise consume.
-            payload["chat_template_kwargs"] = serde_json::json!({"enable_thinking": false});
+            // No tools → conditionally enable thinking based on config.
+            // When disabled, eliminates ~700ms of invisible <think>…</think>
+            // overhead that ThinkFilter would otherwise consume.
+            payload["chat_template_kwargs"] =
+                serde_json::json!({"enable_thinking": self.thinking});
         }
 
         tracing::debug!(target: "llm", "Request payload: {}", serde_json::to_string(&payload).unwrap_or_default());

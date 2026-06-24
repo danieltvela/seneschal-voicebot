@@ -35,6 +35,7 @@ llm_model = "local-model"
 llm_max_tokens = 400
 llm_system_prompt = """Eres un asistente de voz útil y conciso. Responde siempre en el mismo idioma que el usuario. Habla de forma natural y directa, sin listas ni formato markdown. Empieza siempre con la respuesta directa, sin preámbulos. Por defecto, limita tus respuestas a 2-3 frases cortas. Si el usuario pide expresamente más detalle, una explicación completa o un resumen extenso, responde con la profundidad necesaria."""
 llm_temperature = 0.5
+llm_thinking = false
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
 tts_provider = "avspeech"

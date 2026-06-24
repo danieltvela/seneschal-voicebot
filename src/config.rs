@@ -134,6 +134,10 @@ pub struct Config {
     pub llm_max_tokens: u32,
     pub llm_system_prompt: String,
     pub llm_temperature: f32,
+    /// Enable Qwen3 thinking mode on the main LLM (LLM_THINKING, default false).
+    /// When true, `chat_template_kwargs: {"enable_thinking": true}` is sent and
+    /// `<think>…</think>` blocks are stripped from the output.
+    pub llm_thinking: bool,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
     /// TTS backend: "avspeech" (default, native AVSpeechSynthesizer, --features avspeech)
@@ -622,6 +626,11 @@ impl Config {
         // EYES
         if let Ok(v) = env::var("EYES_INTERVAL_SECS") {
             self.eyes_interval_secs = v.parse().context("Invalid EYES_INTERVAL_SECS")?;
+        }
+
+        // LLM thinking
+        if let Ok(v) = env::var("LLM_THINKING") {
+            self.llm_thinking = v == "1" || v.to_lowercase() == "true";
         }
 
         // Secondary LLM
