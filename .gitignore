@@ -12,6 +12,8 @@
 data/voicebot.db
 data/speaker.emb
 data/*.db
+data/dev/*.db
+data/pro/*.db
 data/*.emb
 
 # IDE and editor
