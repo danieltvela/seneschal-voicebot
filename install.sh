@@ -54,17 +54,6 @@ warn()  { printf "${_YELLOW}[voicebot]${_NC} %s\n" "$1" >&2; }
 error() { printf "${_RED}[voicebot] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
 step()  { printf "\n${_GREEN}▶ %s${_NC}\n" "$1" >&2; }
 
-# ── TTY detection ─────────────────────────────────────────────────────────────
-# VOICEBOT_TTY=1 means interactive (stdin is a TTY). All prompts consult this
-# and fall back to defaults silently when piped (`curl | sh`).
-detect_tty() {
-    if [ -t 0 ]; then
-        VOICEBOT_TTY=1
-    else
-        VOICEBOT_TTY=0
-    fi
-}
-
 # ── Interactive I/O primitives ────────────────────────────────────────────────
 # All three return their result on stdout so callers can do:
 #     VOICE=$(ask "Voice?" "Marisol (Enhanced)")
@@ -73,10 +62,6 @@ detect_tty() {
 # ask PROMPT DEFAULT — returns DEFAULT if no input or non-TTY.
 ask() {
     _prompt="$1"; _default="$2"
-    if [ "${VOICEBOT_TTY:-0}" != "1" ]; then
-        printf "%s" "$_default"
-        return
-    fi
     printf "%s [%s]: " "$_prompt" "$_default" >&2
     _reply=""
     # `read` may fail under set -e when input ends; ignore that case.
@@ -91,10 +76,6 @@ ask() {
 # confirm PROMPT DEFAULT(y|n) — returns "y" or "n" on stdout.
 confirm() {
     _prompt="$1"; _default="$2"
-    if [ "${VOICEBOT_TTY:-0}" != "1" ]; then
-        printf "%s" "$_default"
-        return
-    fi
     case "$_default" in
         y|Y) _hint="Y/n" ;;
         *)   _hint="y/N" ;;
@@ -119,20 +100,6 @@ pick_from_list() {
     _items_count=$#
     if [ "$_items_count" = "0" ]; then
         error "pick_from_list: no items provided"
-    fi
-    if [ "${VOICEBOT_TTY:-0}" != "1" ]; then
-        # Non-interactive: evaluate default index, print that item.
-        # eval dance to index into positional params portably.
-        _i=0
-        for _item in "$@"; do
-            _i=$((_i + 1))
-            if [ "$_i" = "$_default_idx" ]; then
-                printf "%s" "$_item"
-                return
-            fi
-        done
-        # Fall through: print first item
-        for _item in "$@"; do printf "%s" "$_item"; return; done
     fi
     printf "\n%s\n" "$_prompt" >&2
     _i=0
@@ -178,14 +145,8 @@ pick_from_list() {
 }
 
 # select_language — interactive language choice, sets _LANGUAGE to "en" or "es".
-# Non-interactive installs default to English silently.
 select_language() {
     step "Language selection"
-    if [ "${VOICEBOT_TTY:-0}" != "1" ]; then
-        _LANGUAGE="en"
-        info "  Non-interactive install: using English."
-        return
-    fi
     _lang_choice=$(pick_from_list "Choose your language / Elige tu idioma" 1 "English" "Español")
     case "$_lang_choice" in
         "Español") _LANGUAGE="es" ;;
@@ -583,15 +544,28 @@ _parse_say_voices() {
     IFS='
 '
     for _line in $_say_out; do
-        IFS=' '
-        # First token is the voice name. Strip trailing spaces.
-        set -- $_line
-        _name="$1"
-        if [ -n "$_name" ]; then
-            if [ -z "$_out" ]; then
-                _out="$_name"
-            else
-                _out="$_out|$_name"
+        # Locale token looks like xx_XX (e.g. es_ES, en_US).
+        # The voice name is everything before it (may include parentheses).
+        _locale=""
+        IFS=" "
+        for _tok in $_line; do
+            case "$_tok" in
+                [a-z][a-z]_[A-Za-z]*)
+                    _locale="$_tok"
+                    break
+                    ;;
+            esac
+        done
+        if [ -n "$_locale" ]; then
+            _name="${_line%%$_locale*}"
+            _name=$(printf "%s" "$_name" | sed 's/[[:space:]]*$//')
+            if [ -n "$_name" ]; then
+                if [ -z "$_out" ]; then
+                    _out="${_name}|${_locale}"
+                else
+                    _out="${_out}
+${_name}|${_locale}"
+                fi
             fi
         fi
         IFS='
@@ -610,26 +584,31 @@ _macos_lang_prefix() {
     esac
 }
 
-# Filter voices by language prefix. Echo newline-separated.
+# Filter voices by language prefix using locale (second field after |).
+# Input format: newline-separated "NAME|LOCALE" lines.
+# Echo newline-separated voice names.
 _filter_voices_by_lang() {
     _all="$1"; _prefix="$2"
     if [ -z "$_prefix" ]; then
-        printf "%s" "$_all" | tr '|' '
-'
+        printf "%s" "$_all" | while IFS='|' read -r _n _l; do
+            [ -n "$_n" ] && printf "%s\n" "$_n"
+        done
         return
     fi
     _out=""
     _OLD_IFS="$IFS"
-    IFS='|'
-    # Disable set -e temporarily so the for loop's empty list is safe.
+    IFS='
+'
     set +e
-    for _v in $_all; do
-        case "$_v" in
+    for _entry in $_all; do
+        _locale="${_entry#*|}"
+        case "$_locale" in
             "${_prefix}"*)
+                _name="${_entry%|*}"
                 if [ -z "$_out" ]; then
-                    _out="$_v"
+                    _out="$_name"
                 else
-                    _out="$_out|$_v"
+                    _out="$_out|$_name"
                 fi
                 ;;
         esac
@@ -637,30 +616,44 @@ _filter_voices_by_lang() {
     set -e
     IFS="$_OLD_IFS"
     if [ -z "$_out" ]; then
-        # Fall back to all voices if no language match.
-        printf "%s" "$_all" | tr '|' '
-'
+        # Fall back to all voice names if no language match.
+        printf "%s" "$_all" | while IFS='|' read -r _n _l; do
+            [ -n "$_n" ] && printf "%s\n" "$_n"
+        done
     else
         printf "%s" "$_out" | tr '|' '
 '
     fi
 }
 
-# Return the locale string of a voice name from `say -v ?` (column 2).
-# Empty if not found.
+# Return the locale string of a voice name from `say -v ?`.
+# Empty if not found. Handles full names with parentheses like "Jorge (Enhanced)".
 _voice_locale() {
     _name="$1"
+    [ -z "$_name" ] && return
     _say_out=$(say -v '?' 2>/dev/null) || return
     _OLD_IFS="$IFS"
     IFS='
 '
     for _line in $_say_out; do
-        IFS=' '
-        set -- $_line
-        if [ "$1" = "$_name" ]; then
-            printf "%s" "$2"
-            IFS="$_OLD_IFS"
-            return
+        _locale=""
+        IFS=" "
+        for _tok in $_line; do
+            case "$_tok" in
+                [a-z][a-z]_[A-Za-z]*)
+                    _locale="$_tok"
+                    break
+                    ;;
+            esac
+        done
+        if [ -n "$_locale" ]; then
+            _vname="${_line%%$_locale*}"
+            _vname=$(printf "%s" "$_vname" | sed 's/[[:space:]]*$//')
+            if [ "$_vname" = "$_name" ]; then
+                printf "%s" "$_locale"
+                IFS="$_OLD_IFS"
+                return
+            fi
         fi
         IFS='
 '
@@ -732,22 +725,17 @@ select_voice_macos() {
     SELECTED_LOCALE=$(_voice_locale "$SELECTED_VOICE")
     info "  Selected voice: $SELECTED_VOICE ($SELECTED_LOCALE)"
     # Reminder about downloading more voices.
-    if [ "${VOICEBOT_TTY:-0}" = "1" ]; then
-        printf "\n" >&2
-        warn "  To download more voices (free, ~50-300 MB each):"
-        warn "    System Settings → Accessibility → Spoken Content"
-        warn "    → System Voice → Manage Voices… → Spanish (or your language)"
-        warn "    → tick the Enhanced or Premium variants → OK"
-        printf "\n" >&2
-    fi
+    printf "\n" >&2
+    warn "  To download more voices (free, ~50-300 MB each):"
+    warn "    System Settings → Accessibility → Spoken Content"
+    warn "    → System Voice → Manage Voices… → Spanish (or your language)"
+    warn "    → tick the Enhanced or Premium variants → OK"
+    printf "\n" >&2
 }
 
 # Run a `say` test so the user can hear the voice. Skip if non-TTY.
 test_voice_macos() {
     _voice="$1"
-    if [ "${VOICEBOT_TTY:-0}" != "1" ]; then
-        return
-    fi
     info "  Testing voice with 'say'..."
     if say -v "$_voice" "Hi, I'm voicebot. This is a test of my voice." 2>/dev/null; then
         info "  Voice test played."
@@ -919,6 +907,19 @@ RULES
 - Take initiative: if you see something relevant they haven't asked for but should know, mention it briefly.
 - If essential data is missing, state what's missing in a declarative sentence."
     fi
+
+    # TTS config block based on OS selection
+    if [ "$OS" = "Darwin" ] && [ -n "${SELECTED_VOICE:-}" ]; then
+        _tts_config="tts_provider = \"avspeech\"
+avspeech_voice = \"${SELECTED_VOICE}\""
+    else
+        _tts_config="tts_provider = \"kokoro\"
+kokoro_voice = \"${SELECTED_KOKORO_VOICE:-es_xb}\"
+kokoro_language = \"${SELECTED_KOKORO_LANG:-es}\"
+kokoro_model = \"${VOICEBOT_MODELS_DIR}/kokoro-v1.0.onnx\"
+kokoro_voices = \"${VOICEBOT_MODELS_DIR}/voices-v1.0.bin\""
+    fi
+
     cat > "$_config_file" << CONFIGEOF
 # Voicebot configuration — generated by install.sh
 # Edit this file to customize your setup.
@@ -926,7 +927,17 @@ RULES
 
 language = "${_LANGUAGE}"
 
+# STT
+whisper_model = "${VOICEBOT_MODELS_DIR}/${WHISPER_MODEL_FILE}"
+vad_model = "${VOICEBOT_MODELS_DIR}/ggml-silero-vad.bin"
+
+# LLM
+llm_model = "mlx-community/gemma-4-26b-a4b-it-4bit"
+
 $_llm_config
+
+# TTS
+$_tts_config
 
 llm_system_prompt = """${_system_prompt}"""
 
@@ -961,7 +972,7 @@ export VAD_MODEL="\${VAD_MODEL:-\$VOICEBOT_HOME/models/ggml-silero-vad.bin}"
 export TTS_PROVIDER="\${TTS_PROVIDER:-$_default_tts}"
 export LLM_MODEL="\${LLM_MODEL:-mlx-community/gemma-4-26b-a4b-it-4bit}"
 
-exec "\$VOICEBOT_HOME/bin/voicebot" "\$@"
+exec "\$VOICEBOT_HOME/bin/voicebot" "\$@" 2>/dev/null
 LAUNCHEOF
     chmod +x "$_launcher"
     info "  Launcher installed: $_launcher"
@@ -1068,7 +1079,6 @@ print_completion() {
 
 # ── Main orchestrator ───────────────────────────────────────────────────────
 main() {
-    detect_tty
     _apply_defaults
     _detect_platform
 

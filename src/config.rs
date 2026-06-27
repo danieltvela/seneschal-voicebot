@@ -321,7 +321,7 @@ pub struct Config {
     pub llm_self_managed: bool,
     /// Full shell command to launch the LLM server (LLM_COMMAND).
     /// Required when LLM_SELF_MANAGED=1.
-    /// Example: `mlx_lm.server --model mlx-community/Qwen3-8B-4bit --host 0.0.0.0 --port 8080 --max-tokens 32768`
+    /// Example: `mlx_lm.server --model google/gemma-4-26b-a4b --host 0.0.0.0 --port 8080 --max-tokens 32768`
     pub llm_command: Option<String>,
 
     // ── Persistence ───────────────────────────────────────────────────────────
