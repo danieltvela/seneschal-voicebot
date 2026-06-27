@@ -39,7 +39,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --bin voicebot --target ${{ matrix.target }} --features avspeech
+        run: cargo build --release --bin voicebot --target ${{ matrix.target }} --features avspeech,tui
 
       - name: Package
         run: |
