@@ -177,6 +177,23 @@ pick_from_list() {
     done
 }
 
+# select_language — interactive language choice, sets _LANGUAGE to "en" or "es".
+# Non-interactive installs default to English silently.
+select_language() {
+    step "Language selection"
+    if [ "${VOICEBOT_TTY:-0}" != "1" ]; then
+        _LANGUAGE="en"
+        info "  Non-interactive install: using English."
+        return
+    fi
+    _lang_choice=$(pick_from_list "Choose your language / Elige tu idioma" 1 "English" "Español")
+    case "$_lang_choice" in
+        "Español") _LANGUAGE="es" ;;
+        *)         _LANGUAGE="en" ;;
+    esac
+    info "  Selected language: $_LANGUAGE"
+}
+
 # ── Defaults & derived paths ──────────────────────────────────────────────────
 _apply_defaults() {
     VOICEBOT_HOME="${VOICEBOT_HOME:-$HOME/.voicebot}"
@@ -186,7 +203,7 @@ _apply_defaults() {
     WHISPER_MODEL_URL="${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin}"
     KOKORO_MODEL_URL="${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}"
     KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
-    VAD_MODEL_URL="${VAD_MODEL_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx}"
+    VAD_MODEL_URL="${VAD_MODEL_URL:-https://huggingface.co/ggml-org/silero-v5.1.2/resolve/main/ggml-silero-v5.1.2.bin}"
 
     VOICEBOT_BIN_DIR="$VOICEBOT_HOME/bin"
     VOICEBOT_MODELS_DIR="$VOICEBOT_HOME/models"
@@ -452,32 +469,89 @@ install_vad_model() {
     info "  VAD model installed."
 }
 
-# ── Install mlx-lm (macOS only) ──────────────────────────────────────────────
-install_mlx_lm() {
-    if [ "$OS" != "Darwin" ]; then
-        return
-    fi
+# ── LLM provider configuration ───────────────────────────────────────────────
+# Replaces the old install_mlx_lm(). On macOS offers a choice between
+# installing mlx-lm and using an existing provider.
+# On Linux always asks for an existing provider URL.
+configure_llm_provider() {
+    step "Configuring LLM provider"
 
-    step "Installing mlx-lm (macOS LLM server)"
+    # Variables consumed downstream by create_env():
+    _LLM_CHOICE="own"
+    _LLM_URL=""
+    _LLM_API_KEY=""
 
-    if command -v pip3 >/dev/null 2>&1; then
-        if pip3 install mlx-lm --quiet 2>/dev/null; then
-            info "  mlx-lm installed successfully."
-        else
-            warn "  Failed to install mlx-lm via pip3."
-            warn "  Please install manually: pip3 install mlx-lm"
-        fi
-    elif command -v pip >/dev/null 2>&1; then
-        if pip install mlx-lm --quiet 2>/dev/null; then
-            info "  mlx-lm installed successfully."
-        else
-            warn "  Failed to install mlx-lm via pip."
-            warn "  Please install manually: pip install mlx-lm"
-        fi
+    if [ "$OS" = "Darwin" ]; then
+        _choice=$(pick_from_list "LLM provider" 1 \
+            "Use my own LLM provider (OpenAI-compatible)" \
+            "Install mlx-lm (runs a local model on your Mac)")
     else
-        warn "  pip not found. Please install mlx-lm manually:"
-        warn "    pip3 install mlx-lm"
+        _choice="Use my own LLM provider (OpenAI-compatible)"
+        info "  Linux detected — using your own LLM provider."
     fi
+
+    case "$_choice" in
+        "Use my own LLM provider"*)
+            _LLM_CHOICE="own"
+            _LLM_URL=$(ask "LLM server URL (OpenAI-compatible)" "http://127.0.0.1:8000")
+            _LLM_API_KEY=$(ask "API key (leave blank if not needed)" "")
+            info "  LLM provider: $_LLM_URL"
+            if [ -n "$_LLM_API_KEY" ]; then
+                info "  API key configured."
+            else
+                info "  No API key — server must allow unauthenticated access."
+            fi
+            ;;
+        "Install mlx-lm"*)
+            _LLM_CHOICE="mlx-lm"
+            info "  Installing mlx-lm..."
+            _mlx_ok=0
+            _LLM_MLX_COMMAND=""
+
+            # Strategy 1: user install with python3 -m pip (handles PEP 668)
+            if command -v python3 >/dev/null 2>&1; then
+                info "  Trying: python3 -m pip install --user mlx-lm"
+                if python3 -m pip install --user mlx-lm 2>/dev/null; then
+                    _mlx_ok=1
+                    _python_exe=$(python3 -c "import sys; print(sys.executable)" 2>/dev/null)
+                    if [ -n "$_python_exe" ]; then
+                        _LLM_MLX_COMMAND="$_python_exe -m mlx_lm.server"
+                    fi
+                fi
+            elif command -v python >/dev/null 2>&1; then
+                info "  Trying: python -m pip install --user mlx-lm"
+                if python -m pip install --user mlx-lm 2>/dev/null; then
+                    _mlx_ok=1
+                    _python_exe=$(python -c "import sys; print(sys.executable)" 2>/dev/null)
+                    if [ -n "$_python_exe" ]; then
+                        _LLM_MLX_COMMAND="$_python_exe -m mlx_lm.server"
+                    fi
+                fi
+            fi
+
+            # Strategy 2: isolated virtual environment (works everywhere)
+            if [ "$_mlx_ok" != "1" ]; then
+                info "  Trying isolated virtual environment..."
+                _mlx_venv="$VOICEBOT_HOME/venv"
+                _python_cmd=""
+                command -v python3 >/dev/null 2>&1 && _python_cmd="python3" || _python_cmd="python"
+                if "$_python_cmd" -m venv "$_mlx_venv" 2>/dev/null && \
+                   "$_mlx_venv/bin/pip" install mlx-lm 2>/dev/null; then
+                    _mlx_ok=1
+                    _LLM_MLX_COMMAND="$_mlx_venv/bin/python3 -m mlx_lm.server"
+                    info "  Virtual environment created at $_mlx_venv"
+                fi
+            fi
+
+            if [ "$_mlx_ok" = "1" ]; then
+                info "  mlx-lm installed successfully."
+            else
+                warn "  Could not install mlx-lm automatically."
+                warn "  Install it manually, then re-run this installer:"
+                warn "    python3 -m pip install mlx-lm"
+            fi
+            ;;
+    esac
 }
 
 # ── Step 5: Download Kokoro TTS models (Linux only) ──────────────────────────
@@ -609,7 +683,7 @@ select_voice_macos() {
         SELECTED_LOCALE=""
         return
     fi
-    _lang="${VOICEBOT_LANGUAGE:-es}"
+    _lang="${_LANGUAGE}"
     _prefix=$(_macos_lang_prefix "$_lang")
     _filtered_file="$(mktemp)"
     _filter_voices_by_lang "$_all_voices" "$_prefix" > "$_filtered_file"
@@ -721,7 +795,7 @@ select_voice_kokoro() {
         return
     fi
     # Prioritize voices for current language.
-    _lang="${VOICEBOT_LANGUAGE:-es}"
+    _lang="${_LANGUAGE}"
     _lang_prefix="$([ "$_lang" = "es" ] && printf "e" || printf "a")"
     _prio="$(mktemp)"
     _rest="$(mktemp)"
@@ -770,23 +844,29 @@ create_env() {
         info "  Config already exists at $_config_file — skipping."
         return
     fi
-    # macOS-specific self-managed LLM block
-    if [ "$OS" = "Darwin" ]; then
-        _llm_self_managed='llm_self_managed = true
-llm_command = "mlx_lm.server --model mlx-community/Qwen3-8B-4bit --host 127.0.0.1 --port 8000 --max-tokens 32768"'
-    else
-        _llm_self_managed=''
-    fi
+    # LLM block depends on provider choice from configure_llm_provider()
+    case "${_LLM_CHOICE:-own}" in
+        "own")
+            _llm_config="llm_url = \"${_LLM_URL:-http://127.0.0.1:8000}\""
+            if [ -n "${_LLM_API_KEY:-}" ]; then
+                _llm_config="${_llm_config}
+llm_api_key = \"${_LLM_API_KEY}\""
+            fi
+            ;;
+        "mlx-lm")
+            _llm_config="llm_self_managed = true
+llm_command = \"${_LLM_MLX_COMMAND:-mlx_lm.server} --model mlx-community/gemma-4-26b-a4b-it-4bit --host 127.0.0.1 --port 8000 --max-tokens 32768\""
+            ;;
+    esac
     cat > "$_config_file" << CONFIGEOF
 # Voicebot configuration — generated by install.sh
 # Edit this file to customize your setup.
 # Environment variables override values defined here.
 
-language = "${VOICEBOT_LANGUAGE:-en}"
+language = "${_LANGUAGE}"
 
-llm_max_tokens = 400
-llm_temperature = 0.3
-$_llm_self_managed
+$_llm_config
+
 CONFIGEOF
     info "  Config written: $_config_file"
 
@@ -826,6 +906,7 @@ export KOKORO_MODEL="\${KOKORO_MODEL:-\$VOICEBOT_HOME/models/kokoro-v1.0.onnx}"
 export KOKORO_VOICES="\${KOKORO_VOICES:-\$VOICEBOT_HOME/models/voices-v1.0.bin}"
 export VAD_MODEL="\${VAD_MODEL:-\$VOICEBOT_HOME/models/ggml-silero-vad.bin}"
 export TTS_PROVIDER="\${TTS_PROVIDER:-$_default_tts}"
+export LLM_MODEL="\${LLM_MODEL:-mlx-community/gemma-4-26b-a4b-it-4bit}"
 
 # Load user configuration (values here override defaults above)
 if [ -f "\$VOICEBOT_HOME/.env" ]; then
@@ -881,7 +962,7 @@ detect_llm_server() {
     VOICEBOT_LLM_UP=0
     warn "  LLM server not reachable at $_probe_url"
     warn "  Before running voicebot, start one of:"
-    warn "    mlx-lm:  mlx_lm.server --model mlx-community/Qwen3-8B-4bit --port 8000"
+    warn "    mlx-lm:  mlx_lm.server --model mlx-community/gemma-4-26b-a4b-it-4bit --port 8000"
     warn "    omlx:    omlx serve --model-dir ~/models --port 8001"
     warn "  Or set LLM_URL in $VOICEBOT_ENV to point at a remote server."
 }
@@ -956,12 +1037,15 @@ main() {
     info "Launcher : $BIN_DIR/voicebot"
     printf "\n" >&2
 
+    select_language
     check_dependencies
     setup_directories
     install_binary
     install_whisper_model
     install_vad_model
-    install_mlx_lm
+
+    # LLM provider config (own provider or install mlx-lm on macOS)
+    configure_llm_provider
 
     # Voice selection happens AFTER models are installed because the
     # Kokoro enumerator invokes the binary.
