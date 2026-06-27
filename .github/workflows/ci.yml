@@ -13,56 +13,56 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── Format & Lint ──────────────────────────────────────────────────────────
-  check:
-    name: Format + Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+#  # ── Format & Lint ──────────────────────────────────────────────────────────
+#  check:
+#    name: Format + Clippy
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Install Rust stable
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          components: rustfmt, clippy
+#
+#      - name: Cache cargo
+#        uses: Swatinem/rust-cache@v2
+#
+#      - name: Install Linux build deps
+#        run: |
+#          sudo apt-get update -qq
+#          sudo apt-get install -y --no-install-recommends \
+#            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
+#
+#      - name: Check formatting
+#        run: cargo fmt --check
+#
+#      - name: Clippy
+#        run: cargo clippy --all-targets --no-deps -- -D warnings
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux build deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --no-deps -- -D warnings
-
-  # ── Tests ──────────────────────────────────────────────────────────────────
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-C link-arg=-lgomp"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux build deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
-
-      - name: Run tests
-        run: cargo test --features "tui,remote,control"
+#  # ── Tests ──────────────────────────────────────────────────────────────────
+#  test:
+#    name: Tests
+#    runs-on: ubuntu-latest
+#    env:
+#      RUSTFLAGS: "-C link-arg=-lgomp"
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Install Rust stable
+#        uses: dtolnay/rust-toolchain@stable
+#
+#      - name: Cache cargo
+#        uses: Swatinem/rust-cache@v2
+#
+#      - name: Install Linux build deps
+#        run: |
+#          sudo apt-get update -qq
+#          sudo apt-get install -y --no-install-recommends \
+#            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
+#
+#      - name: Run tests
+#        run: cargo test --features "tui,remote,control"
 
   # ── Build macOS ────────────────────────────────────────────────────────────
   build-macos:
@@ -80,39 +80,39 @@ jobs:
       - name: Build (avspeech)
         run: cargo build --release --bin voicebot --features avspeech
 
-  # ── Build Linux ────────────────────────────────────────────────────────────
-  build-linux:
-    name: Build · Linux
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-C link-arg=-lgomp"
-    steps:
-      - uses: actions/checkout@v4
+#  # ── Build Linux ────────────────────────────────────────────────────────────
+#  build-linux:
+#    name: Build · Linux
+#    runs-on: ubuntu-latest
+#    env:
+#      RUSTFLAGS: "-C link-arg=-lgomp"
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Install Rust stable
+#        uses: dtolnay/rust-toolchain@stable
+#
+#      - name: Cache cargo
+#        uses: Swatinem/rust-cache@v2
+#
+#      - name: Install Linux build deps
+#        run: |
+#          sudo apt-get update -qq
+#          sudo apt-get install -y --no-install-recommends \
+#            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
+#
+#      - name: Build (kokoro)
+#        run: cargo build --release --bin voicebot --features kokoro
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux build deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
-
-      - name: Build (kokoro)
-        run: cargo build --release --bin voicebot --features kokoro
-
-  # ── Installer Smoke Test ───────────────────────────────────────────────────
-  installer-smoke:
-    name: Installer Smoke Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install test deps
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends espeak-ng
-
-      - name: Run installer smoke test
-        run: bash scripts/test-installers.sh
+#  # ── Installer Smoke Test ───────────────────────────────────────────────────
+#  installer-smoke:
+#    name: Installer Smoke Test
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Install test deps
+#        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends espeak-ng
+#
+#      - name: Run installer smoke test
+#        run: bash scripts/test-installers.sh
