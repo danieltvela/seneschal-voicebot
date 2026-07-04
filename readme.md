@@ -16,6 +16,134 @@ Real-time voice interaction with natural conversation flow, proactive assistance
 
 ---
 
+## Quick Start
+
+### Quick Install (recommended for end users)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/refs/heads/master/install.sh | sh
+```
+
+The installer downloads all required models and sets up a working configuration.
+
+### For Developers
+
+#### 1. Clone the repository
+
+```bash
+git clone https://github.com/danieltvela/voicebot.git
+cd voicebot
+```
+
+### 2. Configure environment variables
+
+Copy the example config and adjust:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+**Minimum required configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WHISPER_MODEL` | - | Path to Whisper `.bin` model (e.g., `./models/ggml-small.bin`) |
+| `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL |
+| `LLM_MODEL` | `local-model` | Model name/path for the LLM provider |
+
+**Example `.env`:**
+
+```env
+WHISPER_MODEL=./models/ggml-small.bin
+WHISPER_COREML=0
+LLM_URL=http://127.0.0.1:8000
+LLM_MODEL=mlx-community/Qwen3-8B-4bit
+TTS_PROVIDER=avspeech
+AVSPEECH_VOICE="Jorge (Enhanced)"
+AVSPEECH_RATE=0.55
+VOICEBOT_LANGUAGE=es
+```
+
+### 3. Start the LLM server
+
+Voicebot uses Apple MLX-based servers for low-latency inference on Apple Silicon.
+
+**Using mlx-lm (recommended):**
+
+```bash
+./scripts/start-mlx-lm.sh mlx-community/Qwen3-8B-4bit
+# Set in .env: LLM_URL=http://127.0.0.1:8000
+```
+
+Or manually:
+
+```bash
+mlx_lm.server \
+  --model mlx-community/Qwen3-8B-4bit \
+  --host 127.0.0.1 --port 8000 \
+  --prompt-cache-size 1 \
+  --chat-template-args '{"enable_thinking": false}'
+```
+
+**Using oMLX (alternative - persistent tiered KV cache):**
+
+```bash
+./scripts/start-omlx.sh ~/models
+# Set in .env: LLM_URL=http://127.0.0.1:8001
+```
+
+### 4. Build and run Voicebot
+
+**Standard build (AVSpeech TTS - default on macOS):**
+
+```bash
+cargo build --release
+cargo run --release
+```
+
+**With AVSpeech feature flag (explicit):**
+
+```bash
+cargo build --features avspeech --release
+cargo run --features avspeech --release
+```
+
+**With Kokoro TTS (high-quality, ONNX-based):**
+
+```bash
+cargo build --features kokoro --release
+TTS_PROVIDER=kokoro cargo run --features kokoro --release
+```
+
+**With terminal UI:**
+
+```bash
+cargo build --features tui --release
+cargo run --features tui --release
+```
+
+**With HTTP Control API + SSE:**
+
+```bash
+cargo build --features control --release
+CONTROL_PORT=9001 cargo run --features control --release
+```
+
+**List available voices for the active TTS provider:**
+
+```bash
+cargo run -- --list-voices
+# or
+LIST_VOICES=1 cargo run
+```
+
+The output depends on the `TTS_PROVIDER` setting:
+- `avspeech` - lists all AVSpeechSynthesizer voices (name, language, quality, gender, identifier)
+- `kokoro` - lists all Kokoro ONNX voice styles (voice ID, language, gender)
+
+---
+
 ## Overview
 
 Voicebot is a **voice-first AI assistant** designed for natural, real-time conversation with your computer. Unlike traditional chatbots that you type to, it listens and speaks. It runs as an always-on background daemon that responds instantly when you talk.
@@ -234,134 +362,6 @@ wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_v
 wget https://github.com/leloykun/kokoro/releases/download/v1.0/kokoro-v1.0.onnx -O ./models/kokoro-v1.0.onnx
 wget https://github.com/leloykun/kokoro/releases/download/v1.0/voices-v1.0.bin -O ./models/voices-v1.0.bin
 ```
-
----
-
-## Quick Start
-
-### Quick Install (recommended for end users)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/refs/heads/master/install.sh | sh
-```
-
-The installer downloads all required models and sets up a working configuration.
-
-### For Developers
-
-#### 1. Clone the repository
-
-```bash
-git clone https://github.com/danieltvela/voicebot.git
-cd voicebot
-```
-
-### 2. Configure environment variables
-
-Copy the example config and adjust:
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-**Minimum required configuration:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WHISPER_MODEL` | - | Path to Whisper `.bin` model (e.g., `./models/ggml-small.bin`) |
-| `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL |
-| `LLM_MODEL` | `local-model` | Model name/path for the LLM provider |
-
-**Example `.env`:**
-
-```env
-WHISPER_MODEL=./models/ggml-small.bin
-WHISPER_COREML=0
-LLM_URL=http://127.0.0.1:8000
-LLM_MODEL=mlx-community/Qwen3-8B-4bit
-TTS_PROVIDER=avspeech
-AVSPEECH_VOICE="Jorge (Enhanced)"
-AVSPEECH_RATE=0.55
-VOICEBOT_LANGUAGE=es
-```
-
-### 3. Start the LLM server
-
-Voicebot uses Apple MLX-based servers for low-latency inference on Apple Silicon.
-
-**Using mlx-lm (recommended):**
-
-```bash
-./scripts/start-mlx-lm.sh mlx-community/Qwen3-8B-4bit
-# Set in .env: LLM_URL=http://127.0.0.1:8000
-```
-
-Or manually:
-
-```bash
-mlx_lm.server \
-  --model mlx-community/Qwen3-8B-4bit \
-  --host 127.0.0.1 --port 8000 \
-  --prompt-cache-size 1 \
-  --chat-template-args '{"enable_thinking": false}'
-```
-
-**Using oMLX (alternative - persistent tiered KV cache):**
-
-```bash
-./scripts/start-omlx.sh ~/models
-# Set in .env: LLM_URL=http://127.0.0.1:8001
-```
-
-### 4. Build and run Voicebot
-
-**Standard build (AVSpeech TTS - default on macOS):**
-
-```bash
-cargo build --release
-cargo run --release
-```
-
-**With AVSpeech feature flag (explicit):**
-
-```bash
-cargo build --features avspeech --release
-cargo run --features avspeech --release
-```
-
-**With Kokoro TTS (high-quality, ONNX-based):**
-
-```bash
-cargo build --features kokoro --release
-TTS_PROVIDER=kokoro cargo run --features kokoro --release
-```
-
-**With terminal UI:**
-
-```bash
-cargo build --features tui --release
-cargo run --features tui --release
-```
-
-**With HTTP Control API + SSE:**
-
-```bash
-cargo build --features control --release
-CONTROL_PORT=9001 cargo run --features control --release
-```
-
-**List available voices for the active TTS provider:**
-
-```bash
-cargo run -- --list-voices
-# or
-LIST_VOICES=1 cargo run
-```
-
-The output depends on the `TTS_PROVIDER` setting:
-- `avspeech` - lists all AVSpeechSynthesizer voices (name, language, quality, gender, identifier)
-- `kokoro` - lists all Kokoro ONNX voice styles (voice ID, language, gender)
 
 ---
 
