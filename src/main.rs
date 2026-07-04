@@ -936,7 +936,6 @@ async fn async_main() -> Result<()> {
         let shared_history_c = Arc::clone(&shared_history);
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
-        let context_lens_c = Arc::clone(&context_lens);
         #[cfg(feature = "tui")]
         let tui_tx_c = tui_tx.clone();
         #[cfg(feature = "control")]
@@ -958,7 +957,6 @@ async fn async_main() -> Result<()> {
                 shared_history_c,
                 turn_commit_c,
                 proactive_tx_c,
-                context_lens_c,
                 #[cfg(feature = "tui")]
                 tui_tx_c,
                 #[cfg(feature = "control")]

@@ -8,7 +8,6 @@ use super::frames::PipelineFrame;
 use super::fsm::PipelineState;
 use super::state::PipelineEvents;
 use crate::agents::ProactiveEvent;
-use crate::analysis::ContextLens;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, StreamToken};
 use crate::tools::ToolRegistry;
@@ -37,7 +36,6 @@ pub async fn llm_task(
     shared_history: Arc<RwLock<String>>,
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
-    context_lens: Arc<Mutex<ContextLens>>,
     #[cfg(feature = "tui")] tui_tx: crate::tui::events::TuiEventTx,
     #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
 ) {
@@ -175,15 +173,6 @@ pub async fn llm_task(
                 .collect::<Vec<_>>()
         );
         let mut messages = llm_session.lock().unwrap().all_messages_api();
-        // Inject fresh analysis context (speaker identity, emotion, video scene) into the
-        // system message for this call only — never persisted to the session or DB.
-        if let Some(ctx) = context_lens.lock().unwrap().format_for_llm()
-            && let Some(sys_msg) = messages.first_mut()
-            && let Some(content) = sys_msg["content"].as_str()
-        {
-            let enriched = format!("{}{}", content, ctx);
-            sys_msg["content"] = serde_json::Value::String(enriched);
-        }
         let base_msg_len = messages.len();
         let mut final_response = String::new();
         let mut committed = false;

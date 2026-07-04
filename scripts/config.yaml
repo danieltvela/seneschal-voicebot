@@ -90,8 +90,8 @@ servers:
           # - google/gemma-4-12b-qat
           # - google/gemma-4-26b-a4b
           # - gemma-4-26b-a4b-it-qat-nvfp4
-          - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
-          # -
+          # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
+          - gemma-4-26b-a4b-it-nvfp4
       vllm:
         port: 8000
         token: ""

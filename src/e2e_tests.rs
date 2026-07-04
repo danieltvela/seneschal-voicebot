@@ -29,7 +29,6 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::agents::ProactiveEvent;
-use crate::analysis::ContextLens;
 use crate::audio::output::AudioOutput;
 use crate::config::Config;
 use crate::db::Database;
@@ -176,7 +175,6 @@ impl E2eHarness {
 
         let tts_muted = Arc::new(AtomicBool::new(false));
         let turn_commit = Arc::new(AtomicU64::new(0));
-        let context_lens = Arc::new(Mutex::new(ContextLens::new()));
         let t_vad_end: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
         let t_llm_post_send: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
 
@@ -206,7 +204,6 @@ impl E2eHarness {
             let tools_c = Arc::clone(&self.tools);
             let history_c = Arc::clone(&self.shared_history);
             let turn_c = Arc::clone(&turn_commit);
-            let lens_c = Arc::clone(&context_lens);
             let sid = self.session_id;
             #[cfg(feature = "tui")]
             let tui_tx_c = tokio::sync::mpsc::unbounded_channel::<crate::tui::events::TuiEvent>().0;
@@ -229,7 +226,6 @@ impl E2eHarness {
                     history_c,
                     turn_c,
                     proactive_tx,
-                    lens_c,
                     #[cfg(feature = "tui")]
                     tui_tx_c,
                     #[cfg(feature = "control")]
