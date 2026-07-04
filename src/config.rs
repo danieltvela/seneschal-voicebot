@@ -850,7 +850,7 @@ mod tests {
             );
             // The default is the built-in Spanish assistant prompt.
             assert!(
-                config.llm_system_prompt.contains("asistente"),
+                config.llm_system_prompt.contains("mayordomo"),
                 "default should be the Spanish assistant prompt, got: {:?}",
                 config.llm_system_prompt
             );

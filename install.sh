@@ -963,14 +963,9 @@ VOICEBOT_HOME="\${VOICEBOT_HOME:-$VOICEBOT_HOME}"
 # Point to installed config file
 export VOICEBOT_CONFIG_FILE="\$VOICEBOT_HOME/voicebot.pro.toml"
 
-# Point to installed models (can be overridden by env or .env file)
-export WHISPER_MODEL="\${WHISPER_MODEL:-\$VOICEBOT_HOME/models/${WHISPER_MODEL_FILE:-ggml-large-v3-turbo.bin}}"
-export DB_PATH="\${DB_PATH:-\$VOICEBOT_HOME/data/voicebot.db}"
-export KOKORO_MODEL="\${KOKORO_MODEL:-\$VOICEBOT_HOME/models/kokoro-v1.0.onnx}"
-export KOKORO_VOICES="\${KOKORO_VOICES:-\$VOICEBOT_HOME/models/voices-v1.0.bin}"
-export VAD_MODEL="\${VAD_MODEL:-\$VOICEBOT_HOME/models/ggml-silero-vad.bin}"
-export TTS_PROVIDER="\${TTS_PROVIDER:-$_default_tts}"
-export LLM_MODEL="\${LLM_MODEL:-mlx-community/gemma-4-26b-a4b-it-4bit}"
+# --- Defaults are read from voicebot.pro.toml ---
+# Environment variables are optional and only used to override values
+# defined in the configuration file. Do not hard-code defaults here.
 
 exec "\$VOICEBOT_HOME/bin/voicebot" "\$@" 2>/dev/null
 LAUNCHEOF

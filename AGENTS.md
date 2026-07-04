@@ -99,7 +99,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 - **STT→LLM latency trick**: partial Whisper transcripts are accumulated in a `String`; when VAD signals end-of-speech the full transcript is sent to the LLM server. The server maintains its own KV-cache implicitly across requests within a session.
 - **No speculative LLM on local GPUs**: Do NOT implement speculative / preemptive LLM generation (starting the LLM while the user is still speaking). This requires cloud-scale infrastructure with separate GPUs for STT and LLM. On a local single-GPU setup (Apple Silicon or one NVIDIA card), the speculative LLM task would contend with STT for the same GPU compute, causing jitter, wasted cycles, and memory pressure. The latency savings are real only when STT and LLM run on physically separate hardware.
 - **LLM→TTS streaming**: LLM tokens arrive via SSE and are buffered until a sentence boundary (`.`, `!`, `?`, `;`, `:`) — then that sentence is synthesized immediately. While sentence N plays, sentence N+1 is being generated and synthesized.
-- **Language**: Spanish by default (`VOICEBOT_LANGUAGE=es`), English supported. Affects Whisper hint and TTS voice. Parakeet auto-detects 25 languages.
+- **Language**: English by default (`VOICEBOT_LANGUAGE=en`), Spanish supported. Affects Whisper hint and TTS voice. Parakeet auto-detects 25 languages.
 - **Barge-in**: Implemented via `CancellationToken` (tokio-util). User speech cancels the active pipeline.
 - **Pluggable STT**: Provider trait abstracts Whisper (whisper-cpp-plus) and Parakeet (ONNX). Both share Silero VAD. Select via `STT_PROVIDER` env var.
 - **Agent delegation**: Complex tasks can be delegated to external AI agents via the ACP protocol over stdio.
@@ -182,7 +182,7 @@ Read from `.env` (dotenvy loads automatically):
 | `VOICEBOT_ENV` | `pro` | Environment: pro (default) or dev. Selects voicebot.{env}.toml and data/{env}/ paths. |
 | `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
 | `AUDIO_CHANNELS` | `1` | Audio channels |
-| `VOICEBOT_LANGUAGE` | `es` | Language (`es` or `en`) |
+| `VOICEBOT_LANGUAGE` | `en` | Language (`en` or `es`) |
 | `STT_PROVIDER` | `whisper` | `whisper` (default) or `parakeet` |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
