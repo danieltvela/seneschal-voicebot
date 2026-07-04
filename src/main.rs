@@ -546,6 +546,7 @@ async fn async_main() -> Result<()> {
 
     // ── Database ──────────────────────────────────────────────────────────────
     let db = Database::new(&config.db_path).await?;
+    let is_first_launch = db.is_first_launch().await.unwrap_or(false);
     let session_id = db.get_or_create_session().await?;
     config.llm_system_prompt = db
         .ensure_active_system_prompt(session_id, &config.llm_system_prompt)
@@ -1143,7 +1144,7 @@ async fn async_main() -> Result<()> {
 
     // ── Startup greeting / first-time introduction ─────────────────────────────
     {
-        let first = db.is_first_launch().await.unwrap_or(false);
+        let first = is_first_launch;
         let key = if first { "first_launch" } else { "startup" };
         let notification = i18n::get_notification(key, &config.language);
         let notification = if first {
