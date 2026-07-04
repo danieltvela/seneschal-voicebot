@@ -1143,14 +1143,21 @@ async fn async_main() -> Result<()> {
         }
     }
 
-    // ── Startup greeting ──────────────────────────────────────────────────────
+    // ── Startup greeting / first-time introduction ─────────────────────────────
     {
-        let now = chrono::Local::now();
-        let time_str = now.format("%H:%M").to_string();
-        let date_str = now.format("%d/%m/%Y").to_string();
-        let notification = i18n::get_notification("startup", &config.language)
-            .replace("{time_str}", &time_str)
-            .replace("{date_str}", &date_str);
+        let first = db.is_first_launch().await.unwrap_or(false);
+        let key = if first { "first_launch" } else { "startup" };
+        let notification = i18n::get_notification(key, &config.language);
+        let notification = if first {
+            notification.to_string()
+        } else {
+            let now = chrono::Local::now();
+            let time_str = now.format("%H:%M").to_string();
+            let date_str = now.format("%d/%m/%Y").to_string();
+            notification
+                .replace("{time_str}", &time_str)
+                .replace("{date_str}", &date_str)
+        };
         transcript_tx
             .send(PipelineFrame::SystemNotification { text: notification })
             .await

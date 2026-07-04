@@ -1,9 +1,9 @@
-/// Shared screen capture utility used by the `take_screenshot` tool and
-/// `EyesDaemon`.  On macOS, delegates to `screencapture(1)`.
-///
-/// When the command fails — which is common when running over SSH or without
-/// Screen Recording permission — the error includes diagnostic hints to help
-/// the user resolve the problem.
+//! Shared screen capture utility used by the `take_screenshot` tool and
+//! `EyesDaemon`.  On macOS, delegates to `screencapture(1)`.
+//!
+//! When the command fails — which is common when running over SSH or without
+//! Screen Recording permission — the error includes diagnostic hints to help
+//! the user resolve the problem.
 
 use std::env;
 

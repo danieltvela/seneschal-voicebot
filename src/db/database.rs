@@ -261,6 +261,14 @@ impl Database {
         Ok(())
     }
 
+    /// Check if no sessions have ever been created — used to detect first launch.
+    pub async fn is_first_launch(&self) -> Result<bool> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count == 0)
+    }
+
     /// Return the last active session ID, or create a new one.
     pub async fn get_or_create_session(&self) -> Result<Uuid> {
         let row = sqlx::query(
