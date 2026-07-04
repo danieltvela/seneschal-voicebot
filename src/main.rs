@@ -68,11 +68,10 @@ use crate::plugins::{
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
-    ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool,
-    McpToolProxy, NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool,
-    ReadClipboardTool, ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool,
-    SetClipboardTool, SetConversationModeTool, SwitchPluginTool, TakeScreenshotTool, ToolRegistry,
-    WebSearchTool,
+    ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy,
+    NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool,
+    ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool, SetClipboardTool,
+    SetConversationModeTool, SwitchPluginTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -627,6 +626,7 @@ async fn async_main() -> Result<()> {
         &system_prompt,
         summary.as_deref(),
         &history,
+        &config.llm_injection_role,
     )));
 
     // ── Self-managed LLM process ──────────────────────────────────────────────
@@ -1218,8 +1218,9 @@ async fn async_main() -> Result<()> {
                                     let payload = format!(
                                         "[Resultado de la tarea en segundo plano '{task}']\n{result}"
                                     );
+                                    let role = config.llm_injection_role.clone();
                                     let sys_msg = serde_json::json!({
-                                        "role": "user",
+                                        "role": role,
                                         "content": payload,
                                     });
                                     {
@@ -1722,7 +1723,7 @@ mod tests {
         );
 
         let system_prompt = "You are a helpful assistant.";
-        let mut session = crate::llm::LlmSession::new(system_prompt);
+        let mut session = crate::llm::LlmSession::new(system_prompt, "user");
 
         let turns = vec![
             (
@@ -1831,7 +1832,7 @@ mod tests {
         let session_id = db.get_or_create_session().await.unwrap();
 
         let system_prompt = "You are a helpful assistant. Answer briefly.";
-        let mut session = crate::llm::LlmSession::new(system_prompt);
+        let mut session = crate::llm::LlmSession::new(system_prompt, "user");
 
         println!("\n✓ kv_cache test setup complete (extend as needed)");
     }

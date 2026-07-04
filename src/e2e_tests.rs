@@ -92,7 +92,7 @@ impl E2eHarness {
             400, // max_tokens
             0.0, // temperature — deterministic
         ));
-        let llm_session = Arc::new(Mutex::new(LlmSession::new(system_prompt)));
+        let llm_session = Arc::new(Mutex::new(LlmSession::new(system_prompt, "user")));
 
         let (mock_tts, captured) = MockTts::new();
         let tts = Arc::new(TtsEngine::Mock(mock_tts));

@@ -205,6 +205,42 @@ pub fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
                 )]));
             }
         }
+        Role::System => {
+            let time = msg.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+
+            lines.push(Line::from(vec![
+                Span::raw("┌ "),
+                Span::styled(
+                    "System",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+                Span::styled(time, Style::default().fg(Color::Rgb(100, 100, 100))),
+            ]));
+
+            for content_line in msg.content.lines() {
+                let wrapped = word_wrap_plain(content_line, w.saturating_sub(2));
+                for line in wrapped {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("│ {line}"),
+                        Style::default()
+                            .fg(Color::Rgb(180, 180, 100))
+                            .add_modifier(Modifier::ITALIC),
+                    )]));
+                }
+            }
+
+            let content_lines = msg.content.lines().count();
+            if content_lines > 0 {
+                lines.push(Line::from(vec![
+                    Span::raw("└"),
+                    Span::raw("─".repeat(w.saturating_sub(2))),
+                    Span::raw("┘"),
+                ]));
+            }
+        }
         Role::Error => {
             let time = msg.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
 

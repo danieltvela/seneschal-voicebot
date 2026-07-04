@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 

@@ -18,6 +18,7 @@ pub enum Role {
     Assistant,
     Tool,
     Error,
+    System,
     Splash,
 }
 
@@ -96,6 +97,13 @@ impl App {
                 self.messages.push(ChatMessage {
                     role: Role::Error,
                     content: msg,
+                    timestamp: chrono::Local::now(),
+                });
+            }
+            TuiEvent::SystemNotification { text } => {
+                self.messages.push(ChatMessage {
+                    role: Role::System,
+                    content: text,
                     timestamp: chrono::Local::now(),
                 });
             }

@@ -61,15 +61,15 @@ pub async fn llm_task(
             }
         };
 
-        // Decode the incoming frame into (text, tool_continuation, is_text_input).
-        let (text, tool_continuation, is_text_input) = match frame {
-            PipelineFrame::TranscriptReady { text, .. } => (text, false, false),
-            PipelineFrame::TextInput { text } => (text, false, true),
-            PipelineFrame::SystemNotification { text } => (text, false, false),
+        // Decode the incoming frame into (text, tool_continuation, is_text_input, is_system_notification).
+        let (text, tool_continuation, is_text_input, is_system_notification) = match frame {
+            PipelineFrame::TranscriptReady { text, .. } => (text, false, false, false),
+            PipelineFrame::TextInput { text } => (text, false, true, false),
+            PipelineFrame::SystemNotification { text } => (text, false, false, true),
             PipelineFrame::AgentResult {
                 tool_call_id: Some(_),
                 ..
-            } => (String::new(), true, false),
+            } => (String::new(), true, false, false),
             _ => continue, // unexpected frame type — wait for next
         };
 
@@ -87,12 +87,14 @@ pub async fn llm_task(
 
         if tool_continuation {
             info!(target: "pipeline", "[pipe={}] Tool result delivered — continuing turn", pipeline_id);
+        } else if is_system_notification {
+            info!(target: "pipeline", "[pipe={}] SystemNotification: {}", pipeline_id, text);
         } else {
             info!(target: "pipeline", "[pipe={}] User: {}", pipeline_id, text);
         }
 
         #[cfg(feature = "tui")]
-        if !tool_continuation {
+        if !tool_continuation && !is_system_notification {
             let source = if is_text_input {
                 crate::tui::events::InputSource::Text
             } else {
@@ -111,14 +113,31 @@ pub async fn llm_task(
                 .ok();
         }
         #[cfg(feature = "control")]
-        if !tool_continuation {
+        if !tool_continuation && !is_system_notification {
             control_broadcast.send(crate::control::broadcast::ControlEvent::Transcript {
                 utterance_id: pipeline_id,
                 text: text.clone(),
             });
         }
 
-        if !tool_continuation {
+        if is_system_notification {
+            #[cfg(feature = "tui")]
+            tui_tx
+                .send(crate::tui::events::TuiEvent::SystemNotification { text: text.clone() })
+                .ok();
+            #[cfg(feature = "control")]
+            control_broadcast.send(
+                crate::control::broadcast::ControlEvent::SystemNotification { text: text.clone() },
+            );
+            {
+                let mut s = llm_session.lock().unwrap();
+                s.add_internal_notification(&text);
+                if let Ok(mut h) = shared_history.write() {
+                    *h = s.format_history();
+                }
+            }
+            turn_commit_counter.fetch_add(1, Ordering::SeqCst);
+        } else if !tool_continuation {
             let appended = {
                 let mut s = llm_session.lock().unwrap();
                 // Snapshot the original user content (if a previous user turn is
@@ -182,7 +201,7 @@ pub async fn llm_task(
         'pipeline: {
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
-                let forced_tool = if iter == 0 && !tool_continuation {
+                let forced_tool = if iter == 0 && !tool_continuation && !is_system_notification {
                     tools
                         .lock()
                         .unwrap()

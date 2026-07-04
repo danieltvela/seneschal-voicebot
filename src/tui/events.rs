@@ -30,6 +30,8 @@ pub enum TuiEvent {
     AssistantDone,
     /// A tool was called by the LLM.
     ToolCall { name: String, result: String },
+    /// A system-injected notification (memory reorg, background task, etc.).
+    SystemNotification { text: String },
     /// A pipeline error occurred that the user should see.
     Error(String),
     /// Show the VOICEBOT splash screen on first render.

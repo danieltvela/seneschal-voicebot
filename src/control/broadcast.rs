@@ -33,6 +33,9 @@ pub enum ControlEvent {
     Error {
         message: String,
     },
+    SystemNotification {
+        text: String,
+    },
 }
 
 #[allow(dead_code)]

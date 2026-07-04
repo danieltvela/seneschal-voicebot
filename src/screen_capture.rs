@@ -58,9 +58,7 @@ fn diagnose(err_msg: &str, stderr: &str) -> String {
 
     let mut msg = err_msg.to_string();
     msg.push_str("\n\n");
-    msg.push_str(
-        "This usually means Screen Recording permission has not been granted.\n\n",
-    );
+    msg.push_str("This usually means Screen Recording permission has not been granted.\n\n");
 
     if is_ssh {
         msg.push_str(

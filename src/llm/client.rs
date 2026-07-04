@@ -222,8 +222,7 @@ impl OpenAIClient {
             // No tools → conditionally enable thinking based on config.
             // When disabled, eliminates ~700ms of invisible <think>…</think>
             // overhead that ThinkFilter would otherwise consume.
-            payload["chat_template_kwargs"] =
-                serde_json::json!({"enable_thinking": self.thinking});
+            payload["chat_template_kwargs"] = serde_json::json!({"enable_thinking": self.thinking});
         }
 
         tracing::debug!(target: "llm", "Request payload: {}", serde_json::to_string(&payload).unwrap_or_default());
@@ -830,7 +829,7 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 512, 0.3);
 
         // Build a session with enough history to trigger summarization
-        let mut session = super::super::session::LlmSession::new("Eres Jarvis.");
+        let mut session = super::super::session::LlmSession::new("Eres Jarvis.", "user");
         for i in 0..5 {
             session.add_user_turn(&format!("Pregunta {i} del usuario"));
             session.add_assistant_turn(&format!("Respuesta {i} del asistente"));

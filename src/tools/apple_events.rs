@@ -73,7 +73,8 @@ async fn osascript(script: &str) -> String {
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            if stderr.contains("-1743") || stderr.contains("not allowed")
+            if stderr.contains("-1743")
+                || stderr.contains("not allowed")
                 || stderr.contains("denied")
             {
                 "Access denied. Grant Calendar/Reminders access in System Settings → Privacy & Security.".to_string()
@@ -127,18 +128,10 @@ impl AppleEventsTool {
     }
 
     async fn create_event(&self, params: &serde_json::Value) -> String {
-        let calendar = params["calendar"]
-            .as_str()
-            .unwrap_or("Calendar");
-        let title = params["title"]
-            .as_str()
-            .unwrap_or("Untitled Event");
-        let start = params["start"]
-            .as_str()
-            .unwrap_or("2024-01-01T09:00:00");
-        let end = params["end"]
-            .as_str()
-            .unwrap_or("2024-01-01T10:00:00");
+        let calendar = params["calendar"].as_str().unwrap_or("Calendar");
+        let title = params["title"].as_str().unwrap_or("Untitled Event");
+        let start = params["start"].as_str().unwrap_or("2024-01-01T09:00:00");
+        let end = params["end"].as_str().unwrap_or("2024-01-01T10:00:00");
         let location = params["location"].as_str().unwrap_or("");
         let notes = params["notes"].as_str().unwrap_or("");
 
@@ -161,9 +154,7 @@ impl AppleEventsTool {
                  description:\"{notes}\""
             )
         } else {
-            format!(
-                "summary:\"{title}\", start date:startDate, end date:endDate"
-            )
+            format!("summary:\"{title}\", start date:startDate, end date:endDate")
         };
 
         let script = format!(
@@ -179,12 +170,8 @@ impl AppleEventsTool {
     }
 
     async fn delete_event(&self, params: &serde_json::Value) -> String {
-        let calendar = params["calendar"]
-            .as_str()
-            .unwrap_or("Calendar");
-        let title = params["title"]
-            .as_str()
-            .unwrap_or("");
+        let calendar = params["calendar"].as_str().unwrap_or("Calendar");
+        let title = params["title"].as_str().unwrap_or("");
         if title.is_empty() {
             return "Missing 'title' for delete_event.".to_string();
         }
@@ -237,12 +224,8 @@ impl AppleEventsTool {
     }
 
     async fn create_reminder(&self, params: &serde_json::Value) -> String {
-        let title = params["title"]
-            .as_str()
-            .unwrap_or("Untitled Reminder");
-        let list = params["list"]
-            .as_str()
-            .unwrap_or("");
+        let title = params["title"].as_str().unwrap_or("Untitled Reminder");
+        let list = params["list"].as_str().unwrap_or("");
         let due = params["due_date"].as_str();
         let notes = params["notes"].as_str().unwrap_or("");
 
@@ -286,9 +269,7 @@ impl AppleEventsTool {
     }
 
     async fn complete_reminder(&self, params: &serde_json::Value) -> String {
-        let title = params["title"]
-            .as_str()
-            .unwrap_or("");
+        let title = params["title"].as_str().unwrap_or("");
         if title.is_empty() {
             return "Missing 'title' for complete_reminder.".to_string();
         }
@@ -309,9 +290,7 @@ impl AppleEventsTool {
     }
 
     async fn delete_reminder(&self, params: &serde_json::Value) -> String {
-        let title = params["title"]
-            .as_str()
-            .unwrap_or("");
+        let title = params["title"].as_str().unwrap_or("");
         if title.is_empty() {
             return "Missing 'title' for delete_reminder.".to_string();
         }
@@ -411,18 +390,14 @@ impl Tool for AppleEventsTool {
         let params: serde_json::Value = match serde_json::from_str(args) {
             Ok(v) => v,
             Err(_) => {
-                return format!(
-                    "Invalid JSON arguments. Required: `operation` field.\n\n{USAGE}"
-                );
+                return format!("Invalid JSON arguments. Required: `operation` field.\n\n{USAGE}");
             }
         };
 
         let operation = match params["operation"].as_str() {
             Some(op) => op,
             None => {
-                return format!(
-                    "Missing 'operation' field.\n\n{USAGE}"
-                );
+                return format!("Missing 'operation' field.\n\n{USAGE}");
             }
         };
 
