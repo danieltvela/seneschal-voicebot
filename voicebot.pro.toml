@@ -9,6 +9,8 @@ channels = 1
 chunk_ms = 100
 list_devices = false
 list_voices = false
+device_monitor_enabled = true
+device_monitor_poll_secs = 5
 
 # ── VAD ───────────────────────────────────────────────────────────────────────
 vad_silence_ms = 300

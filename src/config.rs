@@ -83,6 +83,8 @@ pub struct Config {
     pub audio_output_device: Option<String>,
     pub list_devices: bool,
     pub list_voices: bool,
+    pub device_monitor_enabled: bool,
+    pub device_monitor_poll_secs: u64,
 
     // ── VAD ───────────────────────────────────────────────────────────────────
     /// Milliseconds of continuous silence before SpeechEnd fires.
@@ -459,6 +461,12 @@ impl Config {
         }
         if let Ok(v) = env::var("LIST_VOICES") {
             self.list_voices = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("DEVICE_MONITOR_ENABLED") {
+            self.device_monitor_enabled = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("DEVICE_MONITOR_POLL_SECS") {
+            self.device_monitor_poll_secs = v.parse().context("Invalid DEVICE_MONITOR_POLL_SECS")?;
         }
 
         // VAD

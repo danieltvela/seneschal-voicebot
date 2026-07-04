@@ -931,6 +931,10 @@ language = "${_LANGUAGE}"
 whisper_model = "${VOICEBOT_MODELS_DIR}/${WHISPER_MODEL_FILE}"
 vad_model = "${VOICEBOT_MODELS_DIR}/ggml-silero-vad.bin"
 
+# Device monitor — polls for the configured input device and greets when it connects
+device_monitor_enabled = true
+device_monitor_poll_secs = 5
+
 # LLM
 llm_model = "mlx-community/gemma-4-26b-a4b-it-4bit"
 

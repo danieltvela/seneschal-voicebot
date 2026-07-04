@@ -21,14 +21,14 @@ servers:
       vllm-gemma:
         port: 8006
         token: ""
-        models:
+        models: []
           # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
           # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
           # - Qwen3.6-27B-NVFP4
-          - Gemma-4-26B-A4B-NVFP4
+          # - Gemma-4-26B-A4B-NVFP4
       llama-server:
         port: 8000
         token: ""
@@ -88,8 +88,10 @@ servers:
           # - google/gemma-4-12b
           # - gemma-4-12b-it-mlx
           # - google/gemma-4-12b-qat
-          - google/gemma-4-26b-a4b
-          - mlx-community/gemma-4-26b-a4b-it-nvfp4
+          # - google/gemma-4-26b-a4b
+          # - gemma-4-26b-a4b-it-qat-nvfp4
+          - 
+          # -
       vllm:
         port: 8000
         token: ""

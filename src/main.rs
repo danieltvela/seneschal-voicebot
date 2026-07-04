@@ -11,6 +11,7 @@ mod config;
 mod control;
 mod daemon;
 mod db;
+mod device_monitor;
 mod dream;
 mod eyes;
 mod i18n;
@@ -1148,6 +1149,21 @@ async fn async_main() -> Result<()> {
             .send(PipelineFrame::SystemNotification { text: notification })
             .await
             .ok();
+    }
+
+    // ── Device monitor ─────────────────────────────────────────────────────────
+    // Polls for the configured input device; sends a startup greeting when the
+    // device transitions from unavailable → available (e.g. Bluetooth reconnect).
+    if let Some(ref name) = config.audio_input_device
+        && config.device_monitor_enabled
+    {
+        device_monitor::spawn(
+            name.clone(),
+            transcript_tx.clone(),
+            config.language.clone(),
+            config.device_monitor_poll_secs,
+            shutdown.clone(),
+        );
     }
 
     // Plugin runtime state — tracks active plugin resources for cleanup on switch
