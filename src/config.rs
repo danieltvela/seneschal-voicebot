@@ -353,6 +353,11 @@ pub struct Config {
     /// Default: "data/archives". (S_DREAM_JSONL_DIR)
     pub s_dream_jsonl_dir: String,
 
+    // ── Apple Calendar & Reminders ───────────────────────────────────────────
+    /// Enable the apple_events tool (Calendar & Reminders via AppleScript).
+    /// Default: true. (APPLE_EVENTS_ENABLED)
+    pub apple_events_enabled: bool,
+
     // ── Plugins ───────────────────────────────────────────────────────────────
     /// Paths to plugin directories or files (VOICEBOT_PLUGINS, comma-separated).
     pub plugins: Vec<PathBuf>,
@@ -786,6 +791,11 @@ impl Config {
         }
         if let Ok(v) = env::var("S_DREAM_JSONL_DIR") {
             self.s_dream_jsonl_dir = v;
+        }
+
+        // Apple Events
+        if let Ok(v) = env::var("APPLE_EVENTS_ENABLED") {
+            self.apple_events_enabled = v == "1" || v.to_lowercase() == "true";
         }
 
         // NOOP tool

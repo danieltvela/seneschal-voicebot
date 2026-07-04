@@ -68,10 +68,11 @@ use crate::plugins::{
 use crate::profile::ProfileFact;
 use crate::stt::{SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
-    ActiveTask, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy, NoopTool,
-    OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool, ReadFileTool,
-    RecoverHistoricalContextTool, RunAgentTool, RunShellTool, SetClipboardTool,
-    SetConversationModeTool, SwitchPluginTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
+    ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool,
+    McpToolProxy, NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool,
+    ReadClipboardTool, ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool,
+    SetClipboardTool, SetConversationModeTool, SwitchPluginTool, TakeScreenshotTool, ToolRegistry,
+    WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -264,6 +265,11 @@ async fn async_main() -> Result<()> {
     tool_registry.register(SetClipboardTool);
     tool_registry.register(OpenAppTool);
     tool_registry.register(SetConversationModeTool::new(Arc::clone(&conv_mode)));
+
+    if config.apple_events_enabled {
+        tool_registry.register(AppleEventsTool);
+        info!(target: "voicebot", "apple_events tool enabled (Calendar & Reminders)");
+    }
 
     if config.shell_enabled {
         tool_registry.register(RunShellTool::new(config.shell_timeout_secs));

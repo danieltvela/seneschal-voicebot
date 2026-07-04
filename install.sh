@@ -243,6 +243,51 @@ check_dependencies() {
     fi
 }
 
+# ── Step 1.5: Calendar & Reminders permission prompt (macOS only) ────────────
+# Asks the user if they want to grant Voicebot access to Apple Calendar and
+# Reminders via iCloud. If they agree, a harmless AppleScript is run to
+# trigger the macOS TCC (Transparency, Consent, and Control) permission
+# dialog, so the user can Allow access before running Voicebot for the first
+# time.
+prompt_calendar_reminders() {
+    if [ "$OS" != "Darwin" ]; then
+        return
+    fi
+
+    step "Apple Calendar & Reminders"
+    info "  Voicebot can manage your Apple Calendar and Reminders."
+    USE_CALENDAR="n"
+    USE_REMINDERS="n"
+
+    _grant_calendar=$(confirm "Allow Voicebot to access Apple Calendar?" "n")
+    if [ "$_grant_calendar" = "y" ]; then
+        USE_CALENDAR="y"
+        info "  Requesting Calendar access..."
+        info "  A permission dialog will appear: click 'Allow' or 'OK'."
+        osascript -e 'tell application "Calendar" to get name of first calendar' \
+            2>/dev/null || true
+        sleep 0.5
+    fi
+
+    _grant_reminders=$(confirm "Allow Voicebot to access Apple Reminders?" "n")
+    if [ "$_grant_reminders" = "y" ]; then
+        USE_REMINDERS="y"
+        info "  Requesting Reminders access..."
+        info "  A permission dialog will appear: click 'Allow' or 'OK'."
+        osascript -e 'tell application "Reminders" to get name of first list' \
+            2>/dev/null || true
+        sleep 0.5
+    fi
+
+    if [ "$USE_CALENDAR" = "y" ] || [ "$USE_REMINDERS" = "y" ]; then
+        info "  Access granted. Voicebot will use Apple Events for"
+        info "  calendar and reminders management."
+    else
+        info "  Skipped. Voicebot will default to enabled (Apple Events)"
+        info "  and ask for permissions when first used."
+    fi
+}
+
 # ── Step 2: Create directory layout ──────────────────────────────────────────
 setup_directories() {
     step "Setting up directories"
@@ -1093,6 +1138,7 @@ main() {
 
     select_language
     check_dependencies
+    prompt_calendar_reminders
     setup_directories
     install_binary
     install_whisper_model

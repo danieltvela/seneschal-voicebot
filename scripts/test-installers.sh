@@ -137,6 +137,19 @@ chmod +x "$MOCK_BIN/curl"
 # ── Mock `say` (macOS) ──────────────────────────────────────────────────────
 # Returns a fixed list of voices regardless of the host's actual voices.
 # This lets select_voice_macos run on Linux CI too.
+# ── Mock osascript (macOS) ─────────────────────────────────────────────────
+# Returns success for any AppleScript snippet. This lets the
+# Calendar/Reminders prompt run without a real macOS.
+cat > "$MOCK_BIN/osascript" << 'OSAEOF'
+#!/bin/bash
+# Mock macOS osascript for installer tests.
+# Supported invocations:
+#   osascript -e <script>    — always returns 0
+echo "[mock-osascript] $*" >&2
+exit 0
+OSAEOF
+chmod +x "$MOCK_BIN/osascript"
+
 cat > "$MOCK_BIN/say" << 'SAYEOF'
 #!/bin/bash
 # Mock macOS `say` for installer tests.

@@ -1,3 +1,4 @@
+pub mod apple_events;
 pub mod clipboard;
 pub mod conversation_mode;
 pub mod current_time;
@@ -20,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use tracing::info;
 
+pub use apple_events::AppleEventsTool;
 pub use clipboard::{ReadClipboardTool, SetClipboardTool};
 pub use conversation_mode::{ConversationMode, SetConversationModeTool};
 pub use current_time::CurrentTimeTool;
