@@ -2,17 +2,19 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::i18n;
 use crate::pipeline::PipelineFrame;
 
-/// Spawn a background task that polls for the configured input device.
+/// Spawn a background task that polls for the configured audio device.
 ///
 /// When the device transitions from unavailable → available, the startup
 /// greeting notification is sent to the LLM via `transcript_tx`.
+///
+/// When `device_name` is `None`, monitors the default input device.
 pub fn spawn(
-    device_name: String,
+    device_name: Option<String>,
     transcript_tx: mpsc::Sender<PipelineFrame>,
     language: String,
     poll_interval_secs: u64,
@@ -20,7 +22,7 @@ pub fn spawn(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         monitor_loop(
-            &device_name,
+            device_name.as_deref(),
             &transcript_tx,
             &language,
             poll_interval_secs,
@@ -31,16 +33,19 @@ pub fn spawn(
 }
 
 async fn monitor_loop(
-    device_name: &str,
+    device_name: Option<&str>,
     transcript_tx: &mpsc::Sender<PipelineFrame>,
     language: &str,
     poll_interval_secs: u64,
     shutdown: &AtomicBool,
 ) {
+    let label = device_name
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "default input device".to_string());
     info!(
         target: "audio",
         "Device monitor started for '{}' (poll every {}s)",
-        device_name,
+        label,
         poll_interval_secs,
     );
 
@@ -48,7 +53,7 @@ async fn monitor_loop(
     info!(
         target: "audio",
         "Initial device '{}' state: available={}",
-        device_name,
+        label,
         was_available,
     );
 
@@ -69,7 +74,7 @@ async fn monitor_loop(
             info!(
                 target: "audio",
                 "Device '{}' connected — sending startup greeting",
-                device_name,
+                label,
             );
 
             let now = chrono::Local::now();
@@ -93,28 +98,133 @@ async fn monitor_loop(
     }
 }
 
-/// Returns `true` if a connected input device matches the given name filter.
-fn is_device_available(device_name: &str) -> bool {
-    let host = cpal::default_host();
-    let name_lower = device_name.to_lowercase();
+/// Strip an optional `#N` index suffix from a device name string.
+///
+/// `"AirPods Pro#0"` → `("AirPods Pro", Some(0))`
+/// `"AirPods Pro"`   → `("AirPods Pro", None)`
+fn parse_device_name(name: &str) -> (&str, Option<usize>) {
+    if let Some(pos) = name.rfind('#')
+        && let Ok(idx) = name[pos + 1..].parse::<usize>()
+    {
+        return (&name[..pos], Some(idx));
+    }
+    (name, None)
+}
 
-    match host.input_devices() {
-        Ok(devices) => {
-            for device in devices {
-                if let Ok(desc) = device.description() {
-                    let device_name_str = desc.name();
-                    if device_name_str.to_lowercase().contains(&name_lower)
-                        && device.default_input_config().is_ok()
-                    {
-                        return true;
-                    }
+/// Returns `true` if a connected audio device matches the given name filter.
+///
+/// Checks **both** input and output devices so a Bluetooth headset reconnect
+/// is detected regardless of which side becomes available first.
+///
+/// When `device_name` is `None`, checks whether _any_ input device is available
+/// (i.e. the default input device exists).
+fn is_device_available(device_name: Option<&str>) -> bool {
+    let host = cpal::default_host();
+
+    // No specific device — check whether any input device exists
+    if device_name.is_none() {
+        return match host.input_devices() {
+            Ok(devices) => {
+                let devices: Vec<_> = devices.collect();
+                let found = devices.iter().any(|d| d.default_input_config().is_ok());
+                if found {
+                    debug!(target: "audio", "Default input device is available");
+                } else {
+                    debug!(target: "audio", "No input device available");
                 }
+                found
             }
-            false
-        }
-        Err(e) => {
-            warn!(target: "audio", "Failed to enumerate input devices: {}", e);
-            false
+            Err(e) => {
+                warn!(target: "audio", "Failed to enumerate input devices: {}", e);
+                false
+            }
+        };
+    }
+
+    let device_name = device_name.unwrap();
+    let (name_filter, index) = parse_device_name(device_name);
+    let name_lower = name_filter.to_lowercase();
+
+    // Check input devices
+    if let Ok(devices) = host.input_devices() {
+        let collected: Vec<_> = devices.collect();
+        let matches: Vec<String> = collected
+            .iter()
+            .filter(|d| {
+                d.description()
+                    .map(|desc| {
+                        desc.name().to_lowercase().contains(&name_lower)
+                            && d.default_input_config().is_ok()
+                    })
+                    .unwrap_or(false)
+            })
+            .filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+            .collect();
+
+        if let Some(idx) = index {
+            if idx < matches.len() {
+                debug!(
+                    target: "audio",
+                    "Input device '{}' found at index {} ({} matches)",
+                    matches[idx],
+                    idx,
+                    matches.len(),
+                );
+                return true;
+            }
+        } else if !matches.is_empty() {
+            debug!(
+                target: "audio",
+                "Input device '{}' found ({} matches)",
+                matches[0],
+                matches.len(),
+            );
+            return true;
         }
     }
+
+    // Check output devices
+    if let Ok(devices) = host.output_devices() {
+        let collected: Vec<_> = devices.collect();
+        let matches: Vec<String> = collected
+            .iter()
+            .filter(|d| {
+                d.description()
+                    .map(|desc| {
+                        desc.name().to_lowercase().contains(&name_lower)
+                            && d.default_output_config().is_ok()
+                    })
+                    .unwrap_or(false)
+            })
+            .filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+            .collect();
+
+        if let Some(idx) = index {
+            if idx < matches.len() {
+                debug!(
+                    target: "audio",
+                    "Output device '{}' found at index {} ({} matches)",
+                    matches[idx],
+                    idx,
+                    matches.len(),
+                );
+                return true;
+            }
+        } else if !matches.is_empty() {
+            debug!(
+                target: "audio",
+                "Output device '{}' found ({} matches)",
+                matches[0],
+                matches.len(),
+            );
+            return true;
+        }
+    }
+
+    debug!(
+        target: "audio",
+        "Device '{}' not found in input or output devices",
+        name_filter,
+    );
+    false
 }

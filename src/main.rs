@@ -1164,13 +1164,12 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Device monitor ─────────────────────────────────────────────────────────
-    // Polls for the configured input device; sends a startup greeting when the
-    // device transitions from unavailable → available (e.g. Bluetooth reconnect).
-    if let Some(ref name) = config.audio_input_device
-        && config.device_monitor_enabled
-    {
+    // Polls for the configured input device (or default if none specified);
+    // sends a startup greeting when the device transitions from unavailable →
+    // available (e.g. Bluetooth headset reconnect).
+    if config.device_monitor_enabled {
         device_monitor::spawn(
-            name.clone(),
+            config.audio_input_device.clone(),
             transcript_tx.clone(),
             config.language.clone(),
             config.device_monitor_poll_secs,
