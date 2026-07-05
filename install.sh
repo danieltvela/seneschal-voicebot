@@ -986,7 +986,8 @@ llm_model = "mlx-community/gemma-4-26b-a4b-it-4bit"
 $_llm_config
 
 # Message injection role: "developer" (preferred), "system", or "user"
-llm_injection_role = "developer"
+# "user" is implemented by most of providers, the rest requires validaton (vLLM is OK, LM Studio is not).
+llm_injection_role = "user"
 
 # TTS
 $_tts_config
