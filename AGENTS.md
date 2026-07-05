@@ -334,12 +334,9 @@ Every time an agent completes an analysis, plan, or finishes work on a Gitea iss
 **Workflow for issue-driven work:**
 1. Fetch issue details from Gitea with ots MCP.
 2. Mark issue as in progress by adding label `ongoing`.
-3. Establish isolation: Initialize worktree in `/Users/danielvela/projects/ai/voicebot-ai` on a new branch `feature/issue-N`.
-4. Post initial comment with scope/plan.
-5. Execute the work in the AI worktree.
-6. Post final comment with results (mandatory).
-7. Push changes, open a **Pull Request (PR)** targeting `main`, and reference the issue.
-8. Reference the issue number in commit messages: `fix: address issue #11 — fix VAD timeout`
+3. Post initial comment with scope/plan into the issue.
+4. Execute the work.
+5. Post final comment with results (mandatory) in the issue.
 
 Labels exist but no issue templates — the agent handles formatting naturally.
 
