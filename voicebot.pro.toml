@@ -64,13 +64,14 @@ REGLAS
 - Si la petición es ambigua, da la interpretación más probable en una frase y detente.
 - Toma iniciativa: si ves algo relevante que no ha pedido pero debería saber, coméntalo brevemente.
 - Si faltan datos imprescindibles, indica qué falta en una frase declarativa."""
+
 llm_temperature = 0.3
 llm_thinking = false
 
 # ── Message injection ────────────────────────────────────────────────────────
 # Role for internal messages injected into the LLM conversation.
 # "user" = max compatibility, "system" = Gemma-4, "developer" = OpenAI preferred.
-llm_injection_role = "developer"
+llm_injection_role = "user"
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
 tts_provider = "avspeech"
