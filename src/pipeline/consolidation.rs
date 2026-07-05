@@ -15,54 +15,6 @@ use crate::memory::{build_memory_context, extract_memories};
 use crate::plugins::PluginPromptSections;
 use crate::profile::{ProfileFact, build_profile_context, extract_facts};
 
-/// Returns the routing instructions section for the system prompt.
-///
-/// This section tells the LLM when to respond directly vs delegate to Hermes,
-/// helping avoid hallucinated answers and unnecessary agent delegation.
-/// Must be kept under ~500 tokens; written in Spanish.
-pub fn build_routing_section() -> &'static str {
-    "\n\n## CUÁNDO RESPONDER DIRECTAMENTE VS DELEGAR A HERMES\n\n\
-      ✅ Responde DIRECTAMENTE (sin delegar) cuando:\n\
-      - La pregunta tiene una respuesta factual breve que puedes dar \
-      desde tus conocimientos generales.\n\
-      - El usuario pide información sobre el contexto actual de la conversación.\n\
-      - Puedes usar tus herramientas nativas para obtener la respuesta \
-      rápidamente.\n\
-      - Es una tarea de conversación cotidiana (saludos, preguntas simples, \
-      traducciones breves, opinión general).\n\n\
-      🔄 Delega a Hermes cuando:\n\
-      - Necesitas programar, depurar, o modificar código del sistema.\n\
-      - Requieres investigación profunda (múltiples consultas), análisis de \
-      documentos o flujos de múltiples pasos.\n\
-      - Lees documentos grandes (> 1 página) o informes complejos.\n\
-      - La tarea necesita acceso a herramientas externas que tú no tienes \
-      (calendario, explorador de archivos, bases de datos, \
-      gestores de proyectos, agentes especializados).\n\
-      - No estás completamente seguro de la respuesta y delegarías \
-      a un especialista.\n\n\
-      ⚠️ ADVERTENCIA IMPORTANTE:\n\
-      Si no estás completamente seguro de una respuesta factual, \
-      NO inventes datos. Delega a Hermes. Es mejor delegar una vez de más \
-      que dar una respuesta incorrecta. Nunca digas \"según mi conocimiento\" \
-      si podrías estar equivocado — delega.\n\n\
-      📏 REGLA DE PRECEDENCIA:\n\
-      Cuando varias reglas aplican simultáneamente, prioriza la delegación \
-      a Hermes si la incertidumbre supera tu confianza en las herramientas nativas.\n\n\
-      EJEMPLOS:\n\
-      - \"¿Qué hora es?\" → Llama a la herramienta current_time.\n\
-      - \"Busca algo rápido en la web\" → Responde directamente (búsqueda puntual). \
-      Investigación profunda con múltiples fuentes → Delega a Hermes.\n\
-      - \"Refactoriza el módulo de audio para usar async streams\" → \
-      Delega a Hermes.\n\
-      - \"¿Cuál es la capital de Francia?\" → Responde directamente.\n\
-      - \"Analiza el rendimiento del sistema y optimiza los queries lentos\" → \
-      Delega a Hermes.\n\
-      - \"Traduce 'hello world' al español\" → Responde directamente.\n\
-      - \"Lee este documento corto (< 1 página) y resume\" → Responde directamente.\n\
-      - \"Investiga las causas de la caída del servidor ayer y genera \
-      un reporte\" → Delega a Hermes."
-}
-
 /// Character threshold for L1 saturation detection.
 ///
 /// When the combined length of `[USER PROFILE]` + `[MEMORIES]` sections exceeds
@@ -110,9 +62,12 @@ pub fn check_system_prompt_saturation(
 
 /// Assemble the full system prompt from its components.
 ///
-/// Order: base prompt → tool instructions → [IMMUTABLE RULES] → [USER PROFILE] → [MEMORIES] → [ROUTING] → [AGENTS].
+/// Order: base prompt → tool instructions → [IMMUTABLE RULES] → [USER PROFILE] → [MEMORIES] → [AGENTS].
 /// Tool instructions are placed immediately after the base prompt so the model sees them
 /// early and cannot ignore them, even when the rest of the prompt is very long.
+///
+/// Agent routing is handled by `AgentRegistry::system_prompt_section()` which only
+/// includes routing information when agents are configured via `AGENT_{}_WHEN_TO_USE`.
 pub fn build_system_prompt(
     base_prompt: &str,
     profile_facts: &[ProfileFact],
@@ -124,18 +79,17 @@ pub fn build_system_prompt(
 ) -> String {
     if !plugin_sections.replace.is_empty() {
         format!(
-            "{}{}{}{}{}{}{}",
+            "{}{}{}{}{}{}",
             plugin_sections.replace,
             tool_section,
             crate::profile::build_corrections_context(corrections),
             build_profile_context(profile_facts),
             build_memory_context(memories),
-            build_routing_section(),
             agent_section,
         )
     } else {
         format!(
-            "{}{}{}{}{}{}{}{}{}",
+            "{}{}{}{}{}{}{}{}",
             plugin_sections.prepend,
             base_prompt,
             plugin_sections.append,
@@ -143,7 +97,6 @@ pub fn build_system_prompt(
             crate::profile::build_corrections_context(corrections),
             build_profile_context(profile_facts),
             build_memory_context(memories),
-            build_routing_section(),
             agent_section,
         )
     }
@@ -611,7 +564,6 @@ mod tests {
         let pos_immutable = prompt.find("[IMMUTABLE RULES]").unwrap();
         let pos_profile = prompt.find("[USER PROFILE]").unwrap();
         let pos_memories = prompt.find("[MEMORIES]").unwrap();
-        let pos_routing = prompt.find("CUÁNDO RESPONDER").unwrap();
         let pos_agents = prompt.find(agents).unwrap();
 
         assert!(
@@ -619,8 +571,7 @@ mod tests {
                 && pos_tools < pos_immutable
                 && pos_immutable < pos_profile
                 && pos_profile < pos_memories
-                && pos_memories < pos_routing
-                && pos_routing < pos_agents,
+                && pos_memories < pos_agents,
             "Prompt sections must appear in the correct order"
         );
     }

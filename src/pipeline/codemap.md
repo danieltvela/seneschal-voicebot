@@ -47,11 +47,9 @@ Four permanent tokio tasks, each owning a specific channel pair:
 ### Context Consolidation (`consolidation.rs`)
 
 **`build_system_prompt()`** — Assembles the full system prompt from components in strict order:
-`[plugin prepend] → [base prompt] → [plugin append] → [tool instructions] → [IMMUTABLE RULES] → [USER PROFILE] → [MEMORIES] → [ROUTING] → [AGENTS]`
+`[plugin prepend] → [base prompt] → [plugin append] → [tool instructions] → [IMMUTABLE RULES] → [USER PROFILE] → [MEMORIES] → [AGENTS]`
 
-Plugin replace mode substitutes the entire base prompt. Tool instructions are placed early so the model cannot ignore them.
-
-**`build_routing_section()`** — Static prompt section that guides the LLM on when to respond directly vs. delegate to Hermes agent.
+Plugin replace mode substitutes the entire base prompt. Tool instructions are placed early so the model cannot ignore them. Agent routing is handled by `AgentRegistry::system_prompt_section()` which only includes routing information when agents are configured via `AGENT_{}_WHEN_TO_USE`.
 
 **`check_system_prompt_saturation()`** — L1 saturation detection. When `[USER PROFILE]` + `[MEMORIES]` exceeds `L1_SATURATION_THRESHOLD_CHARS` (4000), emits `ProactiveEvent::L1Saturated` (at most once per session via `AtomicBool` compare-exchange).
 
