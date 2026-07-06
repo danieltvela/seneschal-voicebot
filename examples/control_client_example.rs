@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
     let state = client.get_state().await?;
     println!("Current state: {}", state.state);
 
-    client.send_input("Hello, Jarvis!").await?;
+    client.send_input("Hello, seneschal!").await?;
     println!("Sent text input");
 
     let response = client

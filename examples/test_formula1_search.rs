@@ -5,7 +5,7 @@ use voicebot::control_client::{ClientControlEvent, ControlClient};
 async fn main() -> anyhow::Result<()> {
     let client = ControlClient::new("http://127.0.0.1:9001").await?;
 
-    println!("Connected to Jarvis control API");
+    println!("Connected to voicebot control API");
 
     let health = client.health_check().await?;
     println!("Health check: {:?}", health);

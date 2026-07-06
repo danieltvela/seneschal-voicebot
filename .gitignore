@@ -28,6 +28,7 @@ data/*.emb
 .opencode/
 .sisyphus/
 .sisyphus/
+.slim/deepwork/
 
 # Project-owned opencode skills (ship with the repo for AI agents)
 !.opencode/

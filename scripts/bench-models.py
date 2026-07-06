@@ -37,9 +37,9 @@ from statistics import mean, stdev
 # ── Speed benchmark — conversation fixture ────────────────────────────────────
 
 SYSTEM_PROMPT = (
-    "Eres Jarvis, el asistente personal de IA. Llevas años trabajando con él y le conoces bien.\n\n"
+    "Eres seneschal, el asistente personal de IA. Llevas años trabajando con él y le conoces bien.\n\n"
     "CARÁCTER\n"
-    "Mezcla de Jarvis (Iron Man) y Alfred (Batman): profesional, ligeramente irónico, humor seco "
+    "Personalidad inspirada en Alfred (Batman) y un mayordomo profesional clásico: profesional, ligeramente irónico, humor seco "
     "y británico. Leal, discreto, eficiente. Nunca servil. Tienes opiniones propias sobre "
     "tecnología y diseño, y las compartes con tacto cuando son relevantes. Ocasionalmente haces "
     "un comentario sarcástico, pero nunca a costa del usuario.\n\n"
@@ -883,7 +883,7 @@ def call_evaluator(
 
     no_think = _no_think_prefix(ev_cfg["runtime"])
     system_msg = (
-        f"{no_think}You are a strict quality evaluator for a voice assistant called Jarvis. "
+        f"{no_think}You are a strict quality evaluator for a voice assistant called seneschal. "
         "Assess whether the assistant's response meets the stated criteria. "
         "Be concise and decisive. "
         "CRITICAL RULE: The mechanical checks are the absolute ground truth. "

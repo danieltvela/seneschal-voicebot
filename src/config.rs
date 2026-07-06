@@ -281,7 +281,7 @@ pub struct Config {
     pub speaker_similarity_min: f32,
 
     // ── Conversation mode (ambient state machine) ─────────────────────────────
-    /// Wake word that triggers a response in Ambient mode (WAKE_WORD, default "jarvis").
+    /// Wake word that triggers a response in Ambient mode (WAKE_WORD, default "seneschal").
     /// Case-insensitive substring match against the STT transcript.
     pub wake_word: String,
     /// Seconds in Ambient mode with no speech before auto-returning to Active
@@ -382,6 +382,10 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         let mut config = Self::load_defaults()?;
         config.apply_env_overrides()?;
+        if config.wake_word.is_empty() {
+            warn!("wake_word is empty; defaulting to 'seneschal'");
+            config.wake_word = "seneschal".to_string();
+        }
         Ok(config)
     }
 
@@ -719,7 +723,7 @@ impl Config {
 
         // Conversation mode
         if let Ok(v) = env::var("WAKE_WORD") {
-            self.wake_word = v.to_lowercase();
+            self.wake_word = v;
         }
         if let Ok(v) = env::var("AMBIENT_CLEAR_SECS") {
             self.ambient_clear_secs = v.parse().context("Invalid AMBIENT_CLEAR_SECS")?;
@@ -868,7 +872,7 @@ mod tests {
 
     #[test]
     fn system_prompt_loaded_from_env_var() {
-        let prompt = "Eres Jarvis, el asistente personal.";
+        let prompt = "Eres seneschal, el asistente personal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
             assert_eq!(config.llm_system_prompt, prompt);
@@ -894,7 +898,7 @@ mod tests {
 
     #[test]
     fn system_prompt_can_be_multiline() {
-        let prompt = "Eres Jarvis.\nHablas español.\nEres conciso.";
+        let prompt = "Eres seneschal.\nHablas español.\nEres conciso.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
             assert_eq!(config.llm_system_prompt, prompt);
@@ -905,7 +909,7 @@ mod tests {
 
     #[test]
     fn system_prompt_from_config_becomes_first_message() {
-        let prompt = "Eres Jarvis, el asistente personal.";
+        let prompt = "Eres seneschal, el asistente personal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
             let session = LlmSession::new(&config.llm_system_prompt, "user");
@@ -918,7 +922,7 @@ mod tests {
 
     #[test]
     fn system_message_is_always_first_regardless_of_turns() {
-        let prompt = "Eres Jarvis.";
+        let prompt = "Eres seneschal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
             let mut session = LlmSession::new(&config.llm_system_prompt, "user");
@@ -938,7 +942,7 @@ mod tests {
     #[test]
     fn full_chain_env_to_context() {
         // This test mirrors exactly what main.rs does when building the session.
-        let prompt = "Eres Jarvis, el asistente personal. Llevas años trabajando con él.";
+        let prompt = "Eres seneschal, el asistente personal. Llevas años trabajando con él.";
 
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             // Step 1: load config (mirrors dotenvy::dotenv() + Config::from_env() in main)
@@ -967,7 +971,7 @@ mod tests {
 
     #[test]
     fn system_prompt_preserved_after_multiple_turns() {
-        let prompt = "Eres Jarvis.";
+        let prompt = "Eres seneschal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
             let mut session = LlmSession::new(&config.llm_system_prompt, "user");
@@ -987,7 +991,7 @@ mod tests {
 
     #[test]
     fn system_prompt_preserved_after_summarization() {
-        let prompt = "Eres Jarvis, el asistente.";
+        let prompt = "Eres seneschal, el asistente.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
             let mut session = LlmSession::new(&config.llm_system_prompt, "user");

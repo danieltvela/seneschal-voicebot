@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn parse_add_memories() {
         let json = r#"[
-            {"content": "User works on Jarvis voicebot", "category": "project", "action": "add"},
+            {"content": "User works on seneschal voicebot", "category": "project", "action": "add"},
             {"content": "User prefers concise responses", "category": "preference", "action": "add"}
         ]"#;
         let result = parse_memory_response(json);

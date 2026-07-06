@@ -21,6 +21,7 @@ use crate::llm::{LlmProvider, Message};
 
 // ── History formatting ────────────────────────────────────────────────────────
 
+// TODO: consider removing — no production callers
 /// Format conversation messages as a human-readable chat history for the agent.
 /// Only user and assistant turns with text content are included; system,
 /// tool-call, and tool-result messages are omitted.
@@ -35,7 +36,7 @@ pub fn format_history(messages: &[serde_json::Value]) -> String {
             let content = m["content"].as_str()?; // skips null-content tool_call messages
             match role {
                 "user" => Some(format!("[User]: {content}")),
-                "assistant" => Some(format!("[Jarvis]: {content}")),
+                "assistant" => Some(format!("[seneschal]: {content}")),
                 _ => None,
             }
         })
@@ -1416,19 +1417,22 @@ mod tests {
             serde_json::json!({"role": "user", "content": "hola"}),
             serde_json::json!({"role": "assistant", "content": "hola Daniel"}),
         ];
-        assert_eq!(format_history(&msgs), "[User]: hola\n[Jarvis]: hola Daniel");
+        assert_eq!(
+            format_history(&msgs),
+            "[User]: hola\n[seneschal]: hola Daniel"
+        );
     }
 
     #[test]
     fn format_history_skips_system_messages() {
         let msgs = vec![
-            serde_json::json!({"role": "system", "content": "Eres Jarvis"}),
+            serde_json::json!({"role": "system", "content": "Eres seneschal"}),
             serde_json::json!({"role": "user", "content": "hola"}),
             serde_json::json!({"role": "assistant", "content": "hola"}),
         ];
         let result = format_history(&msgs);
         assert!(
-            !result.contains("Eres Jarvis"),
+            !result.contains("Eres seneschal"),
             "system message should be excluded"
         );
         assert!(result.contains("[User]: hola"));
@@ -1446,7 +1450,7 @@ mod tests {
             !result.contains("14:30\n"),
             "bare tool result should be excluded"
         );
-        assert!(result.contains("[Jarvis]: Son las 14:30"));
+        assert!(result.contains("[seneschal]: Son las 14:30"));
     }
 
     #[test]
@@ -1464,7 +1468,7 @@ mod tests {
             !result.contains("Ambient mode activated."),
             "tool result should be excluded"
         );
-        assert!(result.contains("[Jarvis]: Modo ambiente activado."));
+        assert!(result.contains("[seneschal]: Modo ambiente activado."));
         assert!(result.contains("[User]: Activa el modo ambiente"));
     }
 
@@ -1476,8 +1480,7 @@ mod tests {
             serde_json::json!({"role": "user", "content": "segunda"}),
             serde_json::json!({"role": "assistant", "content": "respuesta dos"}),
         ];
-        let expected =
-            "[User]: primera\n[Jarvis]: respuesta uno\n[User]: segunda\n[Jarvis]: respuesta dos";
+        let expected = "[User]: primera\n[seneschal]: respuesta uno\n[User]: segunda\n[seneschal]: respuesta dos";
         assert_eq!(format_history(&msgs), expected);
     }
 
@@ -1540,7 +1543,7 @@ mod tests {
     #[tokio::test]
     async fn cli_passes_history_in_query() {
         let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
-        let hist = history_with("[User]: busca noticias\n[Jarvis]: delegando");
+        let hist = history_with("[User]: busca noticias\n[seneschal]: delegando");
         let tool = cli_tool("echo done", hist, tx);
         tool.run(r#"{"task": "busca noticias"}"#).await;
 

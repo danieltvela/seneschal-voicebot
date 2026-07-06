@@ -9,7 +9,7 @@
 ///   message: <optional natural-language sentence>
 ///
 /// When `warn_user` is true, an `AgentResult` proactive event is pushed so
-/// the main assistant LLM reformulates the message in Jarvis's voice before
+/// the main assistant LLM reformulates the message in seneschal's voice before
 /// speaking it to the user.
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tokio::sync::mpsc;
@@ -22,7 +22,7 @@ use crate::llm::LlmProvider;
 use crate::screen_capture;
 
 const EYES_PROMPT: &str = "\
-You are a background visual monitor for a voice assistant called Jarvis. \
+You are a background visual monitor for a voice assistant called seneschal. \
 Your task is to inspect the screenshot and decide if there is anything the user \
 should be told about RIGHT NOW — such as an error dialog, a warning, an \
 important notification, a deadline, a critical status, or something genuinely \

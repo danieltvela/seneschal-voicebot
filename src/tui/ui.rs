@@ -88,7 +88,7 @@ fn render_streaming_lines(buffer: &str, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
         Span::raw("┌ "),
         Span::styled(
-            "Jarvis [streaming]",
+            "seneschal [streaming]",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
@@ -170,7 +170,7 @@ pub fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
             lines.push(Line::from(vec![
                 Span::raw("┌ "),
                 Span::styled(
-                    "Jarvis",
+                    "seneschal",
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
@@ -291,7 +291,7 @@ fn render_streaming(frame: &mut Frame, app: &App, area: Rect) {
     all_lines.push(Line::from(vec![
         Span::raw("┌ "),
         Span::styled(
-            "Jarvis [streaming]",
+            "seneschal [streaming]",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),

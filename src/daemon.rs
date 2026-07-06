@@ -1,4 +1,4 @@
-/// Inference daemon — Jarvis's background "is there anything worth saying?" loop.
+/// Inference daemon — seneschal's background "is there anything worth saying?" loop.
 ///
 /// Every `interval_secs` this daemon asks the LLM if there is something
 /// genuinely worth telling the user, and — if the answer is not `NOTHING` —
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn build_daemon_system_prompt_includes_base_prompt() {
-        let base = "Eres Jarvis, el asistente.";
+        let base = "Eres seneschal, el asistente.";
         let result = build_daemon_system_prompt(base);
         assert!(result.contains(base));
         assert!(result.contains("NOTHING"));

@@ -264,7 +264,7 @@ impl LlmSession {
                 let content = m["content"].as_str()?;
                 match role {
                     "user" => Some(format!("[User]: {content}")),
-                    "assistant" => Some(format!("[Jarvis]: {content}")),
+                    "assistant" => Some(format!("[seneschal]: {content}")),
                     "developer" => Some(format!("[Developer]: {content}")),
                     _ => None,
                 }

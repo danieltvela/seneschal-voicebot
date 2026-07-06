@@ -157,7 +157,7 @@ _UNIT = (
     "El sistema de inteligencia artificial procesa la información del usuario "
     "y genera una respuesta coherente en tiempo real. "
     "La latencia depende del tamaño del contexto y de la velocidad de prefill. "
-    "Jarvis mantiene el historial de conversación para ofrecer respuestas relevantes. "
+    "seneschal mantiene el historial de conversación para ofrecer respuestas relevantes. "
     "El caché KV almacena los estados de atención de tokens anteriores. "
 )
 _UNIT_LEN = len(_UNIT)
@@ -173,7 +173,7 @@ prewarm_text = make_prewarm_content(prewarm_chars)
 # ── Message builders ──────────────────────────────────────────────────────────
 
 SYSTEM = (
-    "Eres Jarvis, el asistente personal de IA. Llevas años trabajando con él "
+    "Eres seneschal, el asistente personal de IA. Llevas años trabajando con él "
     "y le conoces bien. Respuestas concisas, siempre en español."
 )
 

@@ -85,7 +85,7 @@
 
   {
     "_comment": "══════════════════════════════════════════════════════",
-    "_comment2": "GROUP: persona — Jarvis character consistency",
+    "_comment2": "GROUP: persona — seneschal character consistency",
     "_comment3": "══════════════════════════════════════════════════════"
   },
   {
@@ -93,7 +93,7 @@
     "group": "persona",
     "description": "Model must address the user as 'señor', never as 'usuario' or plain 'tú'",
     "messages": [
-      {"role": "user", "content": "Jarvis, ¿cómo estás hoy?"}
+      {"role": "user", "content": "seneschal, ¿cómo estás hoy?"}
     ],
     "requires_tools": false,
     "eval": {
@@ -115,7 +115,7 @@
         "(?i)^(claro que sí|por supuesto|desde luego|con mucho gusto|encantado de ayudar|¡claro|cómo no)",
         "(?i)^(¡por supuesto|¡desde luego|¡claro)"
       ],
-      "notes": "Jarvis is professional and direct; must not open with eager-to-please filler"
+      "notes": "seneschal is professional and direct; must not open with eager-to-please filler"
     }
   },
   {
@@ -538,7 +538,7 @@
     "group": "multi_turn",
     "description": "Model must remember and use the user's name mentioned earlier in the conversation",
     "messages": [
-      {"role": "user", "content": "Oye Jarvis, por cierto me llamo Dani"},
+      {"role": "user", "content": "Oye seneschal, por cierto me llamo Dani"},
       {"role": "assistant", "content": "Encantado, señor Dani. ¿En qué puedo ayudarle?"},
       {"role": "user", "content": "¿Recuerdas cómo me llamo?"}
     ],

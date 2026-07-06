@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     println!("=====================================\n");
 
     println!("This test demonstrates how an AI agent would:");
-    println!("1. Connect to Jarvis control API");
+    println!("1. Connect to voicebot control API");
     println!("2. Send text input: 'Search for the last winner of a Formula 1 race'");
     println!("3. Monitor events for search execution and response\n");
 
@@ -18,9 +18,9 @@ async fn main() -> anyhow::Result<()> {
             println!("Health check response: {:?}", health);
         }
         Err(e) => {
-            println!("Note: Jarvis voicebot is not running");
+            println!("Note: voicebot is not running");
             println!("Error: {:?}\n", e);
-            println!("To run this test against a real Jarvis instance:");
+            println!("To run this test against a real voicebot instance:");
             println!("  1. Ensure you have a microphone and speaker connected");
             println!("  2. Ensure LLM server is running on port 8080");
             println!("  3. Run: CONTROL_PORT=9001 cargo run --release --features control,avspeech");
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = client.get_state().await?;
-    println!("Jarvis state: {}", state.state);
+    println!("Voicebot state: {}", state.state);
     println!("TTS muted: {}\n", state.tts_muted);
 
     println!("Sending: 'Search for the last winner of a Formula 1 race'");

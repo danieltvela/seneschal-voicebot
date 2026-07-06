@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eval_prompts.py — Prompt Evaluator for Jarvis Voicebot
+eval_prompts.py — Prompt Evaluator for seneschal Voicebot
 
 Runs quality benchmark against multiple system prompts to find the best one.
 Uses the same fixture system as bench-models.py but iterates over prompts
@@ -625,7 +625,7 @@ def call_evaluator(
 
     provider = ev_cfg.get("runtime", "")
     system_msg = (
-        "You are a strict quality evaluator for a voice assistant called Jarvis. "
+        "You are a strict quality evaluator for a voice assistant called seneschal. "
         "Assess whether the assistant's response meets the stated criteria. "
         "Be concise and decisive. "
         "Reply ONLY with one line of valid JSON: "
@@ -925,7 +925,7 @@ def main():
     W = 82
     print()
     print("═" * W)
-    print("  Prompt Evaluator for Jarvis Voicebot")
+    print("  Prompt Evaluator for seneschal Voicebot")
     print("═" * W)
     print(f"  Config     : {config_path}")
     print(f"  Prompts   : {len(prompts)} prompt(s)")

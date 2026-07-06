@@ -606,6 +606,7 @@ async fn async_main() -> Result<()> {
     let tool_section = tools.lock().unwrap().system_prompt_section();
     let system_prompt = build_system_prompt(
         &config.llm_system_prompt,
+        &config.wake_word,
         &profile_facts,
         &memories,
         &agent_section,
@@ -1031,6 +1032,7 @@ async fn async_main() -> Result<()> {
         let idle_secs = config.llm_idle_consolidation_secs;
         let idle_min_pct = config.llm_idle_min_context_pct;
         let base_prompt = config.llm_system_prompt.clone();
+        let wake_word_c = config.wake_word.clone();
         let agent_section_c = agent_section.clone();
         let tool_section_c = tool_section.clone();
         let language_c = config.language.clone();
@@ -1052,6 +1054,7 @@ async fn async_main() -> Result<()> {
                 idle_secs,
                 idle_min_pct,
                 base_prompt,
+                wake_word_c,
                 agent_section_c,
                 tool_section_c,
                 language_c,
@@ -1133,6 +1136,7 @@ async fn async_main() -> Result<()> {
                 &llm_session,
                 config.llm_summary_keep_turns,
                 &config.llm_system_prompt,
+                &config.wake_word,
                 &agent_section,
                 &tool_section,
                 &proactive_tx,
@@ -1333,6 +1337,7 @@ async fn async_main() -> Result<()> {
                                 let tool_sec = tools.lock().unwrap().system_prompt_section();
                                 let new_sys_prompt = build_system_prompt(
                                     &config.llm_system_prompt,
+                                    &config.wake_word,
                                     &profile_facts,
                                     &memories,
                                     &agent_section,
@@ -1365,6 +1370,7 @@ async fn async_main() -> Result<()> {
                                 let tool_sec = tools.lock().unwrap().system_prompt_section();
                                 let new_sys_prompt = build_system_prompt(
                                     &config.llm_system_prompt,
+                                    &config.wake_word,
                                     &profile_facts,
                                     &memories,
                                     &agent_section,
@@ -1555,7 +1561,7 @@ async fn async_main() -> Result<()> {
 
                             if ambient_locked {
                                 let lower = final_text.to_lowercase();
-                                if !lower.contains(&wake_word_check) {
+                                if !lower.contains(&wake_word_check.to_lowercase()) {
                                     ambient_buffer.lock().unwrap()
                                         .push("Usuario".to_string(), final_text.clone());
                                     debug!(target: "pipeline", "Ambient (locked): no wake word — buffered");

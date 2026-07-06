@@ -139,14 +139,14 @@ mod tests {
 
     #[test]
     fn has_referential_spanish() {
-        assert!(has_referential("Jarvis, ¿qué es eso?"));
+        assert!(has_referential("seneschal, ¿qué es eso?"));
         assert!(has_referential("¿qué dijo?"));
         assert!(!has_referential("¿cuánto es dos más dos?"));
     }
 
     #[test]
     fn has_referential_english() {
-        assert!(has_referential("Jarvis, what is that?"));
+        assert!(has_referential("seneschal, what is that?"));
         assert!(has_referential("What they said earlier"));
         assert!(!has_referential("What time is it?"));
     }

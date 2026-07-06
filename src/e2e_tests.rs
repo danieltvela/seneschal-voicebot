@@ -146,7 +146,7 @@ impl E2eHarness {
 
     /// Run the full pipeline with a pre-known transcript (no Whisper).
     async fn run(&self, transcript: &str) {
-        self.run_with_opts(transcript, false, "jarvis").await
+        self.run_with_opts(transcript, false, "seneschal").await
     }
 
     /// Run the pipeline in ambient mode.
@@ -566,7 +566,7 @@ async fn empty_transcript_is_discarded() {
 #[ignore]
 async fn ambient_mode_discards_utterance_without_wake_word() {
     let h = E2eHarness::new().await;
-    h.run_ambient("Cuéntame algo interesante, por favor.", "jarvis")
+    h.run_ambient("Cuéntame algo interesante, por favor.", "seneschal")
         .await;
     assert!(
         h.tts_sentences().is_empty(),
@@ -585,7 +585,7 @@ async fn ambient_mode_discards_utterance_without_wake_word() {
 async fn ambient_mode_responds_when_wake_word_present() {
     let h = E2eHarness::new().await;
     h.mock_llm_response("Claro, son las once.").await;
-    h.run_ambient("Jarvis, ¿qué hora es?", "jarvis").await;
+    h.run_ambient("seneschal, ¿qué hora es?", "seneschal").await;
 
     let sentences = h.tts_sentences();
     assert!(

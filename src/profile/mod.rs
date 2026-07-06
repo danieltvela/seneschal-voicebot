@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn profile_facts_injected_into_system_message() {
-        let base_prompt = "Eres Jarvis, el asistente personal de Daniel.";
+        let base_prompt = "Eres seneschal, el asistente personal de Daniel.";
         let facts = vec![
             fact("name", "Daniel", 0.95),
             fact("job", "software engineer", 0.9),
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn low_confidence_facts_not_injected_into_system_message() {
-        let base_prompt = "Eres Jarvis.";
+        let base_prompt = "Eres seneschal.";
         let facts = vec![
             fact("name", "Daniel", 0.95),
             fact("city", "Madrid", 0.3), // below 0.5 threshold — must be excluded
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn empty_profile_leaves_system_prompt_unchanged() {
-        let base_prompt = "Eres Jarvis.";
+        let base_prompt = "Eres seneschal.";
         let profile_ctx = build_profile_context(&[]);
         let system_prompt = format!("{base_prompt}{profile_ctx}");
         let session = LlmSession::new(&system_prompt, "user");
@@ -589,11 +589,11 @@ mod tests {
 
     #[test]
     fn profile_block_appended_after_base_prompt_not_before() {
-        let base_prompt = "Eres Jarvis.";
+        let base_prompt = "Eres seneschal.";
         let facts = vec![fact("name", "Daniel", 0.9)];
         let system_prompt = format!("{base_prompt}{}", build_profile_context(&facts));
 
-        let pos_prompt = system_prompt.find("Eres Jarvis.").unwrap();
+        let pos_prompt = system_prompt.find("Eres seneschal.").unwrap();
         let pos_profile = system_prompt.find("[USER PROFILE]").unwrap();
         assert!(
             pos_prompt < pos_profile,
@@ -642,7 +642,7 @@ mod tests {
         );
 
         // Step 3: inject into the next session's system prompt
-        let base = "Eres Jarvis, el asistente de Daniel.";
+        let base = "Eres seneschal, el asistente de Daniel.";
         let session = LlmSession::new(&format!("{base}{profile_ctx}"), "user");
         let msgs = session.all_messages();
 

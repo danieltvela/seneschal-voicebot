@@ -7,7 +7,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
-/// Client for the Jarvis Voicebot Control API.
+/// Client for the Voicebot Control API.
 ///
 /// Provides programmatic control over the voicebot pipeline for testing,
 /// debugging, and automation. Supports both sync and async operations.

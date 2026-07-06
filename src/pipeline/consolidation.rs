@@ -68,8 +68,10 @@ pub fn check_system_prompt_saturation(
 ///
 /// Agent routing is handled by `AgentRegistry::system_prompt_section()` which only
 /// includes routing information when agents are configured via `AGENT_{}_WHEN_TO_USE`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_system_prompt(
     base_prompt: &str,
+    wake_word: &str,
     profile_facts: &[ProfileFact],
     memories: &[Memory],
     agent_section: &str,
@@ -79,7 +81,8 @@ pub fn build_system_prompt(
 ) -> String {
     if !plugin_sections.replace.is_empty() {
         format!(
-            "{}{}{}{}{}{}",
+            "Your name is {}.\n\n{}{}{}{}{}{}",
+            wake_word,
             plugin_sections.replace,
             tool_section,
             crate::profile::build_corrections_context(corrections),
@@ -89,9 +92,10 @@ pub fn build_system_prompt(
         )
     } else {
         format!(
-            "{}{}{}{}{}{}{}{}",
+            "{}{}\nYour name is {}.\n\n{}{}{}{}{}{}",
             plugin_sections.prepend,
             base_prompt,
+            wake_word,
             plugin_sections.append,
             tool_section,
             crate::profile::build_corrections_context(corrections),
@@ -115,6 +119,7 @@ pub async fn run_consolidation_cycle(
     llm_session: &Arc<Mutex<LlmSession>>,
     keep_turns: usize,
     base_prompt: &str,
+    wake_word: &str,
     agent_section: &str,
     tool_section: &str,
     proactive_tx: &mpsc::Sender<ProactiveEvent>,
@@ -227,6 +232,7 @@ pub async fn run_consolidation_cycle(
     let fresh_memories = db.load_active_memories().await.unwrap_or_default();
     let new_system_prompt = build_system_prompt(
         base_prompt,
+        wake_word,
         &fresh_profile_facts,
         &fresh_memories,
         agent_section,
@@ -277,6 +283,7 @@ pub async fn consolidation_task(
     idle_consolidation_secs: u64,
     idle_min_context_pct: usize,
     base_prompt: String,
+    wake_word: String,
     agent_section: String,
     tool_section: String,
     language: String,
@@ -381,6 +388,7 @@ pub async fn consolidation_task(
             &llm_session,
             keep_turns,
             &base_prompt,
+            &wake_word,
             &agent_section,
             &tool_section,
             &proactive_tx,
@@ -551,6 +559,7 @@ mod tests {
 
         let prompt = build_system_prompt(
             base,
+            "seneschal",
             &facts,
             &mems,
             agents,
@@ -585,6 +594,7 @@ mod tests {
         }];
         let prompt = build_system_prompt(
             "base",
+            "seneschal",
             &[],
             &[],
             "",
@@ -600,6 +610,7 @@ mod tests {
     fn build_system_prompt_omits_corrections_when_empty() {
         let prompt = build_system_prompt(
             "base",
+            "seneschal",
             &[],
             &[],
             "",
@@ -614,6 +625,7 @@ mod tests {
     fn build_system_prompt_omits_profile_when_no_facts() {
         let prompt = build_system_prompt(
             "base",
+            "seneschal",
             &[],
             &[],
             "",
@@ -628,6 +640,7 @@ mod tests {
     fn build_system_prompt_omits_memories_when_empty() {
         let prompt = build_system_prompt(
             "base",
+            "seneschal",
             &[],
             &[],
             "",
@@ -645,7 +658,16 @@ mod tests {
             prepend: String::new(),
             append: String::new(),
         };
-        let prompt = build_system_prompt("ORIGINAL_BASE", &[], &[], "", "", &[], &sections);
+        let prompt = build_system_prompt(
+            "ORIGINAL_BASE",
+            "seneschal",
+            &[],
+            &[],
+            "",
+            "",
+            &[],
+            &sections,
+        );
         assert!(prompt.contains("REPLACEMENT_CONTENT"));
         assert!(!prompt.contains("ORIGINAL_BASE"));
     }
@@ -657,7 +679,8 @@ mod tests {
             prepend: String::new(),
             append: "APPEND_SECTION".to_string(),
         };
-        let prompt = build_system_prompt("BASE_PROMPT", &[], &[], "", "", &[], &sections);
+        let prompt =
+            build_system_prompt("BASE_PROMPT", "seneschal", &[], &[], "", "", &[], &sections);
         assert!(prompt.contains("BASE_PROMPT"));
         assert!(prompt.contains("APPEND_SECTION"));
         let pos_base = prompt.find("BASE_PROMPT").unwrap();
@@ -672,7 +695,8 @@ mod tests {
             prepend: "PREPEND_SECTION".to_string(),
             append: String::new(),
         };
-        let prompt = build_system_prompt("BASE_PROMPT", &[], &[], "", "", &[], &sections);
+        let prompt =
+            build_system_prompt("BASE_PROMPT", "seneschal", &[], &[], "", "", &[], &sections);
         assert!(prompt.contains("BASE_PROMPT"));
         assert!(prompt.contains("PREPEND_SECTION"));
         let pos_prepend = prompt.find("PREPEND_SECTION").unwrap();
@@ -687,7 +711,7 @@ mod tests {
             prepend: "PREPEND".to_string(),
             append: "APPEND".to_string(),
         };
-        let prompt = build_system_prompt("BASE", &[], &[], "", "", &[], &sections);
+        let prompt = build_system_prompt("BASE", "seneschal", &[], &[], "", "", &[], &sections);
         let pos_prepend = prompt.find("PREPEND").unwrap();
         let pos_base = prompt.find("BASE").unwrap();
         let pos_append = prompt.find("APPEND").unwrap();
