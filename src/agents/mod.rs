@@ -49,6 +49,10 @@ pub enum ProactiveEvent {
     /// The LLM invoked the switch_plugin tool — the pipeline should rebuild
     /// tool registry, MCP servers, agents, and config for the new plugin.
     PluginSwitch { plugin_id: String },
+    /// The configured audio device has become available (e.g. Bluetooth headset
+    /// connected). The main loop should start capture, swap the output device,
+    /// and send the startup greeting.
+    DeviceConnected,
 }
 
 impl std::fmt::Debug for ProactiveEvent {
@@ -80,6 +84,7 @@ impl std::fmt::Debug for ProactiveEvent {
             Self::PluginSwitch { plugin_id } => {
                 write!(f, "PluginSwitch(plugin_id={plugin_id})")
             }
+            Self::DeviceConnected => write!(f, "DeviceConnected"),
         }
     }
 }

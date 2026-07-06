@@ -801,7 +801,9 @@ async fn async_main() -> Result<()> {
     let tts = Arc::new(tts);
 
     // ── Audio output ──────────────────────────────────────────────────────────
-    let audio_output = Arc::new(AudioOutput::new(config.audio_output_device.as_deref())?);
+    let audio_output = Arc::new(AudioOutput::new_or_null(
+        config.audio_output_device.as_deref(),
+    ));
     info!(
         target: "audio",
         "Audio output: {}Hz, {}ch",
@@ -810,13 +812,29 @@ async fn async_main() -> Result<()> {
     );
 
     // ── Audio capture ─────────────────────────────────────────────────────────
-    let audio_capture = AudioCapture::new(config.audio_input_device.as_deref())?;
-    let source_sample_rate = audio_capture.sample_rate();
-    info!(target: "audio", "Audio input: {}Hz", source_sample_rate);
-
+    // Try to start capture immediately; if no input device is available yet,
+    // defer until the device monitor signals DeviceConnected.
     let samples_per_chunk = config.samples_per_chunk();
     let (tx, rx) = bounded(AUDIO_CHANNEL_CAPACITY);
-    let _stream = audio_capture.start_capture(tx.clone(), samples_per_chunk)?;
+    let mut capture_stream: Option<cpal::Stream> = None;
+    let mut source_sample_rate = config.sample_rate;
+    match AudioCapture::try_new(config.audio_input_device.as_deref()) {
+        Some(ac) => {
+            source_sample_rate = ac.sample_rate();
+            info!(target: "audio", "Audio input: {}Hz", source_sample_rate);
+            match ac.start_capture(tx.clone(), samples_per_chunk) {
+                Ok(stream) => {
+                    capture_stream = Some(stream);
+                }
+                Err(e) => {
+                    warn!(target: "audio", "Failed to start audio capture: {}. Deferring until device connects.", e);
+                }
+            }
+        }
+        None => {
+            warn!(target: "audio", "No input device available at startup — deferring capture until device connects");
+        }
+    }
 
     let (stt_tx, mut stt_rx) = mpsc::channel::<SpeechEvent>(32);
 
@@ -1147,7 +1165,9 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Startup greeting / first-time introduction ─────────────────────────────
-    {
+    // Only send if audio capture is active; otherwise the device monitor will
+    // send the greeting when the device connects.
+    if capture_stream.is_some() {
         let first = is_first_launch;
         let key = if first { "first_launch" } else { "startup" };
         let notification = i18n::get_notification(key, &config.language);
@@ -1169,13 +1189,13 @@ async fn async_main() -> Result<()> {
 
     // ── Device monitor ─────────────────────────────────────────────────────────
     // Polls for the configured input device (or default if none specified);
-    // sends a startup greeting when the device transitions from unavailable →
-    // available (e.g. Bluetooth headset reconnect).
+    // sends a DeviceConnected event when the device transitions from unavailable →
+    // available (e.g. Bluetooth headset reconnect). The main loop then starts
+    // capture, swaps the output device, and sends the startup greeting.
     if config.device_monitor_enabled {
         device_monitor::spawn(
             config.audio_input_device.clone(),
-            transcript_tx.clone(),
-            config.language.clone(),
+            proactive_tx.clone(),
             config.device_monitor_poll_secs,
             shutdown.clone(),
         );
@@ -1285,6 +1305,42 @@ async fn async_main() -> Result<()> {
                             }
                             ProactiveEvent::PluginSwitch { .. } => {
                                 // No-op: handled via dedicated plugin_switch_rx channel
+                            }
+                            ProactiveEvent::DeviceConnected => {
+                                // Audio device connected — start capture, swap output, send greeting.
+                                info!(target: "audio", "DeviceConnected received — starting audio pipeline");
+                                match AudioCapture::new(config.audio_input_device.as_deref()) {
+                                    Ok(ac) => {
+                                        source_sample_rate = ac.sample_rate();
+                                        speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
+                                        info!(target: "audio", "Audio input connected: {}Hz", source_sample_rate);
+                                        match ac.start_capture(tx.clone(), samples_per_chunk) {
+                                            Ok(stream) => {
+                                                capture_stream = Some(stream);
+                                            }
+                                            Err(e) => {
+                                                error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
+                                    }
+                                }
+                                // Swap output device (spawn_blocking — may wait for in-flight playback)
+                                let out = Arc::clone(&audio_output);
+                                let out_name = config.audio_output_device.clone();
+                                tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
+                                    .await
+                                    .ok();
+                                // Send startup greeting
+                                let now = chrono::Local::now();
+                                let time_str = now.format("%H:%M").to_string();
+                                let date_str = now.format("%d/%m/%Y").to_string();
+                                let notification = i18n::get_notification("startup", &config.language)
+                                    .replace("{time_str}", &time_str)
+                                    .replace("{date_str}", &date_str);
+                                transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
                             }
                         }
                         continue;

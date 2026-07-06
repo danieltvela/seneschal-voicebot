@@ -4,12 +4,16 @@ use cpal::{Device, StreamConfig};
 use rubato::{FftFixedIn, Resampler};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-pub struct AudioOutput {
+struct AudioOutputInner {
     /// `None` in the null/headless variant — `play_blocking` returns immediately.
     device: Option<Device>,
     config: StreamConfig,
+}
+
+pub struct AudioOutput {
+    inner: Mutex<AudioOutputInner>,
 }
 
 impl AudioOutput {
@@ -46,9 +50,76 @@ impl AudioOutput {
         };
 
         Ok(Self {
-            device: Some(device),
-            config,
+            inner: Mutex::new(AudioOutputInner {
+                device: Some(device),
+                config,
+            }),
         })
+    }
+
+    /// Like `new()`, but falls back to a null/headless output when no device is
+    /// available. Used at startup so the app can launch without an audio device
+    /// connected; `swap_device` upgrades to a real device when one appears.
+    pub fn new_or_null(device_name: Option<&str>) -> Self {
+        match Self::new(device_name) {
+            Ok(output) => output,
+            Err(e) => {
+                warn!(
+                    target: "audio",
+                    "No output device available at startup ({}), using null output",
+                    e
+                );
+                Self::null()
+            }
+        }
+    }
+
+    /// Hot-swap the output device at runtime. Called when the device monitor
+    /// detects that the configured audio device has become available.
+    ///
+    /// Blocks until any in-flight `play_blocking` call releases the lock
+    /// (i.e. between sentences). Safe to call from `spawn_blocking`.
+    pub fn swap_device(&self, device_name: Option<&str>) -> Result<()> {
+        let host = cpal::default_host();
+
+        let device = if let Some(name) = device_name {
+            Self::find_output_device(&host, name)?
+        } else {
+            host.default_output_device()
+                .context("No output device available")?
+        };
+
+        let desc = device
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or_default();
+
+        let supported = device
+            .default_output_config()
+            .context("Failed to get default output config")?;
+
+        let channels = supported.channels().min(2);
+        let config = StreamConfig {
+            channels,
+            sample_rate: supported.sample_rate(),
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.device = Some(device);
+            inner.config = config;
+        }
+
+        info!(
+            target: "audio",
+            "Output device swapped: {} ({}Hz, {}ch)",
+            desc,
+            supported.sample_rate(),
+            channels
+        );
+
+        Ok(())
     }
 
     /// Find an output device by name, handling duplicates (e.g. USB vs Bluetooth).
@@ -130,25 +201,28 @@ impl AudioOutput {
 
     /// Null/headless audio output — `play_blocking` discards all audio immediately.
     ///
-    /// Used in tests and CI environments where no sound device is available.
+    /// Used in tests and CI environments where no sound device is available,
+    /// and as the startup fallback when no output device is connected.
     #[allow(dead_code)]
     pub fn null() -> Self {
         Self {
-            device: None,
-            config: StreamConfig {
-                channels: 1,
-                sample_rate: 22050,
-                buffer_size: cpal::BufferSize::Default,
-            },
+            inner: Mutex::new(AudioOutputInner {
+                device: None,
+                config: StreamConfig {
+                    channels: 1,
+                    sample_rate: 22050,
+                    buffer_size: cpal::BufferSize::Default,
+                },
+            }),
         }
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.config.sample_rate
+        self.inner.lock().unwrap().config.sample_rate
     }
 
     pub fn channels(&self) -> u16 {
-        self.config.channels
+        self.inner.lock().unwrap().config.channels
     }
 
     /// Resample mono `samples` from `source_rate` to `target_rate`, then
@@ -190,17 +264,28 @@ impl AudioOutput {
     ///
     /// If this is a null/headless output (no device), returns immediately
     /// without producing any audio.
+    ///
+    /// Holds the inner lock for the duration of playback. This is safe because
+    /// `play_blocking` runs inside `spawn_blocking` (tts_task.rs), and
+    /// `swap_device` also uses `spawn_blocking` — no tokio worker thread is
+    /// blocked. The lock ensures device swaps happen between sentences, never
+    /// mid-playback.
     pub fn play_blocking(
         &self,
         samples: &[f32],
         source_rate: u32,
         cancel: &Arc<AtomicBool>,
     ) -> Result<()> {
-        let Some(device) = &self.device else {
+        let inner = self.inner.lock().unwrap();
+
+        let Some(device) = &inner.device else {
             return Ok(());
         };
 
-        let prepared = Self::prepare(samples, source_rate, self.sample_rate(), self.channels())?;
+        let sample_rate = inner.config.sample_rate;
+        let channels = inner.config.channels;
+
+        let prepared = Self::prepare(samples, source_rate, sample_rate, channels)?;
 
         if prepared.is_empty() {
             return Ok(());
@@ -209,7 +294,7 @@ impl AudioOutput {
         debug!(
             target: "audio",
             "play_blocking: {} samples in, source={}Hz → device={}Hz {}ch, prepared={}",
-            samples.len(), source_rate, self.sample_rate(), self.channels(), prepared.len()
+            samples.len(), source_rate, sample_rate, channels, prepared.len()
         );
 
         let total = prepared.len();
@@ -222,8 +307,7 @@ impl AudioOutput {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(150);
-        let drain_samples =
-            (self.sample_rate() as usize * self.channels() as usize) * drain_ms / 1000;
+        let drain_samples = (sample_rate as usize * channels as usize) * drain_ms / 1000;
         let stop_pos = total + drain_samples;
 
         let buf = Arc::new(prepared);
@@ -237,7 +321,7 @@ impl AudioOutput {
 
         let stream = device
             .build_output_stream(
-                &self.config,
+                &inner.config,
                 move |data: &mut [f32], _| {
                     // Barge-in: stop immediately when cancelled
                     if cancel_cb.load(Ordering::Relaxed) {

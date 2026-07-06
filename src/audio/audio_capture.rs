@@ -61,6 +61,12 @@ impl AudioCapture {
         })
     }
 
+    /// Like `new()` but returns `None` instead of an error when no input device
+    /// is available. Used at startup to defer capture until a device connects.
+    pub fn try_new(device_name: Option<&str>) -> Option<Self> {
+        Self::new(device_name).ok()
+    }
+
     /// Parse a device name that may include an index suffix: "Name#N" → ("name", Some(N))
     fn parse_device_name(name: &str) -> (&str, Option<usize>) {
         if let Some(pos) = name.rfind('#')

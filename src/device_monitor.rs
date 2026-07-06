@@ -4,27 +4,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::i18n;
-use crate::pipeline::PipelineFrame;
+use crate::agents::ProactiveEvent;
 
 /// Spawn a background task that polls for the configured audio device.
 ///
-/// When the device transitions from unavailable → available, the startup
-/// greeting notification is sent to the LLM via `transcript_tx`.
+/// When the device transitions from unavailable → available, sends a
+/// `ProactiveEvent::DeviceConnected` so the main loop can start capture,
+/// swap the output device, and send the startup greeting.
 ///
 /// When `device_name` is `None`, monitors the default input device.
 pub fn spawn(
     device_name: Option<String>,
-    transcript_tx: mpsc::Sender<PipelineFrame>,
-    language: String,
+    proactive_tx: mpsc::Sender<ProactiveEvent>,
     poll_interval_secs: u64,
     shutdown: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         monitor_loop(
             device_name.as_deref(),
-            &transcript_tx,
-            &language,
+            &proactive_tx,
             poll_interval_secs,
             &shutdown,
         )
@@ -34,8 +32,7 @@ pub fn spawn(
 
 async fn monitor_loop(
     device_name: Option<&str>,
-    transcript_tx: &mpsc::Sender<PipelineFrame>,
-    language: &str,
+    proactive_tx: &mpsc::Sender<ProactiveEvent>,
     poll_interval_secs: u64,
     shutdown: &AtomicBool,
 ) {
@@ -73,23 +70,16 @@ async fn monitor_loop(
         if is_available && !was_available {
             info!(
                 target: "audio",
-                "Device '{}' connected — sending startup greeting",
+                "Device '{}' connected — signalling DeviceConnected",
                 label,
             );
 
-            let now = chrono::Local::now();
-            let time_str = now.format("%H:%M").to_string();
-            let date_str = now.format("%d/%m/%Y").to_string();
-            let notification = i18n::get_notification("startup", language)
-                .replace("{time_str}", &time_str)
-                .replace("{date_str}", &date_str);
-
-            if transcript_tx
-                .send(PipelineFrame::SystemNotification { text: notification })
+            if proactive_tx
+                .send(ProactiveEvent::DeviceConnected)
                 .await
                 .is_err()
             {
-                warn!(target: "audio", "Device monitor transcript channel closed, exiting");
+                warn!(target: "audio", "Device monitor proactive channel closed, exiting");
                 break;
             }
         }
