@@ -1,4 +1,4 @@
-# Recommended LLM Parameters for Voicebot
+# Recommended LLM Parameters for Seneschal
 
 Optimized for real-time voice conversation with Qwen3.5-35B-A3B (MoE, 3B active params).
 The goal: the user feels like talking to a voice assistant — fast, natural, concise responses.
@@ -8,7 +8,7 @@ The goal: the user feels like talking to a voice assistant — fast, natural, co
 | Parameter | mlx-lm | oMLX | Rationale |
 |-----------|--------|------|-----------|
 | CTX Window | 3GB cache (`--prompt-cache-bytes`) | server-managed | Voice turns are short. 8K holds ~50 turns + summary. Summarization triggers at 75%. |
-| Max Tokens | `--max-tokens 300` | per-request | Voicebot replies in 2-3 sentences. 300 tokens ~ 200 words. Keeps TTS queue short. |
+| Max Tokens | `--max-tokens 300` | per-request | Seneschal replies in 2-3 sentences. 300 tokens ~ 200 words. Keeps TTS queue short. |
 | Temperature | `--temp 0.5` | per-request | 0.3 is too robotic. 0.5 adds natural variety without hallucination. |
 | Top P | 0.90 (client-side) | 0.90 (client-side) | Tighter nucleus than 0.95. Safety net — min_p does the heavy lifting. |
 | Top K | 40 (client-side) | 40 (client-side) | Caps candidate tokens. Prevents obscure word choices in voice output. |

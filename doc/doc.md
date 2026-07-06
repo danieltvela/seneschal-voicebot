@@ -1,4 +1,4 @@
-# Voicebot — Butler
+# Seneschal — Butler
 
 A voice AI assistant built in Rust. The long-term goal is a digital butler: not a conversational chatbot, but a proactive, situationally-aware companion that anticipates needs, controls the computer, and speaks with a defined personality — without being asked.
 
@@ -14,7 +14,7 @@ WHISPER_COREML=1 TTS_PROVIDER=kokoro cargo run --features kokoro --release
 
 ## Vision
 
-The gap between a chatbot and a proactive assistant is not the AI model — it is the surrounding architecture. Voicebot has:
+The gap between a chatbot and a proactive assistant is not the AI model — it is the surrounding architecture. Seneschal has:
 
 - **Eyes** — knows what is on your screen, what apps are open, what the calendar says
 - **Arms** — can actually do things on the computer, not just talk about them
@@ -62,7 +62,7 @@ Microphone → VAD → AudioBuffer → Whisper STT → mlx-lm/oMLX LLM → Sente
 
 ## Architecture
 
-### Voicebot as Pure Voice Layer
+### Seneschal as Pure Voice Layer
 
 The voicebot is deliberately narrow in scope: it owns the audio pipeline and the conversational voice experience. Everything else — computer control, file access, calendar, web, vision, long-running tasks — belongs to an external agent.
 
@@ -70,7 +70,7 @@ This separation exists for one reason: **response latency**. The more tools and 
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  VOICEBOT  (voice layer — always fast)                      │
+│  SENESCHAL  (voice layer — always fast)                      │
 │                                                             │
 │  • STT → LLM (fast 7B) → TTS                               │
 │  • Barge-in, conversation awareness, speaker ID            │
@@ -95,7 +95,7 @@ This separation exists for one reason: **response latency**. The more tools and 
 └────────────────────────────────────────────────────────────┘
 ```
 
-**Voicebot tools (voice-layer only — instant, no blocking):**
+**Seneschal tools (voice-layer only — instant, no blocking):**
 
 | Tool | Latency | Why here |
 |------|---------|----------|
@@ -121,7 +121,7 @@ AGENT_TIMEOUT_SECS=120      # Timeout for synchronous calls
 ```
 
 Protocol:
-1. Voicebot spawns the agent process
+1. Seneschal spawns the agent process
 2. Writes the task (plain text) to its stdin, then closes stdin
 3. Reads the complete response from stdout
 4. Returns the response (sync) or pushes to `proactive_tx` (async)
@@ -375,7 +375,7 @@ Or use the unified launcher:
 LLM_BACKEND=omlx ./scripts/start-llm.sh      # oMLX
 ```
 
-Recommended models for voicebot (low latency + Spanish support):
+Recommended models for Seneschal (low latency + Spanish support):
 
 | Model | VRAM | Notes |
 |-------|------|-------|
@@ -407,7 +407,7 @@ completion speed). Both servers are configured to match their production
 
 ### Cold-inference benchmarks (`scripts/bench-mlx.sh`)
 
-Benchmark mlx-lm under voicebot-realistic workloads:
+Benchmark mlx-lm under Seneschal-realistic workloads:
 
 ```sh
 ./scripts/bench-mlx.sh mlx-community/Qwen3-8B-4bit
@@ -678,7 +678,7 @@ tokio::select! {
 
 ---
 
-### 5. Voicebot as Agent Intermediary
+### 5. Seneschal as Agent Intermediary
 
 **Goal:** The voicebot acts as a voice interface to any existing text-based agent or service — translating user voice to the agent's input format and the agent's text output to speech.
 
@@ -706,7 +706,7 @@ Useful when the agent's API expects specific input formats, or when responses ar
 
 **Implementation:**
 - `AgentProxy` struct: wraps an agent's API client, configured with input/output transformers
-- The voicebot's system prompt can include: "You are the voice interface for [Agent X]. Translate user requests into queries for it and summarize its responses conversationally."
+- The Seneschal's system prompt can include: "You are the voice interface for [Agent X]. Translate user requests into queries for it and summarize its responses conversationally."
 - Configurable per-agent: whether to use the mediated or transparent mode
 
 **Integration with current architecture:** The `run_pipeline` function gets an optional `agent_proxy` parameter. If set, after STT the transcript goes to the proxy instead of (or alongside) the local LLM.
@@ -859,13 +859,13 @@ This prompt is a starting point. It should be refined over time as Jarvis learns
 
 | Capability | Owner | Reason |
 |-----------|-------|--------|
-| `take_screenshot` + vision | Voicebot | On-demand, before speaking; must be synchronous |
-| System state injection (time, battery, active app) | Voicebot | Injected ephemerally into each turn; already implemented |
+| `take_screenshot` + vision | Seneschal | On-demand, before speaking; must be synchronous |
+| System state injection (time, battery, active app) | Seneschal | Injected ephemerally into each turn; already implemented |
 | Calendar, upcoming events | Agent | Async, AppleScript, acceptable latency |
 | File activity (FSEvents) | Agent | Background monitoring, not latency-sensitive |
 | Screen monitoring loop | Agent | Periodic background task, not in voice hot path |
 
-**Voicebot implementation (done):**
+**Seneschal implementation (done):**
 - `take_screenshot` tool: `screencapture -x -t png` → base64 → secondary vision provider (LM Studio)
 - `current_time` tool: LLM can request current date/time via tool call, injected into conversation context
 
@@ -884,7 +884,7 @@ This prompt is a starting point. It should be refined over time as Jarvis learns
 
 The voicebot keeps only the instant, side-effect-light operations that are natural parts of a voice interaction:
 
-**Voicebot tools (implemented, instant):**
+**Seneschal tools (implemented, instant):**
 
 | Tool | Latency | Use case |
 |------|---------|----------|
@@ -912,8 +912,8 @@ The voicebot keeps only the instant, side-effect-light operations that are natur
 **The delegation pattern for arms:**
 ```
 User: "Busca el error de compilación y arréglalo"
-Voicebot LLM: calls run_agent_async("find the compilation error and fix it")
-Voicebot speaks: "Lo delego, te aviso cuando esté listo"
+Seneschal LLM: calls run_agent_async("find the compilation error and fix it")
+Seneschal speaks: "Lo delego, te aviso cuando esté listo"
                                     ↓ (seconds later)
 Agent runs shell → fixes code → returns summary
 proactive_tx → voicebot speaks: "Hecho. Cuatro errores corregidos en main.rs"
@@ -1160,7 +1160,7 @@ Even after confirming it is the user's voice, they may be talking to another per
 
 **Layer 1 — Wake word (most reliable, least natural)**
 
-The user explicitly activates the bot by saying a keyword ("Jarvis", "Butler", "Hey").
+The user explicitly activates the bot by saying a keyword ("Seneschal", "Butler", "Hey").
 
 - Latency: < 10ms (dedicated tiny model, always listening)
 - False positive rate: near zero
@@ -1196,7 +1196,7 @@ Analyze the transcript for markers that indicate the user is speaking to the bot
 
 | Signal | Examples | Weight |
 |--------|----------|--------|
-| Bot name | "Jarvis, …" / "Butler, …" | Strong |
+| Bot name | "Seneschal, …" / "Butler, …" | Strong |
 | Second-person imperative | "search X", "tell me", "remind me", "check…" | Strong |
 | Direct question | "what time is it?", "can you…", "do you know…" | Medium |
 | First-person with bot context | "I need you to…", "can you help me…" | Medium |
@@ -1213,7 +1213,7 @@ False positive sources: user quoting commands while talking to a colleague ("I t
 After transcription, call a small fast model with:
 
 ```
-System: "Decide if the following utterance is directed at you (a voice AI assistant named Jarvis) or at someone else. Answer only YES or NO."
+System: "Decide if the following utterance is directed at you (a voice AI assistant named Seneschal) or at someone else. Answer only YES or NO."
 User: "{transcript}"
 ```
 
@@ -1254,7 +1254,7 @@ The key insight is to stop trying to infer "is the user talking to me?" (hard, u
                                                         of clean environment
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  AMBIENT MODE  (guest / TV / radio present)                              │
-│  • Any voice → transcribe → check for wake word ("Jarvis, …")           │
+│  • Any voice → transcribe → check for wake word ("Seneschal, …")           │
 │      Wake word found → respond to that turn, stay in AMBIENT            │
 │      No wake word → discard, even if speaker is the main user           │
 │  • Silence for AMBIENT_CLEAR_SECS (e.g. 5 min) → → ACTIVE              │
@@ -1276,7 +1276,7 @@ The key insight is to stop trying to infer "is the user talking to me?" (hard, u
 
 1. **N consecutive non-main-user detections to trigger ambient** (not just one). A single bad speaker ID frame (user with a cold, room echo) should not drop the bot into ambient. Use N=3 as default.
 
-2. **Wake word in ambient mode does not require a speaker ID match** — a guest can also address the bot with "Jarvis, what time is it?" This is natural and intentional. The wake word is the explicit signal, regardless of who says it.
+2. **Wake word in ambient mode does not require a speaker ID match** — a guest can also address the bot with "Seneschal, what time is it?" This is natural and intentional. The wake word is the explicit signal, regardless of who says it.
 
 3. **Wake word detection is transcript-based** — no separate wake word model needed. Whisper already runs on every VAD segment. Check if the transcript starts with (or contains near the start) the bot's name or configured keyword. This adds zero latency to the existing pipeline.
 

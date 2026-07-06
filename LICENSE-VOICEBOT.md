@@ -1,10 +1,10 @@
-# Voicebot - Legal Notice & License
+# Seneschal - Legal Notice & License
 
 ## ⚠️ LEGAL DISCLAIMER
 
 **Jarvis® is a registered trademark of Marvel Studios, a subsidiary of The Walt Disney Company.**
 
-This project ("Voicebot") is:
+This project ("Seneschal") is:
 - A **fan-made, independent Open Source project**
 - **NOT** affiliated with, endorsed by, or connected to Marvel Studios or The Walt Disney Company
 - Created as a personal/hobby project with no commercial intent
@@ -19,7 +19,7 @@ This project is released under the **MIT License** with additional **commerciali
 
 ### MIT License Terms
 
-Copyright © 2024 Voicebot Contributors
+Copyright © 2024 Seneschal Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, **subject to the Commercialization Restrictions below**, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

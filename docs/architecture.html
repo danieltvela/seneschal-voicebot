@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Architecture - Voicebot</title>
+    <title>Architecture - Seneschal</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
     <nav class="navbar">
         <div class="container">
-            <a href="index.html" class="logo">Voicebot</a>
+            <a href="index.html" class="logo">Seneschal</a>
             <ul class="nav-links">
                 <li><a href="index.html">Home</a></li>
                 <li><a href="install.html">Install</a></li>
@@ -21,7 +21,7 @@
 
     <header class="page-header">
         <div class="container">
-            <h1>How Voicebot Works</h1>
+            <h1>How Seneschal Works</h1>
             <p>Deep dive into the architecture and design philosophy</p>
         </div>
     </header>
@@ -35,7 +35,7 @@
                         "A chatbot answers questions. A butler anticipates needs."
                     </blockquote>
                     <p>
-                        Voicebot is intentionally <strong>narrow in scope</strong>: it owns the audio pipeline and 
+                        Seneschal is intentionally <strong>narrow in scope</strong>: it owns the audio pipeline and 
                         conversational experience. Complex tasks are delegated to an external agent via stdin/stdout protocol.
                     </p>
                     <p>
@@ -46,7 +46,7 @@
                 </div>
 
                 <h2>The Pipeline</h2>
-                <p>Voicebot runs as a single binary using a streaming pipeline where every stage is connected by tokio channels:</p>
+                <p>Seneschal runs as a single binary using a streaming pipeline where every stage is connected by tokio channels:</p>
                 
                 <div class="pipeline-diagram">
                     <div class="pipeline-layer">
@@ -104,7 +104,7 @@
                 <h2>System Architecture</h2>
                 <div class="arch-diagram">
                     <div class="arch-layer primary">
-                        <h3>Voicebot (Fast Layer)</h3>
+                        <h3>Seneschal (Fast Layer)</h3>
                         <div class="arch-components">
                             <div class="arch-comp">STT → LLM (7B) → TTS</div>
                             <div class="arch-comp">Barge-in, conversation awareness</div>
@@ -297,7 +297,7 @@
 
     <footer>
         <div class="container">
-            <p>Built with ❤️ by Daniel and the Voicebot Team</p>
+            <p>Built with ❤️ by Daniel and the Seneschal Team</p>
             <p>Licensed under MIT with commercialization restrictions. <a href="https://github.com/madcato/voicebot/blob/master/LICENSE-VOICEBOT.md" target="_blank">View License</a></p>
             <p class="trademark">Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project.</p>
         </div>

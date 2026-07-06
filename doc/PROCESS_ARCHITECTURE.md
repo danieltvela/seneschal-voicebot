@@ -1,6 +1,6 @@
-# Voicebot: async architecture
+# Seneschal: async architecture
 
-This file explains the runtime architecture of the Voicebot application.
+This file explains the runtime architecture of the Seneschal application.
 It describes the async task model, the per-utterance pipeline flow, the state
 machine, and how tasks communicate via tokio channels.
 

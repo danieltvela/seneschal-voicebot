@@ -1,8 +1,8 @@
 # Voice-First AI Assistant: Niche B2B Opportunities
-## "Two People Talk, One Uses a Computer" — The Voicebot Augmentation Pattern
+## "Two People Talk, One Uses a Computer" — The Seneschal Augmentation Pattern
 
 **Date:** 2026-06-13
-**Framework:** Voicebot Rust pipeline (STT → LLM → TTS → Tools)
+**Framework:** Seneschal Rust pipeline (STT → LLM → TTS → Tools)
 
 ---
 
@@ -11,11 +11,11 @@
 The core insight: Voice is not a "replacement for typing" — it's a **parallel channel** that unlocks interaction patterns impossible with keyboard/mouse. The pattern is always the same:
 
 > Person A speaks to Person B (consultant, doctor, trader, teacher)
-> Person B speaks to Voicebot (which controls the computer)
-> Voicebot processes, retrieves, acts, and speaks back
+> Person B speaks to Seneschal (which controls the computer)
+> Seneschal processes, retrieves, acts, and speaks back
 > Person B keeps eye contact with Person A, never touching the keyboard
 
-Voicebot's architecture maps directly to this:
+Seneschal's architecture maps directly to this:
 - **STT** (Whisper/Parakeet) → hears Person B
 - **LLM** (mlx-lm/oMLX) → reasons, retrieves, plans
 - **TTS** (AVSpeech/Kokoro) → speaks back naturally
@@ -32,7 +32,7 @@ Below are 8 specific niches, ranked by feasibility × market potential.
 ### Interaction Pattern
 Developer A talks to Developer B (mentor, interviewer, or collaborator). Developer B speaks voice commands to navigate codebases, run tests, check diffs, and open terminals — all while discussing architecture with Developer A face-to-face.
 
-**Concrete scenario:** Senior dev reviewing junior's PR. Junior explains their approach aloud. Senior says "open src/pipeline/mod.rs line 42" → Voicebot opens the file. "run cargo test fsm" → runs it. "show me the diff on branch feature/x" → shows diff. All while eyes stay on the junior.
+**Concrete scenario:** Senior dev reviewing junior's PR. Junior explains their approach aloud. Senior says "open src/pipeline/mod.rs line 42" → Seneschal opens the file. "run cargo test fsm" → runs it. "show me the diff on branch feature/x" → shows diff. All while eyes stay on the junior.
 
 ### Why Voice Beats Keyboard/GUI
 - **Flow state preservation:** Alt-tabbing kills context. Voice keeps hands on keyboard.
@@ -49,7 +49,7 @@ Developer A talks to Developer B (mentor, interviewer, or collaborator). Develop
 | System prompt | "You are a senior Rust developer reviewing code. Prioritize AST-level understanding, not syntax." | LOW |
 
 ### Implementation Complexity: **TIGHT (1-2 days)**
-Almost all tools exist. The innovation is in the **system prompt** and **workflow design**. Voicebot already has `read_file`, `run_shell`, `web_search`, `deep_research` (for architecture analysis), and `take_screenshot` (for UI/code review). The main gap: a `code_context` tool that indexes the project structure.
+Almost all tools exist. The innovation is in the **system prompt** and **workflow design**. Seneschal already has `read_file`, `run_shell`, `web_search`, `deep_research` (for architecture analysis), and `take_screenshot` (for UI/code review). The main gap: a `code_context` tool that indexes the project structure.
 
 ### Market Validation
 - AI coding assistants market: **$6B → $36B by 2030** (CAGR 34-36%)
@@ -63,7 +63,7 @@ Almost all tools exist. The innovation is in the **system prompt** and **workflo
 ## 2. TECHNICAL INTERVIEWER / CANDIDATE COACH
 
 ### Interaction Pattern
-Interviewer A talks to Candidate B. Interviewer B uses Voicebot to: (1) pull up the candidate's resume/portfolio, (2) dynamically generate questions based on discussion, (3) take notes in real-time, (4) score responses against a rubric, (5) flag inconsistencies.
+Interviewer A talks to Candidate B. Interviewer B uses Seneschal to: (1) pull up the candidate's resume/portfolio, (2) dynamically generate questions based on discussion, (3) take notes in real-time, (4) score responses against a rubric, (5) flag inconsistencies.
 
 **Concrete scenario:** "Show me Juan's GitHub, pull up his contributions from last quarter. Ask him about the architecture decision in the payment service. Take notes on his system design reasoning. Score his answer on scalability, security, and trade-off awareness."
 
@@ -96,14 +96,14 @@ Mostly prompt engineering + orchestration of existing tools. The `deep_research`
 ## 3. TRADING DESK CO-PILLOT (OTC / Fixed Income)
 
 ### Interaction Pattern
-Trader A talks to Broker B (on phone/WhatsApp). Trader B uses Voicebot to: (1) capture the broker's verbal quote in real-time, (2) parse structured data from speech, (3) compare against market benchmarks, (4) suggest execution strategy, (5) log the interaction.
+Trader A talks to Broker B (on phone/WhatsApp). Trader B uses Seneschal to: (1) capture the broker's verbal quote in real-time, (2) parse structured data from speech, (3) compare against market benchmarks, (4) suggest execution strategy, (5) log the interaction.
 
-**Concrete scenario:** Broker shouts "I've got 5M at 102.5 for German bunds." Voicebot transcribes, extracts: {instrument: "German bund", qty: 5M, price: 102.5}, compares to internal benchmark, says "3 bps above mid — do you want to take it?" Trader says "yes" → logs the trade.
+**Concrete scenario:** Broker shouts "I've got 5M at 102.5 for German bunds." Seneschal transcribes, extracts: {instrument: "German bund", qty: 5M, price: 102.5}, compares to internal benchmark, says "3 bps above mid — do you want to take it?" Trader says "yes" → logs the trade.
 
 ### Why Voice Beats Keyboard/GUI
 - **OTC markets are voice-first:** 80% of fixed income trading starts with a voice shout-down.
 - **Speed:** Speaking "take 2M at 102.5" is 3x faster than clicking Bloomberg.
-- **Multi-channel:** Brokers shout on phone, WhatsApp, and IM simultaneously. Voicebot unifies them.
+- **Multi-channel:** Brokers shout on phone, WhatsApp, and IM simultaneously. Seneschal unifies them.
 - **Audit trail:** Every verbal interaction becomes structured, timestamped data.
 
 ### Custom Tools/Prompts Needed
@@ -130,14 +130,14 @@ Requires financial domain adaptation (system prompt + few-shot examples). The ST
 ## 4. FIELD TECHNICIAN ASSISTANT (Utilities / HVAC / Medical Devices)
 
 ### Interaction Pattern
-Technician A works on equipment (hands full, wearing PPE). Technician B (junior or remote supervisor) talks to Voicebot to guide Technician A through procedures, log data, and access documentation.
+Technician A works on equipment (hands full, wearing PPE). Technician B (junior or remote supervisor) talks to Seneschal to guide Technician A through procedures, log data, and access documentation.
 
-**Concrete scenario:** Junior tech at wind turbine. "Open the maintenance manual for Vestas V110. I'm checking the gearbox oil level. Reading is 3.2 liters. Was that in spec?" Voicebot checks spec range, says "Normal is 2.8-3.5L. Acceptable. Next step: check hydraulic pressure."
+**Concrete scenario:** Junior tech at wind turbine. "Open the maintenance manual for Vestas V110. I'm checking the gearbox oil level. Reading is 3.2 liters. Was that in spec?" Seneschal checks spec range, says "Normal is 2.8-3.5L. Acceptable. Next step: check hydraulic pressure."
 
 ### Why Voice Beats Keyboard/GUI
 - **Physical constraints:** Gloves, dirt, height, vibration — typing is impossible.
 - **Safety:** Eyes on the machine, not a screen.
-- **Offline capability:** Voicebot runs locally (whisper-cpp + mlx-lm) — no internet needed underground or on remote sites.
+- **Offline capability:** Seneschal runs locally (whisper-cpp + mlx-lm) — no internet needed underground or on remote sites.
 - **Knowledge capture:** Senior tech's tacit knowledge becomes searchable voice interactions.
 
 ### Custom Tools/Prompts Needed
@@ -151,7 +151,7 @@ Technician A works on equipment (hands full, wearing PPE). Technician B (junior 
 | System prompt | "You are a field service technician assistant. Guide through manufacturer procedures. Validate measurements against specs. Flag safety-critical deviations." | MEDIUM |
 
 ### Implementation Complexity: **MEDIUM (3-7 days)**
-The big advantage: Voicebot already runs **fully offline** (local Whisper + local LLM). This is the killer feature for field work. The main work is building the tooling layer around manuals, specs, and work order systems.
+The big advantage: Seneschal already runs **fully offline** (local Whisper + local LLM). This is the killer feature for field work. The main work is building the tooling layer around manuals, specs, and work order systems.
 
 ### Market Validation
 - **Vivoka:** Embedded voice tech for field services — offline, PPE-friendly
@@ -159,22 +159,22 @@ The big advantage: Voicebot already runs **fully offline** (local Whisper + loca
 - **Leera AI:** Voice-first AI guiding techs through PMs + auto-syncs to CMMS
 - **Proekspert:** Custom voice-enabled AI field agents
 - **Market:** Field service management market $12B+; voice AI is a growing subset
-- **Gap:** All existing solutions are SaaS/cloud-dependent. Voicebot's **offline-first, local AI** approach is uniquely positioned for remote/off-grid field work.
+- **Gap:** All existing solutions are SaaS/cloud-dependent. Seneschal's **offline-first, local AI** approach is uniquely positioned for remote/off-grid field work.
 
 ---
 
 ## 5. PODCAST/YOUTUBE PRODUCTION PRODUCER
 
 ### Interaction Pattern
-Producer A talks to Guest B. Producer B uses Voicebot to: (1) transcribe the conversation in real-time, (2) identify highlight moments, (3) generate show notes, (4) extract quotes for social media, (5) manage editing workflow.
+Producer A talks to Guest B. Producer B uses Seneschal to: (1) transcribe the conversation in real-time, (2) identify highlight moments, (3) generate show notes, (4) extract quotes for social media, (5) manage editing workflow.
 
 **Concrete scenario:** Producer is interviewing a guest. "Capture this segment. The guest mentioned blockchain regulation — flag that moment. After the interview, generate show notes with timestamps. Pull three quotable lines for Twitter."
 
 ### Why Voice Beats Keyboard/GUI
 - **Interview focus:** Producer maintains eye contact with guest.
-- **Real-time tagging:** "Remember that story about the server outage" — Voicebot timestamps it.
+- **Real-time tagging:** "Remember that story about the server outage" — Seneschal timestamps it.
 - **Post-show automation:** One voice command generates show notes, clips, and social posts.
-- **Multilingual:** Voicebot supports Spanish + English natively — perfect for bilingual podcasts.
+- **Multilingual:** Seneschal supports Spanish + English natively — perfect for bilingual podcasts.
 
 ### Custom Tools/Prompts Needed
 | Tool | Implementation | Complexity |
@@ -187,22 +187,22 @@ Producer A talks to Guest B. Producer B uses Voicebot to: (1) transcribe the con
 | System prompt | "You are a podcast producer. Identify compelling moments, generate timestamps, create show notes, and extract social media quotes." | LOW |
 
 ### Implementation Complexity: **LOW-MEDIUM (2-4 days)**
-Voicebot's partial transcript accumulation (accumulating Whisper transcripts before VAD end-of-speech) is **perfect** for this use case. The `deep_research` tool can handle post-show analysis. The main gap: a `segment_cutter` tool that marks VAD boundaries as chapter markers.
+Seneschal's partial transcript accumulation (accumulating Whisper transcripts before VAD end-of-speech) is **perfect** for this use case. The `deep_research` tool can handle post-show analysis. The main gap: a `segment_cutter` tool that marks VAD boundaries as chapter markers.
 
 ### Market Validation
 - AI podcast creation platforms: **$1B → $10.6B by 2035** (CAGR 26.4%)
 - Podcast recording/editing software: $2.1B (2025), $3.9B (2032)
 - Descript: $12-24/month, fills transcription + editing
-- **Gap:** Current tools (Descript, Riverside.fm, Opus Clip) are **post-production** focused. Voicebot operates **during** the interview — real-time capture, tagging, and structuring. This is a fundamentally different workflow.
+- **Gap:** Current tools (Descript, Riverside.fm, Opus Clip) are **post-production** focused. Seneschal operates **during** the interview — real-time capture, tagging, and structuring. This is a fundamentally different workflow.
 
 ---
 
 ## 6. LEGAL DEPOSITION PREPARATION COACH
 
 ### Interaction Pattern
-Attorney A prepares for deposition with paralegal B. Attorney B uses Voicebot to: (1) simulate the opposing counsel's questions, (2) review prior testimony for consistency, (3) flag potential line of questioning, (4) rehearse responses.
+Attorney A prepares for deposition with paralegal B. Attorney B uses Seneschal to: (1) simulate the opposing counsel's questions, (2) review prior testimony for consistency, (3) flag potential line of questioning, (4) rehearse responses.
 
-**Concrete scenario:** Paralegal: "Let me quiz you on the Smith deposition. He said the contract was signed March 15. Opposing counsel will drill on that date. How do you respond?" Attorney practices. Voicebot tracks consistency: "Warning: your answer on March 15 conflicts with Exhibit 4B which shows March 12."
+**Concrete scenario:** Paralegal: "Let me quiz you on the Smith deposition. He said the contract was signed March 15. Opposing counsel will drill on that date. How do you respond?" Attorney practices. Seneschal tracks consistency: "Warning: your answer on March 15 conflicts with Exhibit 4B which shows March 12."
 
 ### Why Voice Beats Keyboard/GUI
 - **Oral advocacy practice:** Depositions are spoken, not written. Practice must be verbal.
@@ -235,15 +235,15 @@ Mostly prompt engineering + leveraging existing `read_file` and `deep_research` 
 ## 7. LANGUAGE TUTORING SESSION (Business Spanish / Medical Spanish)
 
 ### Interaction Pattern
-Student A practices conversation with Tutor B. Tutor B uses Voicebot to: (1) correct pronunciation in real-time, (2) suggest better vocabulary, (3) track progress, (4) generate practice scenarios.
+Student A practices conversation with Tutor B. Tutor B uses Seneschal to: (1) correct pronunciation in real-time, (2) suggest better vocabulary, (3) track progress, (4) generate practice scenarios.
 
-**Concrete scenario:** Student practices ordering coffee in Spanish. Tutor says: "She pronounced 'mesa' correctly, but 'gato' needs the velar stop. Give her a follow-up exercise involving restaurant vocabulary." Voicebot generates new scenario. Progress logged to SQLite.
+**Concrete scenario:** Student practices ordering coffee in Spanish. Tutor says: "She pronounced 'mesa' correctly, but 'gato' needs the velar stop. Give her a follow-up exercise involving restaurant vocabulary." Seneschal generates new scenario. Progress logged to SQLite.
 
 ### Why Voice Beats Keyboard/GUI
 - **Speaking is the skill:** Typing doesn't practice pronunciation, intonation, or fluency.
 - **Real-time feedback:** Correction happens during the conversation, not after.
 - **Scenario generation:** "Give me a medical Spanish scenario: triage in the ER."
-- **Progress tracking:** Voicebot remembers every session's corrections via SQLite memory.
+- **Progress tracking:** Seneschal remembers every session's corrections via SQLite memory.
 
 ### Custom Tools/Prompts Needed
 | Tool | Implementation | Complexity |
@@ -256,27 +256,27 @@ Student A practices conversation with Tutor B. Tutor B uses Voicebot to: (1) cor
 | System prompt | "You are a language tutor specializing in [domain]. Correct pronunciation, suggest natural phrasing, generate contextual exercises." | LOW |
 
 ### Implementation Complexity: **LOW (1-2 days)**
-Voicebot is **already bilingual** (Spanish default, English supported). The `conversation_mode` tool exists for switching contexts. The main work is building domain-specific prompt templates (business, medical, legal Spanish).
+Seneschal is **already bilingual** (Spanish default, English supported). The `conversation_mode` tool exists for switching contexts. The main work is building domain-specific prompt templates (business, medical, legal Spanish).
 
 ### Market Validation
 - Language learning market: $60B+ globally
 - Duolingo: $4B+ revenue; Babbel, Rosetta Stone, Cambly (human tutors)
 - **Cambly:** $10-15/hour for human tutors; market for AI tutors growing
-- **Gap:** No voice-first, domain-specific language tutor exists. Duolingo is gamified text/voice hybrid. Cambly is human-only. Voicebot fills the gap: **professional-domain** conversation practice with instant voice feedback.
+- **Gap:** No voice-first, domain-specific language tutor exists. Duolingo is gamified text/voice hybrid. Cambly is human-only. Seneschal fills the gap: **professional-domain** conversation practice with instant voice feedback.
 
 ---
 
 ## 8. TABLETOP RPG GAME MASTER ASSISTANT
 
 ### Interaction Pattern
-Game Master A runs a D&D/Cyberpunk session with Players B, C, D. GM A uses Voicebot to: (1) track NPC dialogue and personalities, (2) manage initiative and combat stats, (3) generate random encounters, (4) remember lore details across sessions.
+Game Master A runs a D&D/Cyberpunk session with Players B, C, D. GM A uses Seneschal to: (1) track NPC dialogue and personalities, (2) manage initiative and combat stats, (3) generate random encounters, (4) remember lore details across sessions.
 
-**Concrete scenario:** Player: "I want to negotiate with the dragon." GM: "Roll persuasion." Voicebot tracks: "Alex rolled 17 + 4 charisma = 21. The dragon, whose name is Ignathos and was once a member of the Sun Court, considers this. 'You remind me of the elf who freed me from the volcano,' the dragon says."
+**Concrete scenario:** Player: "I want to negotiate with the dragon." GM: "Roll persuasion." Seneschal tracks: "Alex rolled 17 + 4 charisma = 21. The dragon, whose name is Ignathos and was once a member of the Sun Court, considers this. 'You remind me of the elf who freed me from the volcano,' the dragon says."
 
 ### Why Voice Beats Keyboard/GUI
 - **Immersion:** GM stays in character, never glancing at a screen.
 - **Improvisation:** "What was the name of the merchant in session 12?" → instant recall.
-- **Dynamic narration:** Voicebot can generate NPC dialogue in character.
+- **Dynamic narration:** Seneschal can generate NPC dialogue in character.
 - **Multi-session memory:** SQLite remembers every campaign detail.
 
 ### Custom Tools/Prompts Needed
@@ -290,7 +290,7 @@ Game Master A runs a D&D/Cyberpunk session with Players B, C, D. GM A uses Voice
 | System prompt | "You are a Game Master assistant. Track NPCs, combat, loot, and lore. Generate NPC dialogue in character. Remember session details across campaigns." | LOW |
 
 ### Implementation Complexity: **VERY LOW (1-2 days)**
-This is almost entirely prompt engineering. Voicebot's `recover_historical_context` tool (L2 archive search) is **perfect** for remembering campaign lore. The `conversation_mode` tool can switch between GM mode and NPC mode. The `agents` system can manage multiple NPC personalities.
+This is almost entirely prompt engineering. Seneschal's `recover_historical_context` tool (L2 archive search) is **perfect** for remembering campaign lore. The `conversation_mode` tool can switch between GM mode and NPC mode. The `agents` system can manage multiple NPC personalities.
 
 ### Market Validation
 - TTRPG market: $2B+ globally; growing 15% YoY
@@ -303,7 +303,7 @@ This is almost entirely prompt engineering. Voicebot's `recover_historical_conte
 
 ## Cross-Cutting Analysis
 
-### Which Niches Map to Voicebot's Existing Capabilities?
+### Which Niches Map to Seneschal's Existing Capabilities?
 
 | Capability | Pair Programming | Interviews | Trading | Field Tech | Podcast | Legal | Language | RPG |
 |-----------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -322,7 +322,7 @@ This is almost entirely prompt engineering. Voicebot's `recover_historical_conte
 | SQLite memory | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Complexity** | **LOW** | **LOW** | **MED** | **MED** | **LO-MED** | **LO-MED** | **LOW** | **VERY LOW** |
 
-### Feasibility Ranking (Given Voicebot's Current Stack)
+### Feasibility Ranking (Given Seneschal's Current Stack)
 
 1. **RPG GM Assistant** — Almost zero code changes. Prompt engineering + mode switching.
 2. **Language Tutoring** — Already bilingual. Domain-specific prompts.
@@ -355,7 +355,7 @@ This is almost entirely prompt engineering. Voicebot's `recover_historical_conte
 **Then pivot to Pair Programming** — this is the highest-leverage niche because:
 1. Developers are early adopters who will beta-test
 2. The marketing hook ("code without touching your keyboard") is viral
-3. Voicebot's Rust stack appeals to the same audience
+3. Seneschal's Rust stack appeals to the same audience
 4. The market is proven ($6B → $36B) and growing
 5. Existing competitors (Copilot, Cursor) are text-based — voice is a blue ocean
 
@@ -363,4 +363,4 @@ This is almost entirely prompt engineering. Voicebot's `recover_historical_conte
 
 ---
 
-*Report generated from Voicebot v0.x codebase analysis + market research (June 2026)*
+*Report generated from Seneschal v0.x codebase analysis + market research (June 2026)*

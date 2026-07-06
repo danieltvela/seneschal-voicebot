@@ -1,8 +1,8 @@
-# Voicebot Architecture
+# Seneschal Architecture
 
 ## Overview
 
-Voicebot is a mono-user voice AI assistant in Rust. It runs as a single binary using a
+Seneschal is a mono-user voice AI assistant in Rust. It runs as a single binary using a
 **streaming STT → LLM → TTS pipeline** where every stage is connected by `tokio` channels.
 There is no inter-service communication; everything runs in-process.
 

@@ -1,4 +1,4 @@
-# Voicebot
+# Seneschal
 
 <div align="center">
 
@@ -10,7 +10,7 @@ Real-time voice interaction with natural conversation flow, proactive assistance
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS-red.svg)](https://www.apple.com/macos)
 
-> *Formerly "Jarvis Voicebot". Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project with no commercial intent. See [LICENSE-VOICEBOT.md](LICENSE-VOICEBOT.md) for full details.*
+> *Formerly "Jarvis Voicebot". Now Seneschal. Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project with no commercial intent. See [LICENSE-VOICEBOT.md](LICENSE-VOICEBOT.md) for full details.*
 
 </div>
 
@@ -67,7 +67,7 @@ VOICEBOT_LANGUAGE=es
 
 ### 3. Start the LLM server
 
-Voicebot uses Apple MLX-based servers for low-latency inference on Apple Silicon.
+Seneschal uses Apple MLX-based servers for low-latency inference on Apple Silicon.
 
 **Using mlx-lm (recommended):**
 
@@ -93,7 +93,7 @@ mlx_lm.server \
 # Set in .env: LLM_URL=http://127.0.0.1:8001
 ```
 
-### 4. Build and run Voicebot
+### 4. Build and run Seneschal
 
 **Standard build (AVSpeech TTS - default on macOS):**
 
@@ -146,13 +146,13 @@ The output depends on the `TTS_PROVIDER` setting:
 
 ## Overview
 
-Voicebot is a **voice-first AI assistant** designed for natural, real-time conversation with your computer. Unlike traditional chatbots that you type to, it listens and speaks. It runs as an always-on background daemon that responds instantly when you talk.
+Seneschal is a **voice-first AI assistant** designed for natural, real-time conversation with your computer. Unlike traditional chatbots that you type to, it listens and speaks. It runs as an always-on background daemon that responds instantly when you talk.
 
 ### What makes it different?
 
 A chatbot answers questions. A butler anticipates needs.
 
-Voicebot is built from the ground up for voice interaction:
+Seneschal is built from the ground up for voice interaction:
 - **Always-listening** with automatic speech detection (no push-to-talk)
 - **Real-time responses** under 3 second latency
 - **Natural conversation flow** with context awareness and personality
@@ -188,7 +188,7 @@ Voicebot is built from the ground up for voice interaction:
 - Inference daemon - proactive suggestions and background reasoning ("is there anything worth saying?")
 - MCP (Model Context Protocol) - dynamically registered tools from any MCP stdio server
 - **Plugin System** - self-contained plugin directories that bundle MCP servers, agents, prompts, and config overrides. LLM can switch active plugins at runtime via `switch_plugin` tool
-- HTTP Control API + SSE (feature flag) - manage Voicebot from external apps or web dashboards
+- HTTP Control API + SSE (feature flag) - manage Seneschal from external apps or web dashboards
 
 ### Control API (HTTP + SSE)
 
@@ -222,7 +222,7 @@ curl -X POST http://127.0.0.1:9001/control/input \
 
 ### Plugin System
 
-Voicebot supports a **plugin system** that lets you bundle MCP servers, agents, system prompt instructions, and config overrides into self-contained directories. Plugins can be activated at startup or switched at runtime by the LLM itself.
+Seneschal supports a **plugin system** that lets you bundle MCP servers, agents, system prompt instructions, and config overrides into self-contained directories. Plugins can be activated at startup or switched at runtime by the LLM itself.
 
 **What a plugin can do:**
 - Add MCP servers alongside base MCPs (not replacing them)
@@ -367,7 +367,7 @@ wget https://github.com/leloykun/kokoro/releases/download/v1.0/voices-v1.0.bin -
 
 ## Architecture
 
-Voicebot is intentionally **narrow in scope**: it owns the audio pipeline and conversational experience. Complex tasks are delegated to an external agent via stdin/stdout protocol.
+Seneschal is intentionally **narrow in scope**: it owns the audio pipeline and conversational experience. Complex tasks are delegated to an external agent via stdin/stdout protocol.
 
 ### Why this separation?
 
@@ -375,7 +375,7 @@ Response latency matters. A voice bot that only handles conversation responds in
 
 ```
 +--------------------------------------------------+
-│         JARVIS VOICEBOT (fast layer)             │
+│         SENESCHAL (fast layer)                   │
 │                                                  │
 │  STT -> LLM (7B) -> TTS                         │
 │  Barge-in, conversation awareness                │
@@ -399,17 +399,17 @@ See [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md) for detailed architectural docs. 
 
 ### Context Window & Memory Consolidation
 
-Voicebot uses the full context window provided by the LLM (`LLM_CONTEXT_TOKENS`, default 4096). When the conversation approaches the configured threshold (`LLM_CONSOLIDATION_THRESHOLD_PCT`, default 90%), a consolidation cycle runs automatically.
+Seneschal uses the full context window provided by the LLM (`LLM_CONTEXT_TOKENS`, default 4096). When the conversation approaches the configured threshold (`LLM_CONSOLIDATION_THRESHOLD_PCT`, default 90%), a consolidation cycle runs automatically.
 
 There are two consolidation modes:
 
 **Active (mid-conversation):** Triggered when the context threshold is reached after a turn.
-1. Voicebot announces it needs a few minutes to reorganize its memory
+1. Seneschal announces it needs a few minutes to reorganize its memory
 2. **Extract profile facts** - Structured facts (name, city, preferences) are extracted and persisted in the `user_profile` DB table
 3. **Extract memories** - Free-form persistent notes (projects, decisions, technical context) are extracted into the `memories` DB table
 4. **Summarize** - Old conversation turns are summarized into a compact text
 5. **Rebuild system prompt** - The system prompt is rebuilt with updated `[USER PROFILE]`, `[MEMORIES]`, and `[CONVERSATION SUMMARY]` sections
-6. **Announce back online** - Voicebot announces it is available again and tells the user the current time
+6. **Announce back online** - Seneschal announces it is available again and tells the user the current time
 
 **Silent (idle):** Triggered when the user has not spoken for `LLM_IDLE_CONSOLIDATION_SECS` (default 1800). Uses `LLM_IDLE_MIN_CONTEXT_PCT` (default 50%) as its threshold - lower than the hard limit - so the context is kept well below `LLM_CONSOLIDATION_THRESHOLD_PCT` while the user is away. Runs transparently, without any voice announcements.
 
@@ -489,13 +489,13 @@ Most configuration is done via environment variables (or `.env` file):
 | `LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the main LLM. Strips thinking tags from streamed output. |
 | `SECONDARY_LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the secondary LLM. Strips thinking tags from output. |
 | **EYES (visual awareness)** | | |
-| `EYES_INTERVAL_SECS` | `0` (disabled) | Seconds between automatic screen captures. Set to e.g. `15` to enable. Requires `SECONDARY_LLM_URL` (vision model). Voicebot speaks when something important is detected on screen. |
+| `EYES_INTERVAL_SECS` | `0` (disabled) | Seconds between automatic screen captures. Set to e.g. `15` to enable. Requires `SECONDARY_LLM_URL` (vision model). Seneschal speaks when something important is detected on screen. |
 | **Web Search (SearXNG)** | | |
 | `SEARXNG_URL` | - (disabled) | Base URL of your SearXNG instance (e.g. `http://localhost:8080`). Enables the `web_search` tool. |
 | `SEARXNG_SECRET` | (empty) | Bearer token for SearXNG API authentication. |
 | `WEB_SEARCH_ENABLED` | `1` | Enable/disable the web_search tool independently of SEARXNG_URL. Set to `0` to disable. |
 | **MCP (Model Context Protocol)** | | |
-| `MCP_COMMAND` | - (disabled) | Command to spawn an MCP stdio server (e.g. `bunx apple-mcp@latest`). All tools advertised by the server via `tools/list` are registered dynamically. Calls run in background - Voicebot acknowledges and speaks the result when ready. Compatible with any MCP server using stdio transport. |
+| `MCP_COMMAND` | - (disabled) | Command to spawn an MCP stdio server (e.g. `bunx apple-mcp@latest`). All tools advertised by the server via `tools/list` are registered dynamically. Calls run in background - Seneschal acknowledges and speaks the result when ready. Compatible with any MCP server using stdio transport. |
 | `MCP_TOOL_TIMEOUT_SECS` | `30` | Hard timeout per MCP tool call in seconds. |
 | **Speaker Verification** | | |
 | `SPEAKER_MODEL` | auto-detect | Path to sherpa-onnx speaker embedding ONNX model. Auto-detected at `models/speaker_embedding.onnx`; disabled if absent. |
@@ -522,7 +522,7 @@ See [.env.example](.env.example) for complete environment variable reference.
 
 ### STT Provider Selection
 
-Voicebot supports two STT backends, selectable at runtime via `STT_PROVIDER`:
+Seneschal supports two STT backends, selectable at runtime via `STT_PROVIDER`:
 
 #### Whisper (default)
 
@@ -731,7 +731,7 @@ Built with:
 
 <div align="center">
 
-**Built with heart by Daniel and the Voicebot Team**
+**Built with heart by Daniel and the Seneschal Team**
 
 *Voice is the future of computing.*
 
