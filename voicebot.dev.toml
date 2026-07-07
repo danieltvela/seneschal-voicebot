@@ -117,6 +117,8 @@ shell_timeout_secs = 30
 noop_tool_instructions = """Llamar a la herramienta noop cuando el usuario mencione a Siri, Alexa u otro asistente de voz, o cuando pida algo que claramente requiere otro asistente. La herramienta noop detiene la respuesta actual sin output de voz."""
 
 # ── Web Search (native API providers) ─────────────────────────────────────────
+# Brave public search (default, free, no API key).  Disable with BRAVE_PUBLIC_SEARCH=0.
+brave_public_search_enabled = true
 tavily_max_tokens = 512
 
 # ── Web Search (SearXNG fallback) ─────────────────────────────────────────────

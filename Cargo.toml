@@ -13,6 +13,9 @@ tokio = { version = "1", features = ["full"] }
 # Audio capture / playback
 cpal = "0.17"
 
+# HTML parsing for Brave public search scraper
+scraper = "0.20"
+
 # Audio resampling
 rubato = "0.15"
 

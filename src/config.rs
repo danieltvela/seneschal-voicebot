@@ -251,6 +251,10 @@ pub struct Config {
     pub noop_tool_instructions: String,
 
     // ── Web Search (Native API providers) ─────────────────────────────────────
+    /// Brave public search scraper enabled (BRAVE_PUBLIC_SEARCH, default true).
+    /// When true, `quick_search` uses the public search.brave.com endpoint with
+    /// no API key.  Disable to fall through to the other providers.
+    pub brave_public_search_enabled: bool,
     /// Tavily Search API key (TAVILY_API_KEY). When set, enables the
     /// `quick_search` tool with Tavily backend (fast path, preferred).
     pub tavily_api_key: Option<String>,
@@ -681,6 +685,11 @@ impl Config {
         }
         if let Ok(v) = env::var("SHELL_TIMEOUT_SECS") {
             self.shell_timeout_secs = v.parse().context("Invalid SHELL_TIMEOUT_SECS")?;
+        }
+
+        // Web Search (Brave public scraper — default, free)
+        if let Ok(v) = env::var("BRAVE_PUBLIC_SEARCH") {
+            self.brave_public_search_enabled = v == "1" || v.to_lowercase() == "true";
         }
 
         // Web Search (native API providers)

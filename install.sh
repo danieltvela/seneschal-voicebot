@@ -868,7 +868,71 @@ select_voice_kokoro() {
     info "  Selected Kokoro voice: $SELECTED_KOKORO_VOICE ($SELECTED_KOKORO_LANG)"
 }
 
-# ── Step 6: Write default configuration files ─────────────────────────────────
+# ── Search provider configuration ────────────────────────────────────────
+# Offers a choice between Brave (free, default), Tavily, Exa, and SearXNG.
+# Sets _SEARCH_PROVIDER and associated env vars consumed by create_env().
+configure_search_provider() {
+    step "Configuring web search provider"
+
+    _SEARCH_PROVIDER=""
+    _SEARCH_CONFIG=""
+
+    _choice=$(pick_from_list "Web search provider (used by quick_search tool)" 1 \
+        "Brave (free, no API key — default)" \
+        "Tavily (requires API key)" \
+        "Exa (requires API key)" \
+        "SearXNG (self-hosted, no API key)" \
+        "None (disable web search)")
+
+    case "$_choice" in
+        "Brave"*)
+            _SEARCH_PROVIDER="brave"
+            _SEARCH_CONFIG="brave_public_search_enabled = true"
+            info "  Search provider: Brave (free, public scraper)"
+            ;;
+        "Tavily"*)
+            _SEARCH_PROVIDER="tavily"
+            _TAVILY_KEY=$(ask "Tavily API key" "")
+            if [ -z "$_TAVILY_KEY" ]; then
+                warn "  No Tavily API key provided — falling back to Brave."
+                _SEARCH_PROVIDER="brave"
+                _SEARCH_CONFIG="brave_public_search_enabled = true"
+            else
+                _SEARCH_CONFIG="brave_public_search_enabled = false
+tavily_api_key = \"$_TAVILY_KEY\"
+tavily_max_tokens = 512"
+                info "  Search provider: Tavily"
+            fi
+            ;;
+        "Exa"*)
+            _SEARCH_PROVIDER="exa"
+            _EXA_KEY=$(ask "Exa API key" "")
+            if [ -z "$_EXA_KEY" ]; then
+                warn "  No Exa API key provided — falling back to Brave."
+                _SEARCH_PROVIDER="brave"
+                _SEARCH_CONFIG="brave_public_search_enabled = true"
+            else
+                _SEARCH_CONFIG="brave_public_search_enabled = false
+exa_api_key = \"$_EXA_KEY\""
+                info "  Search provider: Exa"
+            fi
+            ;;
+        "SearXNG"*)
+            _SEARCH_PROVIDER="searxng"
+            _SEARXNG_URL=$(ask "SearXNG URL" "http://127.0.0.1:8888")
+            _SEARXNG_SECRET=$(ask "SearXNG secret (leave blank if none)" "")
+            _SEARCH_CONFIG="brave_public_search_enabled = false
+searxng_url = \"$_SEARXNG_URL\"
+searxng_secret = \"$_SEARXNG_SECRET\""
+            info "  Search provider: SearXNG ($_SEARXNG_URL)"
+            ;;
+        "None"*)
+            _SEARCH_PROVIDER="none"
+            _SEARCH_CONFIG="brave_public_search_enabled = false"
+            info "  Web search disabled."
+            ;;
+    esac
+}
 create_env() {
     step "Writing default configuration"
     _config_file="$VOICEBOT_HOME/voicebot.pro.toml"
@@ -1000,6 +1064,9 @@ $_llm_config
 # Message injection role: "developer" (preferred), "system", or "user"
 # "user" is implemented by most of providers, the rest requires validaton (vLLM is OK, LM Studio is not).
 llm_injection_role = "user"
+
+# Web Search (quick_search tool)
+${_SEARCH_CONFIG:-brave_public_search_enabled = true}
 
 # TTS
 $_tts_config
@@ -1162,6 +1229,9 @@ main() {
 
     # LLM provider config (own provider or install mlx-lm on macOS)
     configure_llm_provider
+
+    # Web search provider (Brave free by default)
+    configure_search_provider
 
     # Voice selection happens AFTER models are installed because the
     # Kokoro enumerator invokes the binary.

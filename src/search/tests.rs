@@ -73,8 +73,10 @@ fn format_results_truncates_at_max_output_bytes() {
     );
 }
 
-fn cfg_with(tavily: Option<&str>, exa: Option<&str>, searxng: Option<&str>) -> Config {
+/// Returns a config with Brave disabled so fallback providers are exercised.
+fn cfg_no_brave_with(tavily: Option<&str>, exa: Option<&str>, searxng: Option<&str>) -> Config {
     let mut c = Config::from_env().expect("Config::from_env failed");
+    c.brave_public_search_enabled = false;
     c.tavily_api_key = tavily.map(String::from);
     c.exa_api_key = exa.map(String::from);
     c.searxng_url = searxng.map(String::from);
@@ -82,35 +84,57 @@ fn cfg_with(tavily: Option<&str>, exa: Option<&str>, searxng: Option<&str>) -> C
 }
 
 #[test]
-fn from_config_prefers_tavily_when_key_set() {
-    let cfg = cfg_with(Some("tv"), Some("ex"), Some("http://sx"));
+fn from_config_prefers_brave_by_default() {
+    let mut cfg = Config::from_env().expect("Config::from_env failed");
+    cfg.brave_public_search_enabled = true;
+    cfg.tavily_api_key = None;
+    cfg.exa_api_key = None;
+    cfg.searxng_url = None;
+    let p = from_config(&cfg).unwrap();
+    assert_eq!(p.name(), "brave");
+}
+
+#[test]
+fn from_config_prefers_brave_even_when_others_set() {
+    let mut cfg = Config::from_env().expect("Config::from_env failed");
+    cfg.brave_public_search_enabled = true;
+    cfg.tavily_api_key = Some("tv".into());
+    cfg.exa_api_key = Some("ex".into());
+    cfg.searxng_url = Some("http://sx".into());
+    let p = from_config(&cfg).unwrap();
+    assert_eq!(p.name(), "brave");
+}
+
+#[test]
+fn from_config_prefers_tavily_when_brave_disabled() {
+    let cfg = cfg_no_brave_with(Some("tv"), Some("ex"), Some("http://sx"));
     let p = from_config(&cfg).unwrap();
     assert_eq!(p.name(), "tavily");
 }
 
 #[test]
 fn from_config_falls_back_to_exa_when_no_tavily() {
-    let cfg = cfg_with(None, Some("ex"), Some("http://sx"));
+    let cfg = cfg_no_brave_with(None, Some("ex"), Some("http://sx"));
     let p = from_config(&cfg).unwrap();
     assert_eq!(p.name(), "exa");
 }
 
 #[test]
 fn from_config_falls_back_to_searxng_when_no_native_key() {
-    let cfg = cfg_with(None, None, Some("http://sx"));
+    let cfg = cfg_no_brave_with(None, None, Some("http://sx"));
     let p = from_config(&cfg).unwrap();
     assert_eq!(p.name(), "searxng");
 }
 
 #[test]
 fn from_config_returns_none_when_nothing_configured() {
-    let cfg = cfg_with(None, None, None);
+    let cfg = cfg_no_brave_with(None, None, None);
     assert!(from_config(&cfg).is_none());
 }
 
 #[test]
 fn from_config_ignores_empty_tavily_key() {
-    let cfg = cfg_with(Some(""), Some("ex"), None);
+    let cfg = cfg_no_brave_with(Some(""), Some("ex"), None);
     let p = from_config(&cfg).unwrap();
     assert_eq!(p.name(), "exa");
 }

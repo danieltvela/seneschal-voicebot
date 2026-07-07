@@ -1,8 +1,9 @@
 //! # Search Provider — pluggable search backends
 //!
 //! Defines the [`SearchProvider`] trait that `quick_search` uses.
-//! Backends: Tavily, Exa, SearXNG (existing).
+//! Backends: Brave (default, free), Tavily, Exa, SearXNG.
 
+pub mod brave;
 pub mod exa;
 pub mod searxng;
 pub mod tavily;
@@ -60,9 +61,22 @@ pub fn format_results(results: &[SearchResult], max: usize) -> String {
 ///
 /// Returns `None` when no search provider is configured (the `quick_search`
 /// tool should not be registered).
+///
+/// ## Priority (first match wins)
+///
+/// 1. **Brave** (public scraper, no API key) — the default, free provider.
+///    Disabled when `BRAVE_PUBLIC_SEARCH=0`.
+/// 2. **Tavily** (API key) — low-latency, LLM-optimised.
+/// 3. **Exa** (API key) — semantic search with content extraction.
+/// 4. **SearXNG** (self-hosted) — fallback for self-hosted deployments.
 pub fn from_config(config: &crate::config::Config) -> Option<Box<dyn SearchProvider>> {
-    // 1. Native API providers (Tavily, Exa) take priority because they are
-    //    low-latency and LLM-ready.  They require an API key.
+    // 1. Brave public search — always available, no key required.
+    if config.brave_public_search_enabled {
+        let prov = brave::BraveProvider::new();
+        return Some(Box::new(prov));
+    }
+
+    // 2. Native API providers (Tavily, Exa) when API keys are set.
     if let Some(key) = &config.tavily_api_key
         && !key.is_empty()
     {
@@ -77,7 +91,7 @@ pub fn from_config(config: &crate::config::Config) -> Option<Box<dyn SearchProvi
         return Some(Box::new(prov));
     }
 
-    // 2. Fall back to SearXNG (self-hosted, no API key).
+    // 3. Fall back to SearXNG (self-hosted, no API key).
     if let Some(url) = &config.searxng_url {
         let prov = searxng::SearXngProvider::new(url.clone(), config.searxng_secret.clone());
         return Some(Box::new(prov));
