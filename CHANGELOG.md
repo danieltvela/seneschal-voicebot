@@ -4,6 +4,23 @@ All notable changes to Seneschal Voicebot will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.1.0-alpha.4 (2026-07-08)
+
+### Features
+- **[#104](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/104)**: macOS SFSpeechRecognizer STT provider
+- **[#108](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/108)**: CHANGELOG.md and `/changelog` command
+- **[#109](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/109)**: macOS speech as default STT provider in installer
+- **[#114](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/114)**: Auto-discover LLM models during installation
+
+### Bug Fixes
+- **[#113](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/113)**: Configured API key not sent to LLM provider
+- EOF safety for wake word read in install.sh
+
+### Other
+- **[#103](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/103)**: Research on STT false positives from coughs and non-speech sounds
+
+---
+
 ## v0.1.0-alpha.3 (2026-07-08)
 
 ### Features
