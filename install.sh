@@ -1034,7 +1034,7 @@ kokoro_voices = \"${VOICEBOT_MODELS_DIR}/voices-v1.0.bin\""
     step "Choose your voicebot's name"
     echo "  Examples: Jarvis, Alfred, Butler, Narya, Ada, Iris"
     printf '  Enter a name (or press Enter for "seneschal"): '
-    read -r _WAKE_WORD
+    read -r _WAKE_WORD || _WAKE_WORD=""
     # Strip quotes and backslashes to avoid breaking TOML
     _WAKE_WORD=$(echo "$_WAKE_WORD" | tr -d '"\\')
     _WAKE_WORD="${_WAKE_WORD:-seneschal}"
