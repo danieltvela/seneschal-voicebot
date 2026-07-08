@@ -2,6 +2,11 @@
 # Voicebot installer — GitHub release edition
 # Usage: curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/main/install.sh | sh
 #
+# Modes:
+#   Interactive (default): prompts for language, LLM, voice, etc.
+#                          When piped, reads from /dev/tty for prompts.
+#   Non-interactive (-n): uses defaults/env vars only; never prompts.
+#
 # Environment overrides:
 #   GITHUB_REPO       — GitHub owner/repo (default: danieltvela/voicebot)
 #   VOICEBOT_HOME     — where models/data/config live (default: ~/.voicebot)
@@ -9,6 +14,22 @@
 #   VOICEBOT_VERSION  — pin a release tag, e.g. v1.2.0 (default: latest)
 #
 set -e
+
+# ── Stdin / interactivity policy ──────────────────────────────────────────────
+# When invoked as `curl … | sh`, stdin is the pipe carrying this script.
+# After the shell consumes the script body, every `read` would hit EOF and
+# silently fall back to defaults. We prevent that by:
+#   — requiring an explicit --non-interactive flag for headless installs, OR
+#   — redirecting interactive reads to /dev/tty when stdin is a pipe.
+_INTERACTIVE=1
+for _arg in "$@"; do
+    case "$_arg" in
+        -n|--non-interactive) _INTERACTIVE=0 ;;
+        -h|--help)
+            printf >&2 'Usage: install.sh [-n|--non-interactive]\n  -n, --non-interactive  Use env vars / defaults only; never prompt.\n'
+            exit 0 ;;
+    esac
+done
 
 # ── Caller contract ──────────────────────────────────────────────
 GITHUB_REPO="${GITHUB_REPO:-danieltvela/voicebot}"
@@ -54,14 +75,31 @@ warn()  { printf "${_YELLOW}[voicebot]${_NC} %s\n" "$1" >&2; }
 error() { printf "${_RED}[voicebot] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
 step()  { printf "\n${_GREEN}▶ %s${_NC}\n" "$1" >&2; }
 
+# ── Stdin TTY check (must be after error() is defined) ────────────────────────
+if [ "$_INTERACTIVE" = "0" ]; then
+    # Non-interactive mode — skip all prompts, use defaults
+    :
+elif [ ! -t 0 ]; then
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        exec </dev/tty
+    else
+        error "stdin is not a TTY and /dev/tty is unavailable. Re-run with --non-interactive or run: sh -c \"\$(curl -fsSL …/install.sh)\" </dev/tty"
+    fi
+fi
+
 # ── Interactive I/O primitives ────────────────────────────────────────────────
 # All three return their result on stdout so callers can do:
 #     VOICE=$(ask "Voice?" "Marisol (Enhanced)")
 # They print prompts to stderr so they don't pollute the captured value.
 
 # ask PROMPT DEFAULT — returns DEFAULT if no input or non-TTY.
+# Skips prompt entirely in non-interactive mode.
 ask() {
     _prompt="$1"; _default="$2"
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        printf "%s" "$_default"
+        return
+    fi
     printf "%s [%s]: " "$_prompt" "$_default" >&2
     _reply=""
     # `read` may fail under set -e when input ends; ignore that case.
@@ -74,8 +112,13 @@ ask() {
 }
 
 # confirm PROMPT DEFAULT(y|n) — returns "y" or "n" on stdout.
+# Non-interactive mode: returns default without prompting.
 confirm() {
     _prompt="$1"; _default="$2"
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        printf "%s" "$_default"
+        return
+    fi
     case "$_default" in
         y|Y) _hint="Y/n" ;;
         *)   _hint="y/N" ;;
@@ -94,12 +137,24 @@ confirm() {
 # pick_from_list PROMPT DEFAULT_INDEX ITEM1 ITEM2 ... — returns selected item.
 # DEFAULT_INDEX is 1-based. Non-TTY: returns items[DEFAULT_INDEX-1].
 # TTY: shows numbered list, accepts number or freeform text.
+# Non-interactive mode: returns default item without prompting.
 pick_from_list() {
     _prompt="$1"; _default_idx="$2"; shift 2
     # Remaining args are the items
     _items_count=$#
     if [ "$_items_count" = "0" ]; then
         error "pick_from_list: no items provided"
+    fi
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        # Non-interactive: return default item directly
+        _i=0
+        for _item in "$@"; do
+            _i=$((_i + 1))
+            if [ "$_i" = "$_default_idx" ]; then
+                printf "%s" "$_item"
+                return
+            fi
+        done
     fi
     printf "\n%s\n" "$_prompt" >&2
     _i=0
@@ -1030,14 +1085,18 @@ kokoro_voices = \"${VOICEBOT_MODELS_DIR}/voices-v1.0.bin\""
     fi
 
     # Bot name / wake word
-    echo ""
-    step "Choose your voicebot's name"
-    echo "  Examples: Jarvis, Alfred, Butler, Narya, Ada, Iris"
-    printf '  Enter a name (or press Enter for "seneschal"): '
-    read -r _WAKE_WORD || _WAKE_WORD=""
-    # Strip quotes and backslashes to avoid breaking TOML
-    _WAKE_WORD=$(echo "$_WAKE_WORD" | tr -d '"\\')
-    _WAKE_WORD="${_WAKE_WORD:-seneschal}"
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        _WAKE_WORD="seneschal"
+    else
+        echo ""
+        step "Choose your voicebot's name"
+        echo "  Examples: Jarvis, Alfred, Butler, Narya, Ada, Iris"
+        printf '  Enter a name (or press Enter for "seneschal"): '
+        read -r _WAKE_WORD || _WAKE_WORD=""
+        # Strip quotes and backslashes to avoid breaking TOML
+        _WAKE_WORD=$(echo "$_WAKE_WORD" | tr -d '"\\')
+        _WAKE_WORD="${_WAKE_WORD:-seneschal}"
+    fi
     info "  Bot name set to: $_WAKE_WORD"
 
     cat > "$_config_file" << CONFIGEOF
