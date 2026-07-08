@@ -155,8 +155,12 @@ stage_test_llm() {
 }
 
 stage_build() {
-    banner "Stage: build  (cargo build --features tui,remote,control)"
-    if (cd "$PROJECT_ROOT" && $CARGO build --features "tui,remote,control" --quiet 2>&1 \
+    _build_features="tui,remote,control"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        _build_features="$_build_features,speech,avspeech"
+    fi
+    banner "Stage: build  (cargo build --features $_build_features)"
+    if (cd "$PROJECT_ROOT" && $CARGO build --features "$_build_features" --quiet 2>&1 \
             | tail -n 20); then
         stage_ok "build"
     else

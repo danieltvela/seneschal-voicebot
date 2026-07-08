@@ -11,7 +11,7 @@
 #   make test-e2e   — cargo test e2e -- --ignored (wiremock e2e)
 #   make test-stt   — ignored STT tests (needs WHISPER_MODEL)
 #   make test-llm   — ignored LLM tests (needs running LLM server)
-#   make build      — cargo build --features tui,remote,control
+#   make build      — cargo build --features tui,remote,control (+ speech,avspeech on macOS)
 #   make audit      — cargo audit (needs cargo-audit)
 #   make coverage   — cargo llvm-cov summary (needs cargo-llvm-cov)
 #   make help       — print this list
@@ -36,7 +36,7 @@ help:
 	@printf '  make test-e2e   cargo test e2e -- --ignored (wiremock e2e)\n'
 	@printf '  make test-stt   ignored STT tests (needs WHISPER_MODEL)\n'
 	@printf '  make test-llm   ignored LLM tests (needs running LLM server)\n'
-	@printf '  make build      cargo build --features tui,remote,control\n'
+	@printf '  make build      cargo build --features tui,remote,control (+ speech,avspeech on macOS)\n'
 	@printf '  make audit      cargo audit (needs cargo-audit)\n'
 	@printf '  make coverage   cargo llvm-cov summary (needs cargo-llvm-cov)\n'
 	@printf '  make help       this list\n'

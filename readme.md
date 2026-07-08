@@ -431,7 +431,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `VAD_SILENCE_MS` | `200` | Silence threshold (ms) before processing speech |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model file |
 | **STT Provider** | | |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default), `parakeet` (requires `--features parakeet`), or `speech` (macOS SFSpeechRecognizer, requires `--features speech`) |
+| `STT_PROVIDER` | `speech` | STT backend: `speech` (default on macOS, SFSpeechRecognizer, requires `--features speech`), `whisper` (whisper-cpp-plus), or `parakeet` (requires `--features parakeet`) |
 | `PARAKEET_MODEL_DIR` | - | Path to Parakeet ONNX model directory (required when `STT_PROVIDER=parakeet`) |
 | **STT (Whisper)** | | |
 | `WHISPER_MODEL` | *required* | Path to Whisper `.bin` model |

@@ -163,7 +163,7 @@ trim_leading_silence(audio)
 - **`src/config.rs`** — provides `stt_provider`, `whisper_model`, `vad_model`, `vad_silence_ms`, `vad_start_threshold`, `vad_end_threshold`, `parakeet_model_dir`
 
 ### Environment Variables
-- `STT_PROVIDER` — `"whisper"` (default) or `"parakeet"`
+- `STT_PROVIDER` — `"speech"` (default on macOS) or `"whisper"` or `"parakeet"`
 - `WHISPER_MODEL` — path to GGML Whisper model (default: `models/ggml-large-v3-turbo.bin`)
 - `WHISPER_THREADS` — CPU thread count (0 = auto)
 - `PARAKEET_MODEL_DIR` — required when `STT_PROVIDER=parakeet`

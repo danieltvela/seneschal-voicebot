@@ -184,7 +184,7 @@ Read from `.env` (dotenvy loads automatically):
 | `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
 | `AUDIO_CHANNELS` | `1` | Audio channels |
 | `VOICEBOT_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `whisper` | `whisper` (default) or `parakeet` |
+| `STT_PROVIDER` | `speech` | `speech` (default on macOS), `whisper`, or `parakeet` |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |

@@ -106,7 +106,7 @@ pub struct Config {
     pub language: String,
 
     // ── STT ──────────────────────────────────────────────────────────────────
-    /// STT backend provider: "whisper" (default) or "parakeet".
+    /// STT backend provider: "speech" (default on macOS), "whisper", or "parakeet".
     pub stt_provider: String,
     /// Path to whisper.cpp GGML model file (.bin)
     pub whisper_model: String,
@@ -1155,7 +1155,7 @@ mod tests {
                 assert_eq!(config.sample_rate, 16000);
                 assert_eq!(config.language, "en");
                 assert_eq!(config.whisper_model, "models/ggml-large-v3-turbo.bin");
-                assert_eq!(config.stt_provider, "whisper");
+                assert_eq!(config.stt_provider, "speech");
             },
         );
     }
