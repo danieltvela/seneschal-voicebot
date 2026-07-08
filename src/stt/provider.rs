@@ -5,13 +5,14 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 
 use super::SpeechEvent;
+use super::no_speech_gate::TranscriptionQuality;
 use super::whisper::{WhisperSTTVADConfig, WhisperSttProvider};
 
 #[async_trait]
 pub trait SttProvider: Send {
     fn provider_name(&self) -> &'static str;
     async fn process_audio(&mut self, audio: &[f32], tx: &mpsc::Sender<SpeechEvent>) -> Result<()>;
-    fn transcribe_complete(&self, audio: &[f32]) -> Result<String>;
+    fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality>;
 }
 
 pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
@@ -22,6 +23,7 @@ pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
         silence_ms: config.vad_silence_ms,
         vad_start_threshold: config.vad_start_threshold,
         vad_end_threshold: config.vad_end_threshold,
+        vad_confirm_probes: config.vad_confirm_probes,
     };
 
     match config.stt_provider.to_lowercase().as_str() {

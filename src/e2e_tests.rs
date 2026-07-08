@@ -867,6 +867,7 @@ async fn stt_transcribes_wav_file() {
         silence_ms: 500,
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
+        vad_confirm_probes: 2,
     };
     let stt = WhisperSttProvider::new(config).expect("failed to load Whisper model");
     let audio = load_wav_as_f32(wav_path).expect("failed to load WAV fixture");
@@ -876,7 +877,7 @@ async fn stt_transcribes_wav_file() {
 
     println!("Transcript: {transcript:?}");
     assert!(
-        !transcript.trim().is_empty(),
+        !transcript.text.trim().is_empty(),
         "expected non-empty transcript from {wav_path}"
     );
 }
@@ -913,15 +914,16 @@ async fn full_pipeline_wav_to_db() {
         silence_ms: 500,
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
+        vad_confirm_probes: 2,
     };
     let stt = WhisperSttProvider::new(config).unwrap();
     let audio = load_wav_as_f32(wav_path).unwrap();
-    let transcript = stt.transcribe_complete(&audio).unwrap();
-    println!("STT transcript: {transcript:?}");
+    let quality = stt.transcribe_complete(&audio).unwrap();
+    println!("STT transcript: {quality:?}");
 
     let h = E2eHarness::new().await;
     h.mock_llm_response("Respuesta de prueba.").await;
-    h.run(&transcript).await;
+    h.run(&quality.text).await;
 
     let msgs = h.db_messages().await;
     assert!(

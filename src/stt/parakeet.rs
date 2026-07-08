@@ -5,8 +5,10 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use whisper_cpp_plus::WhisperVadProcessor;
+use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
 
 use super::SpeechEvent;
+use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
 use super::whisper::WhisperSTTVADConfig;
 
@@ -15,10 +17,16 @@ const VAD_PROBE_MS: usize = 200;
 const VAD_PROBE_SAMPLES: usize = SAMPLE_RATE * VAD_PROBE_MS / 1000;
 const PRE_ROLL_MS: usize = 300;
 const PRE_ROLL_SAMPLES: usize = SAMPLE_RATE * PRE_ROLL_MS / 1000;
+/// Silence prepended to the first speech segment so the STT model has
+/// acoustic context before the onset.
+const PRE_SILENCE_MS: usize = 200;
+const PRE_SILENCE_SAMPLES: usize = SAMPLE_RATE * PRE_SILENCE_MS / 1000;
 const POST_ROLL_MS: usize = 250;
 const POST_ROLL_SAMPLES: usize = SAMPLE_RATE * POST_ROLL_MS / 1000;
 const MAX_SEGMENT_MS: usize = 20_000;
 const MAX_SEGMENT_SAMPLES: usize = SAMPLE_RATE * MAX_SEGMENT_MS / 1000;
+/// Maximum probes to accumulate before giving up on confirmation.
+const MAX_ACCUM_PROBES: usize = 50;
 
 const TRIM_WINDOW_MS: usize = 20;
 const TRIM_WINDOW_SAMPLES: usize = SAMPLE_RATE * TRIM_WINDOW_MS / 1000;
@@ -38,6 +46,13 @@ pub struct ParakeetSttProvider {
     silence_samples: usize,
     silence_samples_threshold: usize,
     post_roll_remaining: usize,
+
+    // Confirmation window: require N consecutive speech probes before committing.
+    vad_confirm_probes: usize,
+    consecutive_speech_probes: usize,
+    accumulating: bool,
+    accum_buf: Vec<f32>,
+    accum_probes_total: usize,
 
     // Leftover samples that didn't fill a probe window.
     probe_carry: Vec<f32>,
@@ -75,18 +90,20 @@ impl ParakeetSttProvider {
 
         let vad = WhisperVadProcessor::new(&base.vad_model).context("Failed to load VAD model")?;
 
+        let silence_samples_threshold = SAMPLE_RATE * base.silence_ms as usize / 1000;
+        let vad_confirm_probes = base.vad_confirm_probes.max(1);
+
         tracing::info!(
             target: "sttvad",
-            "ParakeetSttProvider ready (parakeet: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2})",
+            "ParakeetSttProvider ready (parakeet: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {})",
             model_dir,
             base.vad_model,
             base.language,
             base.silence_ms,
             base.vad_start_threshold,
-            vad_end_threshold
+            vad_end_threshold,
+            vad_confirm_probes
         );
-
-        let silence_samples_threshold = SAMPLE_RATE * base.silence_ms as usize / 1000;
 
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
@@ -100,6 +117,11 @@ impl ParakeetSttProvider {
             silence_samples: 0,
             silence_samples_threshold,
             post_roll_remaining: 0,
+            vad_confirm_probes,
+            consecutive_speech_probes: 0,
+            accumulating: false,
+            accum_buf: Vec::new(),
+            accum_probes_total: 0,
             probe_carry: Vec::with_capacity(VAD_PROBE_SAMPLES),
         })
     }
@@ -135,59 +157,130 @@ impl ParakeetSttProvider {
                 probs.iter().sum::<f32>() / probs.len() as f32
             }
         };
-        let threshold = if self.in_speech {
-            self.vad_end_threshold
-        } else {
-            self.vad_start_threshold
-        };
-        let silence = avg_prob < threshold;
 
-        if !self.in_speech {
-            if !silence {
-                self.in_speech = true;
-                self.silence_samples = 0;
-                self.speech_buf.clear();
-                self.speech_buf.extend(self.pre_roll.iter().copied());
-                self.speech_buf.extend_from_slice(chunk);
-                let _ = tx.send(SpeechEvent::SpeechStart).await;
-                tracing::debug!(target: "sttvad", "SpeechStart");
-            }
-        } else if self.in_post_roll {
-            self.speech_buf.extend_from_slice(chunk);
-            if silence {
-                self.post_roll_remaining = self.post_roll_remaining.saturating_sub(chunk.len());
-                if self.post_roll_remaining == 0 {
-                    self.finalize_segment(tx).await?;
-                }
-            } else {
-                self.in_post_roll = false;
-                self.post_roll_remaining = 0;
-                self.silence_samples = 0;
-            }
-        } else {
-            self.speech_buf.extend_from_slice(chunk);
-            if silence {
-                self.silence_samples += chunk.len();
-            } else {
-                self.silence_samples = 0;
-            }
-
-            let max_segment_reached = self.speech_buf.len() >= MAX_SEGMENT_SAMPLES;
-            let silence_timeout = self.silence_samples >= self.silence_samples_threshold;
-
-            if max_segment_reached {
-                self.finalize_segment(tx).await?;
-            } else if silence_timeout {
-                self.in_post_roll = true;
-                self.post_roll_remaining = POST_ROLL_SAMPLES;
-            }
-        }
-
+        // Update pre-roll buffer first (always) so it has the latest audio.
         for &s in chunk {
             if self.pre_roll.len() >= PRE_ROLL_SAMPLES {
                 self.pre_roll.pop_front();
             }
             self.pre_roll.push_back(s);
+        }
+
+        if self.in_speech {
+            // ── Already confirmed speech ──
+            if self.in_post_roll {
+                // ── Post-roll grace period ──
+                self.speech_buf.extend_from_slice(chunk);
+                let threshold = self.vad_end_threshold;
+                let silence = avg_prob < threshold;
+                if silence {
+                    self.post_roll_remaining = self.post_roll_remaining.saturating_sub(chunk.len());
+                    if self.post_roll_remaining == 0 {
+                        self.finalize_segment(tx).await?;
+                    }
+                } else {
+                    self.in_post_roll = false;
+                    self.post_roll_remaining = 0;
+                    self.silence_samples = 0;
+                }
+            } else {
+                // ── Confirmed speech, accumulating ──
+                self.speech_buf.extend_from_slice(chunk);
+                let threshold = self.vad_end_threshold;
+                let silence = avg_prob < threshold;
+
+                if silence {
+                    self.silence_samples += chunk.len();
+                } else {
+                    self.silence_samples = 0;
+                }
+
+                let max_segment_reached = self.speech_buf.len() >= MAX_SEGMENT_SAMPLES;
+                let silence_timeout = self.silence_samples >= self.silence_samples_threshold;
+
+                if max_segment_reached {
+                    self.finalize_segment(tx).await?;
+                } else if silence_timeout {
+                    self.in_post_roll = true;
+                    self.post_roll_remaining = POST_ROLL_SAMPLES;
+                }
+            }
+        } else if self.accumulating {
+            // ── Accumulating: waiting for confirmation ──
+            // Always append to accum_buf so the audio is continuous from the
+            // first probe to confirmation, regardless of intermediate silence.
+            self.accum_buf.extend_from_slice(chunk);
+            self.accum_probes_total += 1;
+
+            // Guard against unbounded accumulation.
+            if self.accum_probes_total >= MAX_ACCUM_PROBES {
+                tracing::debug!(
+                    target: "sttvad",
+                    "Accumulation timeout after {} probes, discarding",
+                    self.accum_probes_total
+                );
+                self.accumulating = false;
+                self.consecutive_speech_probes = 0;
+                self.accum_probes_total = 0;
+                self.accum_buf.clear();
+            }
+
+            let threshold = self.vad_start_threshold;
+            let is_speech = avg_prob >= threshold;
+
+            if is_speech {
+                self.consecutive_speech_probes += 1;
+
+                if self.consecutive_speech_probes >= self.vad_confirm_probes {
+                    // CONFIRMED: transition to speech state.
+                    // Prepend silence so the STT model has acoustic context.
+                    self.in_speech = true;
+                    self.accumulating = false;
+                    self.speech_buf.clear();
+                    self.speech_buf
+                        .extend(std::iter::repeat_n(0.0f32, PRE_SILENCE_SAMPLES));
+                    self.speech_buf.append(&mut self.accum_buf);
+                    let _ = tx.send(SpeechEvent::SpeechStart).await;
+                    tracing::debug!(
+                        target: "sttvad",
+                        "Speech confirmed after {} probes ({:.1}s, +{}ms pre-silence)",
+                        self.consecutive_speech_probes,
+                        self.speech_buf.len() as f32 / SAMPLE_RATE as f32,
+                        PRE_SILENCE_MS
+                    );
+                }
+            } else {
+                // Silence during accumulation — reset consecutive counter but
+                // keep accumulating audio (it's part of the continuous stream).
+                if self.consecutive_speech_probes > 0 {
+                    tracing::debug!(
+                        target: "sttvad",
+                        "Accumulation probe reset: {} consecutive, needed {} (avg_prob={:.3})",
+                        self.consecutive_speech_probes,
+                        self.vad_confirm_probes,
+                        avg_prob
+                    );
+                }
+                self.consecutive_speech_probes = 0;
+            }
+        } else {
+            // ── Silence: start accumulating if speech detected ──
+            let threshold = self.vad_start_threshold;
+            let is_speech = avg_prob >= threshold;
+
+            if is_speech {
+                self.accumulating = true;
+                self.consecutive_speech_probes = 1;
+                self.accum_probes_total = 1;
+                self.accum_buf.clear();
+                self.accum_buf.extend_from_slice(chunk);
+                tracing::debug!(
+                    target: "sttvad",
+                    "Start accumulating (probe 1/{}), avg_prob={:.3}",
+                    self.vad_confirm_probes,
+                    avg_prob
+                );
+            }
         }
 
         Ok(())
@@ -213,17 +306,18 @@ impl ParakeetSttProvider {
         );
 
         let model = Arc::clone(&self.model);
-        let text =
-            tokio::task::spawn_blocking(move || -> Result<String> { transcribe(&model, &trimmed) })
-                .await
-                .context("transcription task join")??;
+        let quality = tokio::task::spawn_blocking(move || -> Result<TranscriptionQuality> {
+            transcribe(&model, &trimmed)
+        })
+        .await
+        .context("transcription task join")??;
 
-        tracing::info!(target: "sttvad", "SpeechEnd: {}", text);
-        let _ = tx.send(SpeechEvent::SpeechEnd(text)).await;
+        tracing::info!(target: "sttvad", "SpeechEnd: {}", quality.text);
+        let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
         Ok(())
     }
 
-    pub fn transcribe_complete(&self, audio: &[f32]) -> Result<String> {
+    pub fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
         transcribe(&self.model, audio)
     }
 }
@@ -238,14 +332,19 @@ impl SttProvider for ParakeetSttProvider {
         ParakeetSttProvider::process_audio(self, audio, tx).await
     }
 
-    fn transcribe_complete(&self, audio: &[f32]) -> Result<String> {
+    fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
         ParakeetSttProvider::transcribe_complete(self, audio)
     }
 }
 
-fn transcribe(model: &Arc<Mutex<ParakeetTDT>>, audio: &[f32]) -> Result<String> {
+fn transcribe(model: &Arc<Mutex<ParakeetTDT>>, audio: &[f32]) -> Result<TranscriptionQuality> {
     if audio.is_empty() {
-        return Ok(String::new());
+        return Ok(TranscriptionQuality {
+            text: String::new(),
+            no_speech_prob: 0.0,
+            avg_logprob: 0.0,
+            compression_ratio: 0.0,
+        });
     }
 
     let mut model = model
@@ -256,7 +355,20 @@ fn transcribe(model: &Arc<Mutex<ParakeetTDT>>, audio: &[f32]) -> Result<String> 
         .transcribe_samples(audio.to_vec(), SAMPLE_RATE as u32, 1, None)
         .context("Parakeet transcription failed")?;
 
-    Ok(result.text.trim().to_string())
+    let text = result.text.trim().to_string();
+
+    let compression_ratio = if !text.is_empty() {
+        calculate_compression_ratio(&text)
+    } else {
+        0.0
+    };
+
+    Ok(TranscriptionQuality {
+        text,
+        no_speech_prob: 0.0,
+        avg_logprob: 0.0,
+        compression_ratio,
+    })
 }
 
 fn trim_leading_silence(audio: &[f32]) -> Vec<f32> {

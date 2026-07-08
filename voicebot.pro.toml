@@ -17,6 +17,10 @@ vad_silence_ms = 300
 vad_start_threshold = 0.65
 vad_end_threshold = 0.45
 vad_model = "models/ggml-silero-vad.bin"
+# Minimum consecutive speech probes (200ms each) before committing to STT.
+# Prevents coughs/throat-clearing from triggering transcription.
+# Set to 1 to disable (current behavior).
+vad_confirm_probes = 2
 
 # ── Language ──────────────────────────────────────────────────────────────────
 language = "en"
@@ -28,6 +32,11 @@ whisper_threads = 0
 stt_early_reuse_enabled = false
 stt_early_min_tokens = 6
 stt_early_require_punctuation = true
+
+# NoSpeechGate — post-STT quality filter
+stt_no_speech_threshold = 0.6
+stt_logprob_threshold = -1.0
+stt_compression_threshold = 2.4
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm_provider = "openai"

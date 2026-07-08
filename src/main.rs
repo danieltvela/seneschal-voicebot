@@ -66,7 +66,7 @@ use crate::plugins::{
     build_plugin_prompt_section,
 };
 use crate::profile::ProfileFact;
-use crate::stt::{SpeechEvent, SttProvider, create_provider};
+use crate::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
 use crate::tools::{
     ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy,
     NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool,
@@ -702,6 +702,20 @@ async fn async_main() -> Result<()> {
         "Initialized STT provider '{}' (configured: {})",
         stt_provider.provider_name(),
         config.stt_provider
+    );
+
+    // ── NoSpeechGate: post-STT quality filter ──────────────────────────────────
+    let no_speech_gate = NoSpeechGate {
+        no_speech_threshold: config.stt_no_speech_threshold,
+        logprob_threshold: config.stt_logprob_threshold,
+        compression_threshold: config.stt_compression_threshold,
+    };
+    info!(
+        target: "nospeechgate",
+        "NoSpeechGate ready (ns={:.2}, lp={:.2}, cr={:.2})",
+        no_speech_gate.no_speech_threshold,
+        no_speech_gate.logprob_threshold,
+        no_speech_gate.compression_threshold
     );
 
     // ── Analysis Ring: ContextLens + IdentityAnalyzer ─────────────────────────
@@ -1486,8 +1500,14 @@ async fn async_main() -> Result<()> {
                             speech_buffer.push(&mono);
                             debug!(target: "stt", "Partial: {}", partial_text);
                         }
-                        SpeechEvent::SpeechEnd(final_stream_text) => {
+                        SpeechEvent::SpeechEnd(quality) => {
                             speech_buffer.push(&mono);
+
+                            // NoSpeechGate: reject non-speech transcriptions
+                            if no_speech_gate.should_reject(&quality) {
+                                debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
+                                continue;
+                            }
 
                             let segment_duration_ms = t_speech_start.as_ref()
                                 .map(|t| t.elapsed().as_millis() as u32)
@@ -1507,7 +1527,7 @@ async fn async_main() -> Result<()> {
 
                             info!(target: "pipeline", "Speech: {}ms (segment {}ms)", duration_ms, segment_duration_ms);
 
-                            let mut segment_text = final_stream_text;
+                            let mut segment_text = quality.text;
 
                             #[cfg(feature = "tui")]
                             tui_tx.send(tui::events::TuiEvent::StateChange(
@@ -1557,13 +1577,14 @@ async fn async_main() -> Result<()> {
                                         }
                                         let t0 = Instant::now();
                                         if let Ok(provider) = create_provider(&stt_cfg)
-                                            && let Ok(text) = provider.transcribe_complete(&audio_c)
-                                            && !text.is_empty()
+                                            && let Ok(quality) = provider.transcribe_complete(&audio_c)
+                                            && !quality.text.is_empty()
                                         {
-                                            amb_buf_c.lock().unwrap().push(speaker_label.clone(), text.clone());
+                                            amb_buf_c.lock().unwrap().push(speaker_label.clone(), quality.text.clone());
                                             debug!(
                                                 target: "pipeline",
-                                                "Ambient buffer ← {speaker_label}: {text} ({}ms)",
+                                                "Ambient buffer ← {speaker_label}: {} ({}ms)",
+                                                quality.text,
                                                 t0.elapsed().as_millis()
                                             );
                                         }
@@ -1588,7 +1609,7 @@ async fn async_main() -> Result<()> {
                                 tokio::spawn(async move {
                                     let t0 = Instant::now();
                                     let answer = if let Ok(provider) = create_provider(&stt_cfg) {
-                                        provider.transcribe_complete(&audio_for_task).unwrap_or_default()
+                                        provider.transcribe_complete(&audio_for_task).map(|q| q.text).unwrap_or_default()
                                     } else {
                                         String::new()
                                     };

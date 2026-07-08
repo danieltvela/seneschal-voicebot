@@ -96,6 +96,10 @@ pub struct Config {
     pub vad_end_threshold: f32,
     /// Path to Silero VAD model file (.bin) used by whisper-cpp-plus
     pub vad_model: String,
+    /// Minimum consecutive speech probes (200ms each) required before VAD commits to STT.
+    /// Prevents brief sounds (coughs, throat-clearing) from triggering transcription.
+    /// Default: 2 (400ms of sustained speech-like signal). Set to 1 to disable.
+    pub vad_confirm_probes: usize,
 
     // ── Language ─────────────────────────────────────────────────────────────
     /// "es" (default) or "en"
@@ -122,6 +126,15 @@ pub struct Config {
     /// results. If true, incomplete sentences are not reused even if they meet
     /// the token threshold. Default: true.
     pub stt_early_require_punctuation: bool,
+    /// NoSpeechGate: no_speech_prob threshold (default 0.6).
+    /// Above this + low logprob → reject. (STT_NO_SPEECH_THRESHOLD)
+    pub stt_no_speech_threshold: f32,
+    /// NoSpeechGate: avg_logprob threshold (default -1.0).
+    /// Below this + high no_speech → reject. (STT_LOGPROB_THRESHOLD)
+    pub stt_logprob_threshold: f32,
+    /// NoSpeechGate: compression_ratio threshold (default 2.4).
+    /// Above this → gibberish → reject. (STT_COMPRESSION_THRESHOLD)
+    pub stt_compression_threshold: f32,
 
     // ── LLM ──────────────────────────────────────────────────────────────────
     /// LLM backend provider: "openai" (default).
@@ -501,6 +514,9 @@ impl Config {
         if let Ok(v) = env::var("VAD_MODEL") {
             self.vad_model = v;
         }
+        if let Ok(v) = env::var("VAD_CONFIRM_PROBES") {
+            self.vad_confirm_probes = v.parse().context("Invalid VAD_CONFIRM_PROBES")?;
+        }
 
         // Language
         if let Ok(v) = env::var("VOICEBOT_LANGUAGE") {
@@ -529,6 +545,16 @@ impl Config {
         if let Ok(v) = env::var("STT_EARLY_REQUIRE_PUNCTUATION") {
             self.stt_early_require_punctuation =
                 v.parse().context("Invalid STT_EARLY_REQUIRE_PUNCTUATION")?;
+        }
+        if let Ok(v) = env::var("STT_NO_SPEECH_THRESHOLD") {
+            self.stt_no_speech_threshold = v.parse().context("Invalid STT_NO_SPEECH_THRESHOLD")?;
+        }
+        if let Ok(v) = env::var("STT_LOGPROB_THRESHOLD") {
+            self.stt_logprob_threshold = v.parse().context("Invalid STT_LOGPROB_THRESHOLD")?;
+        }
+        if let Ok(v) = env::var("STT_COMPRESSION_THRESHOLD") {
+            self.stt_compression_threshold =
+                v.parse().context("Invalid STT_COMPRESSION_THRESHOLD")?;
         }
 
         // LLM

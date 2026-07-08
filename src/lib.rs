@@ -36,7 +36,7 @@ pub use db::Database;
 pub use llm::client::OpenAIClient;
 pub use llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 pub use stt::{
-    SpeechEvent, SttProvider, WhisperSTTVAD, WhisperSTTVADConfig, WhisperSttProvider,
-    create_provider,
+    NoSpeechGate, SpeechEvent, SttProvider, TranscriptionQuality, WhisperSTTVAD,
+    WhisperSTTVADConfig, WhisperSttProvider, create_provider,
 };
 pub use tts::SentenceSplitter;
