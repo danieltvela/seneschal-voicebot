@@ -540,6 +540,7 @@ configure_llm_provider() {
     _LLM_CHOICE="own"
     _LLM_URL=""
     _LLM_API_KEY=""
+    _LLM_MODEL=""
 
     if [ "$OS" = "Darwin" ]; then
         _choice=$(pick_from_list "LLM provider" 1 \
@@ -554,8 +555,9 @@ configure_llm_provider() {
         "Use my own LLM provider"*)
             _LLM_CHOICE="own"
             _LLM_URL=$(ask "LLM server URL (OpenAI-compatible)" "http://127.0.0.1:8000")
+            _LLM_MODEL=$(ask "LLM model name" "local-model")
             _LLM_API_KEY=$(ask "API key (leave blank if not needed)" "")
-            info "  LLM provider: $_LLM_URL"
+            info "  LLM provider: $_LLM_URL (model=$_LLM_MODEL)"
             if [ -n "$_LLM_API_KEY" ]; then
                 info "  API key configured."
             else
@@ -991,14 +993,11 @@ searxng_secret = \"$_SEARXNG_SECRET\""
 create_env() {
     step "Writing default configuration"
     _config_file="$VOICEBOT_HOME/voicebot.pro.toml"
-    if [ -f "$_config_file" ]; then
-        info "  Config already exists at $_config_file — skipping."
-        return
-    fi
     # LLM block depends on provider choice from configure_llm_provider()
     case "${_LLM_CHOICE:-own}" in
         "own")
-            _llm_config="llm_url = \"${_LLM_URL:-http://127.0.0.1:8000}\""
+            _llm_config="llm_model = \"${_LLM_MODEL:-local-model}\"
+llm_url = \"${_LLM_URL:-http://127.0.0.1:8000}\""
             if [ -n "${_LLM_API_KEY:-}" ]; then
                 _llm_config="${_llm_config}
 llm_api_key = \"${_LLM_API_KEY}\""
@@ -1116,8 +1115,6 @@ device_monitor_enabled = true
 device_monitor_poll_secs = 5
 
 # LLM
-llm_model = "mlx-community/gemma-4-26b-a4b-it-4bit"
-
 $_llm_config
 
 # Message injection role: "developer" (preferred), "system", or "user"
