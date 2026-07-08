@@ -529,6 +529,45 @@ install_vad_model() {
     info "  VAD model installed."
 }
 
+# ── LLM model discovery ──────────────────────────────────────────────────────
+# Probe LLM_URL/v1/models and return newline-separated model IDs on stdout.
+# Usage: _model_ids=$(discover_llm_models "$LLM_URL" "$API_KEY")
+# Returns empty string on failure (server unreachable, no models, parse error).
+discover_llm_models() {
+    _disc_url="$1"; _disc_key="$2"
+    _disc_url="${_disc_url%/}/v1/models"
+    _disc_body=""
+
+    # Build curl command with optional auth header
+    if [ -n "$_disc_key" ]; then
+        _disc_body=$(curl -fsS --max-time 5 -H "Authorization: Bearer $_disc_key" "$_disc_url" 2>/dev/null) || _disc_body=""
+    else
+        _disc_body=$(curl -fsS --max-time 5 "$_disc_url" 2>/dev/null) || _disc_body=""
+    fi
+
+    [ -z "$_disc_body" ] && return 0
+
+    # Parse model IDs from JSON — try jq, then python3, then grep fallback
+    _model_ids=""
+    if command -v jq >/dev/null 2>&1; then
+        _model_ids=$(printf "%s" "$_disc_body" | jq -r '.data[].id // empty' 2>/dev/null) || _model_ids=""
+    elif command -v python3 >/dev/null 2>&1; then
+        _model_ids=$(python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    for m in d.get('data', []):
+        print(m.get('id', ''))
+except: pass
+" <<< "$_disc_body" 2>/dev/null) || _model_ids=""
+    else
+        # Fallback: grep for "id" fields — works for standard OpenAI format
+        _model_ids=$(printf "%s\n" "$_disc_body" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/' 2>/dev/null) || _model_ids=""
+    fi
+
+    printf "%s" "$_model_ids"
+}
+
 # ── LLM provider configuration ───────────────────────────────────────────────
 # Replaces the old install_mlx_lm(). On macOS offers a choice between
 # installing mlx-lm and using an existing provider.
@@ -555,14 +594,61 @@ configure_llm_provider() {
         "Use my own LLM provider"*)
             _LLM_CHOICE="own"
             _LLM_URL=$(ask "LLM server URL (OpenAI-compatible)" "http://127.0.0.1:8000")
-            _LLM_MODEL=$(ask "LLM model name" "local-model")
             _LLM_API_KEY=$(ask "API key (leave blank if not needed)" "")
-            info "  LLM provider: $_LLM_URL (model=$_LLM_MODEL)"
             if [ -n "$_LLM_API_KEY" ]; then
                 info "  API key configured."
             else
                 info "  No API key — server must allow unauthenticated access."
             fi
+
+            # Discover available models from the server
+            _model_ids=$(discover_llm_models "$_LLM_URL" "$_LLM_API_KEY")
+            _model_count=0
+            if [ -n "$_model_ids" ]; then
+                _model_count=$(printf "%s\n" "$_model_ids" | grep -c . 2>/dev/null) || _model_count=0
+            fi
+
+            if [ "$_model_count" -eq 1 ]; then
+                # Single model — auto-select
+                _LLM_MODEL="$_model_ids"
+                info "  Found 1 model on server: $_LLM_MODEL"
+            elif [ "$_model_count" -gt 1 ]; then
+                # Multiple models — show selection menu
+                warn "  ⚠ Gemma-4 models are recommended for voicebot (≥50 tok/s)."
+                warn "  Other models may be slower or produce poor results."
+                printf "\n" >&2
+
+                # Build pick arguments from discovered models
+                _args=""
+                _i=0
+                _first_idx=1
+                while IFS= read -r _mid; do
+                    [ -z "$_mid" ] && continue
+                    _i=$((_i + 1))
+                    if [ -z "$_args" ]; then _args="$_mid"; else _args="$_args|$_mid"; fi
+                    # Prefer Gemma-4 as default selection
+                    case "$_mid" in
+                        *gemma*4*|*gemma-4*|*Gemma-4*|*Gemma4*) _first_idx=$_i ;;
+                    esac
+                done <<EOF
+$_model_ids
+EOF
+                # Convert to positional args
+                _OLD_IFS="$IFS"
+                IFS='|'
+                # shellcheck disable=SC2086
+                set -- $_args
+                IFS="$_OLD_IFS"
+                _LLM_MODEL=$(pick_from_list "Available LLM models on your server" "$_first_idx" "$@")
+            else
+                # No models found or server unreachable — ask manually
+                warn "  Could not auto-discover models from $_LLM_URL/v1/models"
+                warn "  ⚠ Gemma-4 models are recommended for voicebot (≥50 tok/s)."
+                warn "  Recommended: mlx-community/gemma-4-26b-a4b-it-4bit"
+                _LLM_MODEL=$(ask "LLM model name" "mlx-community/gemma-4-26b-a4b-it-4bit")
+            fi
+
+            info "  LLM provider: $_LLM_URL (model=$_LLM_MODEL)"
             ;;
         "Install mlx-lm"*)
             _LLM_CHOICE="mlx-lm"
