@@ -867,9 +867,12 @@ impl Config {
             anyhow::bail!("LLM_COMMAND must be set when LLM_SELF_MANAGED=1");
         }
 
-        if !matches!(self.stt_provider.as_str(), "whisper" | "parakeet") {
+        if !matches!(
+            self.stt_provider.as_str(),
+            "whisper" | "parakeet" | "speech"
+        ) {
             anyhow::bail!(
-                "Invalid STT_PROVIDER '{}'. Supported values: whisper, parakeet",
+                "Invalid STT_PROVIDER '{}'. Supported values: whisper, parakeet, speech",
                 self.stt_provider
             );
         }

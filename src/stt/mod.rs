@@ -5,6 +5,9 @@ pub mod whisper;
 #[cfg(feature = "parakeet")]
 pub mod parakeet;
 
+#[cfg(feature = "speech")]
+pub mod speech_recognizer;
+
 pub use no_speech_gate::{NoSpeechGate, TranscriptionQuality};
 pub use provider::{SttProvider, create_provider};
 #[allow(unused_imports)]

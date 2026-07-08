@@ -933,6 +933,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "doom-fish-utils"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c801f6c2a0db1a1909d89fc395b9dccc594de9ef599659fbde9bb3b55ef67f9f"
+dependencies = [
+ "crossbeam-queue",
+ "futures-util",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4052,6 +4062,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "speech"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91c3e0a5b3f2f469e392dbfc8e0e07f315e48517e485e3c647f40476664b2f1a"
+dependencies = [
+ "doom-fish-utils",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5126,6 +5147,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sherpa-rs",
+ "speech",
  "sqlx",
  "temp-env",
  "tempfile",

@@ -166,9 +166,10 @@ Seneschal is built from the ground up for voice interaction:
 ### Core Voice Pipeline
 
 - Real-time voice capture (CPAL) with VAD (Silero) and pre-roll buffer
-- **Pluggable STT** — select Whisper (default) or NVIDIA Parakeet via environment variable
+- **Pluggable STT** — select Whisper (default), Parakeet, or macOS SFSpeechRecognizer via environment variable
   - **Whisper** via `whisper-cpp-plus` (Metal GPU on macOS, CoreML Neural Engine available, 99 languages)
   - **Parakeet** via ONNX Runtime (25 languages, offline, `--features parakeet`)
+  - **SFSpeechRecognizer** via `speech` crate (macOS on-device ANE, ~40 languages, `--features speech`)
 - Streaming LLM via mlx-lm or oMLX (Apple MLX, KV-cache reuse, sub-second latency)
 - Sentence-by-sentence TTS playback (AVSpeechSynthesizer or Kokoro ONNX) - speaks while generating next sentence
 - Barge-in - user speech cancels active pipeline instantly
@@ -430,7 +431,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `VAD_SILENCE_MS` | `200` | Silence threshold (ms) before processing speech |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model file |
 | **STT Provider** | | |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default) or `parakeet` (requires `--features parakeet`) |
+| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default), `parakeet` (requires `--features parakeet`), or `speech` (macOS SFSpeechRecognizer, requires `--features speech`) |
 | `PARAKEET_MODEL_DIR` | - | Path to Parakeet ONNX model directory (required when `STT_PROVIDER=parakeet`) |
 | **STT (Whisper)** | | |
 | `WHISPER_MODEL` | *required* | Path to Whisper `.bin` model |
@@ -522,7 +523,7 @@ See [.env.example](.env.example) for complete environment variable reference.
 
 ### STT Provider Selection
 
-Seneschal supports two STT backends, selectable at runtime via `STT_PROVIDER`:
+Seneschal supports three STT backends, selectable at runtime via `STT_PROVIDER`:
 
 #### Whisper (default)
 
@@ -557,6 +558,29 @@ STT_PROVIDER=parakeet PARAKEET_MODEL_DIR=./models/parakeet-tdt-0.6b-v2 cargo run
 - Parakeet is batch-based: audio is buffered during speech, then transcribed on silence
 - ONNX Runtime adds ~200 MB to the binary size — feature-gated to keep default builds lean
 
+#### SFSpeechRecognizer (requires `--features speech`, macOS only)
+
+Uses Apple's on-device SFSpeechRecognizer via the `speech` crate. Leverages the ANE (Apple Neural Engine) for ultra-low latency (180-400ms end-of-utterance). No external models required.
+
+```bash
+# Build with speech support
+cargo build --release --features speech
+
+# Run with SFSpeechRecognizer
+STT_PROVIDER=speech cargo run
+```
+
+**Requirements:**
+- macOS 10.15+ (Catalina)
+- Microphone permission granted in System Settings → Privacy & Security → Microphone
+- On-device recognition available for the selected locale (~40+ languages supported)
+
+**Notes:**
+- Uses Apple's built-in speech detection (no Silero VAD needed)
+- Fully on-device — no internet connection required when `requiresOnDeviceRecognition` is enabled
+- 60-second task limit per utterance (Apple framework limitation)
+- Modern LLMs (Gemma-4, etc.) are robust to minor transcription imperfections
+
 ---
 
 ## Development
@@ -587,6 +611,9 @@ cargo build --release --features speaker
 
 # Build with Parakeet STT (ONNX Runtime, 25 languages)
 cargo build --release --features parakeet
+
+# Build with SFSpeechRecognizer STT (macOS on-device ANE)
+cargo build --release --features speech
 
 # Run with debug
 cargo run
@@ -723,6 +750,7 @@ See [LICENSE-VOICEBOT.md](LICENSE-VOICEBOT.md) for full legal details and licens
 Built with:
 - **Rust** - Systems programming language
 - **whisper-cpp-plus** - True streaming Whisper.cpp bindings for Rust with VAD support
+- **speech** - Safe Rust bindings for macOS SFSpeechRecognizer
 - **mlx-lm / oMLX** - Local LLM inference (Apple MLX framework)
 - **CPAL** - Cross-platform audio I/O
 - **Tokio** - Asynchronous runtime

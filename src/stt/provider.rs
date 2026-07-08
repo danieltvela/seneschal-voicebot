@@ -45,6 +45,23 @@ pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
                 );
             }
         }
-        other => bail!("Invalid STT_PROVIDER '{other}'. Supported values: whisper, parakeet"),
+        "speech" => {
+            #[cfg(feature = "speech")]
+            {
+                let provider =
+                    super::speech_recognizer::SpeechRecognizerSttProvider::new(whisper_cfg)?;
+                Ok(Box::new(provider))
+            }
+
+            #[cfg(not(feature = "speech"))]
+            {
+                bail!(
+                    "STT_PROVIDER=speech requested but the 'speech' feature is not enabled. Rebuild with: cargo run --features speech"
+                );
+            }
+        }
+        other => {
+            bail!("Invalid STT_PROVIDER '{other}'. Supported values: whisper, parakeet, speech")
+        }
     }
 }

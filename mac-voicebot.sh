@@ -22,7 +22,7 @@ fi
 
 # MACOSX_DEPLOYMENT_TARGET=15.0 WHISPER_SILENCE=1 RUST_LOG=debug exec cargo run --bin voicebot --features control,avspeech,tui --release -- "$@" 2> >(grep -vE "^(whisper_|ggml_)" >&2)
 
-RUST_LOG=debug exec cargo run --bin voicebot --features control,avspeech,tui,parakeet,remote --release -- "$@" 2> >(grep -vE "^(whisper_|ggml_)" >&2)
+RUST_LOG=debug STT_PROVIDER=speech exec cargo run --bin voicebot --features control,speech,avspeech,tui,parakeet,remote --release -- "$@" 2> >(grep -vE "^(whisper_|ggml_)" >&2)
 
 ## Tools and agent debugging
 # WHISPER_SILENCE=1 WHISPER_USE_COREML=1 RUST_LOG=pipeline=debug,llm=debug,tools=debug,agent=debug exec cargo run --release --bin voicebot --features avspeech,tui -- "$@" 2>/dev/null

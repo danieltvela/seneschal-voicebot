@@ -20,6 +20,7 @@ cargo clippy               # Lint
 
 # Feature flags
 cargo run --features kokoro     # Kokoro TTS backend
+cargo run --features speech     # macOS SFSpeechRecognizer STT
 cargo run --features tui        # Terminal UI
 cargo run --features remote     # WebSocket server
 cargo run --features speaker    # Speaker verification
@@ -101,7 +102,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 - **LLM→TTS streaming**: LLM tokens arrive via SSE and are buffered until a sentence boundary (`.`, `!`, `?`, `;`, `:`) — then that sentence is synthesized immediately. While sentence N plays, sentence N+1 is being generated and synthesized.
 - **Language**: English by default (`VOICEBOT_LANGUAGE=en`), Spanish supported. Affects Whisper hint and TTS voice. Parakeet auto-detects 25 languages.
 - **Barge-in**: Implemented via `CancellationToken` (tokio-util). User speech cancels the active pipeline.
-- **Pluggable STT**: Provider trait abstracts Whisper (whisper-cpp-plus) and Parakeet (ONNX). Both share Silero VAD. Select via `STT_PROVIDER` env var.
+- **Pluggable STT**: Provider trait abstracts Whisper (whisper-cpp-plus), Parakeet (ONNX), and macOS SFSpeechRecognizer (`speech` crate). Whisper and Parakeet share Silero VAD. SFSpeechRecognizer uses Apple's built-in speech detection. Select via `STT_PROVIDER` env var.
 - **Agent delegation**: Complex tasks can be delegated to external AI agents via the ACP protocol over stdio.
 - **Cold Path Memory (S-DREAM)**: Background memory consolidation with L1/L2 dual-layer architecture. L1 tracks context saturation (profile + memories section exceeding ~4000 chars) and emits `ProactiveEvent::L1Saturated` to trigger consolidation. L2 is the long-term archive of consolidated conversations stored as JSONL files with rotation (10 MB / 10000 lines per file). The `recover_historical_context` tool searches the L2 archive via FTS5 full-text search. The `[IMMUTABLE RULES]` prompt block injects non-negotiable behavioral constraints during consolidation cycles. See `src/dream/`.
 
@@ -112,7 +113,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 | Directory | Purpose | Key Files |
 |-----------|---------|-----------|
 | `src/audio/` | Audio pipeline: capture, VAD, resampling, playback | `audio_capture.rs`, `vad.rs`, `buffer.rs`, `audio_transform.rs`, `output.rs`, `speaker.rs`, `ambient_buffer.rs` |
-| `src/stt/` | Provider trait + Whisper + Parakeet implementations. 16kHz f32 mono. | `mod.rs` (WhisperSTTVAD), `whisper.rs` (DEPRECATED), `parakeet.rs` |
+| `src/stt/` | Provider trait + Whisper + Parakeet + SFSpeechRecognizer implementations. 16kHz f32 mono. | `mod.rs`, `whisper.rs` (DEPRECATED), `parakeet.rs`, `speech_recognizer.rs` |
 | `src/llm/` | HTTP client to `/v1/chat/completions`, session management | `client.rs` (OpenAIClient), `session.rs` (LlmSession), `manager.rs` |
 | `src/tts/` | `avspeech.rs` (macOS AVSpeech), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX) | `avspeech.rs`, `kokoro.rs`, `sentence.rs`, `piper.rs` (reference) |
 | `src/pipeline/` | Pipeline orchestration with FSM | `mod.rs`, `fsm.rs` (PipelineState), `llm_task.rs`, `tts_task.rs`, `sen_task.rs`, `frames.rs`, `state.rs`, `consolidation.rs` |
@@ -212,6 +213,7 @@ Read from `.env` (dotenvy loads automatically):
 |---------|---------|------------|--------------|
 | (none) | Core pipeline | whisper-cpp-plus, reqwest, sqlx | — |
 | `parakeet` | NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
+| `speech` | macOS SFSpeechRecognizer STT | speech | macOS only, microphone permission |
 | `kokoro` | Kokoro ONNX TTS | kokorox | `brew install espeak-ng` |
 | `tui` | Terminal UI | ratatui, crossterm | — |
 | `remote` | WebSocket server | axum, tower | — |
