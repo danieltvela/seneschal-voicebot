@@ -589,6 +589,10 @@ async fn async_main() -> Result<()> {
         config.noop_tool_instructions,
     );
 
+    // Register list_tasks tool for subtask tracking
+    tool_registry.register_list_tasks();
+    info!(target: "voicebot", "list_tasks tool enabled");
+
     let tools = Arc::new(std::sync::Mutex::new(tool_registry));
 
     // ── LLM session ───────────────────────────────────────────────────────────
@@ -825,6 +829,12 @@ async fn async_main() -> Result<()> {
         audio_output.channels()
     );
 
+    // ── Filler controller (background sound during tool calls) ─────────────────
+    let filler_controller = Arc::new(crate::audio::filler::FillerController::new(
+        Arc::clone(&audio_output),
+        tts_sample_rate,
+    ));
+
     // ── Audio capture ─────────────────────────────────────────────────────────
     // Try to start capture immediately; if no input device is available yet,
     // defer until the device monitor signals DeviceConnected.
@@ -970,6 +980,7 @@ async fn async_main() -> Result<()> {
         let shared_history_c = Arc::clone(&shared_history);
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
+        let filler_controller_c = Arc::clone(&filler_controller);
         #[cfg(feature = "tui")]
         let tui_tx_c = tui_tx.clone();
         #[cfg(feature = "control")]
@@ -991,6 +1002,7 @@ async fn async_main() -> Result<()> {
                 shared_history_c,
                 turn_commit_c,
                 proactive_tx_c,
+                filler_controller_c,
                 #[cfg(feature = "tui")]
                 tui_tx_c,
                 #[cfg(feature = "control")]
@@ -1221,478 +1233,479 @@ async fn async_main() -> Result<()> {
 
     let mut proactive_rx = proactive_rx;
     tokio::select! {
-        _ = async {
-            loop {
-                // Inject pending agent results when LLM is idle.
-                let llm_idle = !pipeline_state_rx.borrow().is_busy();
-                if llm_idle && current_agent_announcement.is_none()
-                    && let Some((task, result)) = pending_agent_results.pop_front()
-                {
-                    let notification = i18n::get_notification("background_task_done", &config.language)
-                        .replace("{task}", &task)
-                        .replace("{result}", &result);
-                    current_agent_announcement = Some((task, result));
-                    transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
-                }
-                if current_agent_announcement.is_some() && llm_idle {
-                    current_agent_announcement = None;
-                }
+            _ = async {
+                loop {
+                    // Inject pending agent results when LLM is idle.
+                    let llm_idle = !pipeline_state_rx.borrow().is_busy();
+                    if llm_idle && current_agent_announcement.is_none()
+                        && let Some((task, result)) = pending_agent_results.pop_front()
+                    {
+                        let notification = i18n::get_notification("background_task_done", &config.language)
+                            .replace("{task}", &task)
+                            .replace("{result}", &result);
+                        current_agent_announcement = Some((task, result));
+                        transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                    }
+                    if current_agent_announcement.is_some() && llm_idle {
+                        current_agent_announcement = None;
+                    }
 
-                let chunk: AudioChunk = tokio::select! {
-                    result = rx.recv() => match result {
-                        Ok(c) => c,
-                        Err(e) => {
-                            error!(target: "audio", "Audio channel closed: {}", e);
-                            #[cfg(feature = "tui")]
-                            tui_tx.send(tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
-                            break;
-                        }
-                    },
-                    Some(event) = proactive_rx.recv() => {
-                        match event {
-                            ProactiveEvent::AgentResult { task, result, tool_call_id, .. } => {
-                                if let Some(id) = tool_call_id {
-                                    let payload = format!(
-                                        "[Resultado de la tarea en segundo plano '{task}']\n{result}"
-                                    );
-                                    let role = config.llm_injection_role.clone();
-                                    let sys_msg = serde_json::json!({
-                                        "role": role,
-                                        "content": payload,
-                                    });
-                                    {
-                                        let mut s = llm_session.lock().unwrap();
-                                        s.add_tool_exchange(vec![sys_msg.clone()]);
-                                    }
-                                    {
-                                        let db_c = db.clone();
-                                        let exchange = vec![sys_msg];
-                                        tokio::spawn(async move {
-                                            if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
-                                                warn!(target: "db", "Failed to save system tool_result exchange: {}", e);
-                                            }
+                    let chunk: AudioChunk = tokio::select! {
+                        result = rx.recv() => match result {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!(target: "audio", "Audio channel closed: {}", e);
+                                #[cfg(feature = "tui")]
+                                tui_tx.send(tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
+                                break;
+                            }
+                        },
+                        Some(event) = proactive_rx.recv() => {
+                            match event {
+    ProactiveEvent::AgentResult { task, result, tool_call_id, .. } => {
+                                    // Stop background processing sound
+                                    filler_controller.stop();
+                                    if let Some(id) = tool_call_id {
+                                        // Inject as proper tool-role message to satisfy OpenAI API contract:
+                                        // assistant(tool_calls) must be followed by tool(tool_call_id).
+                                        let tool_msg = serde_json::json!({
+                                            "role": "tool",
+                                            "tool_call_id": id,
+                                            "content": result,
                                         });
-                                    }
-                                    // Channel buffers this if llm_task is busy; it will pick it up when idle.
-                                    transcript_tx.send(PipelineFrame::AgentResult {
-                                        task,
-                                        result,
-                                        tool_call_id: Some(id),
-                                    }).await.ok();
-                                } else if !pipeline_state_rx.borrow().is_busy() {
-                                    pending_agent_results.push_front((task, result));
-                                } else {
-                                    pending_agent_results.push_back((task, result));
-                                }
-                            }
-                            ProactiveEvent::InferenceDaemon { .. } => {}
-                            ProactiveEvent::L1Saturated { total_chars, threshold } => {
-                                let prompt = i18n::get_notification("l1_saturated", &config.language)
-                                    .replace("{total_chars}", &total_chars.to_string())
-                                    .replace("{threshold}", &threshold.to_string());
-                                transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
-                            }
-                            ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
-                                if pipeline_state_rx.borrow().is_busy() {
-                                    events.barge_in_tx.send(0).ok();
-                                    if let Some(announcement) = current_agent_announcement.take() {
-                                        pending_agent_results.push_front(announcement);
+                                        {
+                                            let mut s = llm_session.lock().unwrap();
+                                            s.add_tool_exchange(vec![tool_msg.clone()]);
+                                        }
+                                        {
+                                            let db_c = db.clone();
+                                            let exchange = vec![tool_msg];
+                                            tokio::spawn(async move {
+                                                if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
+                                                    warn!(target: "db", "Failed to save tool_result exchange: {}", e);
+                                                }
+                                            });
+                                        }
+                                        // Channel buffers this if llm_task is busy; it will pick it up when idle.
+                                        transcript_tx.send(PipelineFrame::AgentResult {
+                                            task,
+                                            result,
+                                            tool_call_id: Some(id),
+                                        }).await.ok();
+                                    } else if !pipeline_state_rx.borrow().is_busy() {
+                                        pending_agent_results.push_front((task, result));
+                                    } else {
+                                        pending_agent_results.push_back((task, result));
                                     }
                                 }
-                                let entry = PendingInteractionEntry {
-                                    task_id,
-                                    agent_name,
-                                    server_request_id: 0,
-                                    question,
-                                    options,
-                                    response_tx,
-                                };
-                                pending_agent_questions.push_back(entry);
-                                let opts_str = match pending_agent_questions.front() {
-                                    Some(entry) => entry.options.join(" / "),
-                                    None => String::new(),
-                                };
-                                let prompt = i18n::get_notification("acp_permission", &config.language)
-                                    .replace("{question}", &pending_agent_questions.front().map(|e| e.question.clone()).unwrap_or_default())
-                                    .replace("{opts_str}", &opts_str);
-                                transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
-                            }
-                            ProactiveEvent::PluginSwitch { .. } => {
-                                // No-op: handled via dedicated plugin_switch_rx channel
-                            }
-                            ProactiveEvent::DeviceConnected => {
-                                // Audio device connected — start capture, swap output, send greeting.
-                                info!(target: "audio", "DeviceConnected received — starting audio pipeline");
-                                match AudioCapture::new(config.audio_input_device.as_deref()) {
-                                    Ok(ac) => {
-                                        source_sample_rate = ac.sample_rate();
-                                        speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
-                                        info!(target: "audio", "Audio input connected: {}Hz", source_sample_rate);
-                                        match ac.start_capture(tx.clone(), samples_per_chunk) {
-                                            Ok(stream) => {
-                                                capture_stream = Some(stream);
-                                            }
-                                            Err(e) => {
-                                                error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
-                                            }
+                                ProactiveEvent::InferenceDaemon { .. } => {}
+                                ProactiveEvent::L1Saturated { total_chars, threshold } => {
+                                    let prompt = i18n::get_notification("l1_saturated", &config.language)
+                                        .replace("{total_chars}", &total_chars.to_string())
+                                        .replace("{threshold}", &threshold.to_string());
+                                    transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
+                                }
+                                ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
+                                    if pipeline_state_rx.borrow().is_busy() {
+                                        events.barge_in_tx.send(0).ok();
+                                        if let Some(announcement) = current_agent_announcement.take() {
+                                            pending_agent_results.push_front(announcement);
                                         }
                                     }
-                                    Err(e) => {
-                                        error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
-                                    }
-                                }
-                                // Swap output device (spawn_blocking — may wait for in-flight playback)
-                                let out = Arc::clone(&audio_output);
-                                let out_name = config.audio_output_device.clone();
-                                tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
-                                    .await
-                                    .ok();
-                                // Send startup greeting
-                                let now = chrono::Local::now();
-                                let time_str = now.format("%H:%M").to_string();
-                                let date_str = now.format("%d/%m/%Y").to_string();
-                                let notification = i18n::get_notification("startup", &config.language)
-                                    .replace("{time_str}", &time_str)
-                                    .replace("{date_str}", &date_str);
-                                transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
-                            }
-                        }
-                        continue;
-                    },
-                    Some(switch_event) = plugin_switch_rx.recv() => {
-                        // Queue switch event — apply between turns only
-                        pending_plugin_switch = Some(switch_event);
-                        continue;
-                    },
-                };
-
-                // Process pending plugin switch when pipeline is idle
-                if !pipeline_state_rx.borrow().is_busy()
-                    && let Some(switch_event) = pending_plugin_switch.take()
-                {
-                    match switch_event {
-                        PluginSwitchEvent::Activate { plugin_id } => {
-                            if let Some(activated) = plugin_manager.activate(
-                                &plugin_id,
-                                OriginalConfigSnapshot::from_config(&config),
-                            ) {
-                                // Cleanup previous plugin's tools
-                                for name in &activated.previous_tool_names {
-                                    tools.lock().unwrap().unregister(name);
-                                }
-                                for name in &activated.previous_agent_names {
-                                    tools.lock().unwrap().unregister(name);
-                                }
-                                // Drop previous MCP servers (they die when handle is dropped)
-                                plugin_runtime_spawned_mcp = None;
-
-                                // Spawn new MCP servers and register tools
-                                if !activated.mcp_servers.is_empty() {
-                                    let (clients, proxies, names) =
-                                        SpawnedMcpServers::spawn_clients(&activated.mcp_servers).await;
-                                    let spawned = {
-                                        let mut tools_guard = tools.lock().unwrap();
-                                        SpawnedMcpServers::from_parts(
-                                            clients,
-                                            proxies,
-                                            names,
-                                            &mut tools_guard,
-                                        )
+                                    let entry = PendingInteractionEntry {
+                                        task_id,
+                                        agent_name,
+                                        server_request_id: 0,
+                                        question,
+                                        options,
+                                        response_tx,
                                     };
-                                    plugin_runtime_spawned_mcp = Some(spawned);
+                                    pending_agent_questions.push_back(entry);
+                                    let opts_str = match pending_agent_questions.front() {
+                                        Some(entry) => entry.options.join(" / "),
+                                        None => String::new(),
+                                    };
+                                    let prompt = i18n::get_notification("acp_permission", &config.language)
+                                        .replace("{question}", &pending_agent_questions.front().map(|e| e.question.clone()).unwrap_or_default())
+                                        .replace("{opts_str}", &opts_str);
+                                    transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
                                 }
-
-                                // Rebuild system prompt with new plugin sections
-                                let p_sections = build_plugin_prompt_section(&[&activated.prompt]);
-                                let tool_sec = tools.lock().unwrap().system_prompt_section();
-                                let new_sys_prompt = build_system_prompt(
-                                    &config.llm_system_prompt,
-                                    &config.wake_word,
-                                    &profile_facts,
-                                    &memories,
-                                    &agent_section,
-                                    &tool_sec,
-                                    &immutable_rules,
-                                    &p_sections,
-                                );
-                                llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
-                                plugin_runtime_active_id = Some(plugin_id);
-
-                                info!(target: "pipeline", plugin = %activated.id, "Plugin activated between turns");
+                                ProactiveEvent::PluginSwitch { .. } => {
+                                    // No-op: handled via dedicated plugin_switch_rx channel
+                                }
+                                ProactiveEvent::DeviceConnected => {
+                                    // Audio device connected — start capture, swap output, send greeting.
+                                    info!(target: "audio", "DeviceConnected received — starting audio pipeline");
+                                    match AudioCapture::new(config.audio_input_device.as_deref()) {
+                                        Ok(ac) => {
+                                            source_sample_rate = ac.sample_rate();
+                                            speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
+                                            info!(target: "audio", "Audio input connected: {}Hz", source_sample_rate);
+                                            match ac.start_capture(tx.clone(), samples_per_chunk) {
+                                                Ok(stream) => {
+                                                    capture_stream = Some(stream);
+                                                }
+                                                Err(e) => {
+                                                    error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
+                                        }
+                                    }
+                                    // Swap output device (spawn_blocking — may wait for in-flight playback)
+                                    let out = Arc::clone(&audio_output);
+                                    let out_name = config.audio_output_device.clone();
+                                    tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
+                                        .await
+                                        .ok();
+                                    // Send startup greeting
+                                    let now = chrono::Local::now();
+                                    let time_str = now.format("%H:%M").to_string();
+                                    let date_str = now.format("%d/%m/%Y").to_string();
+                                    let notification = i18n::get_notification("startup", &config.language)
+                                        .replace("{time_str}", &time_str)
+                                        .replace("{date_str}", &date_str);
+                                    transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                                }
                             }
-                        }
-                        PluginSwitchEvent::Deactivate => {
-                            if let Some(deactivated) = plugin_manager.deactivate(
-                                OriginalConfigSnapshot::from_config(&config),
-                            ) {
-                                // Unregister plugin tools
-                                for name in &deactivated.tool_names {
-                                    tools.lock().unwrap().unregister(name);
-                                }
-                                for name in &deactivated.agent_names {
-                                    tools.lock().unwrap().unregister(name);
-                                }
-                                // Drop MCP servers
-                                plugin_runtime_spawned_mcp = None;
+                            continue;
+                        },
+                        Some(switch_event) = plugin_switch_rx.recv() => {
+                            // Queue switch event — apply between turns only
+                            pending_plugin_switch = Some(switch_event);
+                            continue;
+                        },
+                    };
 
-                                // Rebuild system prompt without plugin sections
-                                let empty_sections = PluginPromptSections::default();
-                                let tool_sec = tools.lock().unwrap().system_prompt_section();
-                                let new_sys_prompt = build_system_prompt(
-                                    &config.llm_system_prompt,
-                                    &config.wake_word,
-                                    &profile_facts,
-                                    &memories,
-                                    &agent_section,
-                                    &tool_sec,
-                                    &immutable_rules,
-                                    &empty_sections,
-                                );
-                                llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+                    // Process pending plugin switch when pipeline is idle
+                    if !pipeline_state_rx.borrow().is_busy()
+                        && let Some(switch_event) = pending_plugin_switch.take()
+                    {
+                        match switch_event {
+                            PluginSwitchEvent::Activate { plugin_id } => {
+                                if let Some(activated) = plugin_manager.activate(
+                                    &plugin_id,
+                                    OriginalConfigSnapshot::from_config(&config),
+                                ) {
+                                    // Cleanup previous plugin's tools
+                                    for name in &activated.previous_tool_names {
+                                        tools.lock().unwrap().unregister(name);
+                                    }
+                                    for name in &activated.previous_agent_names {
+                                        tools.lock().unwrap().unregister(name);
+                                    }
+                                    // Drop previous MCP servers (they die when handle is dropped)
+                                    plugin_runtime_spawned_mcp = None;
 
-                                info!(target: "pipeline", plugin = %deactivated.id, "Plugin deactivated between turns");
+                                    // Spawn new MCP servers and register tools
+                                    if !activated.mcp_servers.is_empty() {
+                                        let (clients, proxies, names) =
+                                            SpawnedMcpServers::spawn_clients(&activated.mcp_servers).await;
+                                        let spawned = {
+                                            let mut tools_guard = tools.lock().unwrap();
+                                            SpawnedMcpServers::from_parts(
+                                                clients,
+                                                proxies,
+                                                names,
+                                                &mut tools_guard,
+                                            )
+                                        };
+                                        plugin_runtime_spawned_mcp = Some(spawned);
+                                    }
+
+                                    // Rebuild system prompt with new plugin sections
+                                    let p_sections = build_plugin_prompt_section(&[&activated.prompt]);
+                                    let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                    let new_sys_prompt = build_system_prompt(
+                                        &config.llm_system_prompt,
+                                        &config.wake_word,
+                                        &profile_facts,
+                                        &memories,
+                                        &agent_section,
+                                        &tool_sec,
+                                        &immutable_rules,
+                                        &p_sections,
+                                    );
+                                    llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+                                    plugin_runtime_active_id = Some(plugin_id);
+
+                                    info!(target: "pipeline", plugin = %activated.id, "Plugin activated between turns");
+                                }
+                            }
+                            PluginSwitchEvent::Deactivate => {
+                                if let Some(deactivated) = plugin_manager.deactivate(
+                                    OriginalConfigSnapshot::from_config(&config),
+                                ) {
+                                    // Unregister plugin tools
+                                    for name in &deactivated.tool_names {
+                                        tools.lock().unwrap().unregister(name);
+                                    }
+                                    for name in &deactivated.agent_names {
+                                        tools.lock().unwrap().unregister(name);
+                                    }
+                                    // Drop MCP servers
+                                    plugin_runtime_spawned_mcp = None;
+
+                                    // Rebuild system prompt without plugin sections
+                                    let empty_sections = PluginPromptSections::default();
+                                    let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                    let new_sys_prompt = build_system_prompt(
+                                        &config.llm_system_prompt,
+                                        &config.wake_word,
+                                        &profile_facts,
+                                        &memories,
+                                        &agent_section,
+                                        &tool_sec,
+                                        &immutable_rules,
+                                        &empty_sections,
+                                    );
+                                    llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+
+                                    info!(target: "pipeline", plugin = %deactivated.id, "Plugin deactivated between turns");
+                                }
                             }
                         }
                     }
-                }
 
-                let mono: Vec<f32> = if chunk.channels > 1 {
-                    chunk.samples
-                        .chunks(chunk.channels as usize)
-                        .map(|f| f.iter().sum::<f32>() / chunk.channels as f32)
-                        .collect()
-                } else {
-                    chunk.samples
-                };
-                let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
+                    let mono: Vec<f32> = if chunk.channels > 1 {
+                        chunk.samples
+                            .chunks(chunk.channels as usize)
+                            .map(|f| f.iter().sum::<f32>() / chunk.channels as f32)
+                            .collect()
+                    } else {
+                        chunk.samples
+                    };
+                    let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
 
-                stt_provider.process_audio(&mono, &stt_tx).await.ok();
+                    stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
-                while let Ok(event) = stt_rx.try_recv() {
-                    match event {
-                        SpeechEvent::SpeechStart => {
-                            t_speech_start = Some(Instant::now());
-                            info!(target: "performance", "[+0ms] SpeechStart");
-                            #[cfg(feature = "tui")]
-                            tui_tx.send(tui::events::TuiEvent::StateChange(
-                                tui::events::PipelineState::Listening,
-                            )).ok();
-                            *last_speech_at.lock().unwrap() = Instant::now();
+                    while let Ok(event) = stt_rx.try_recv() {
+                        match event {
+                            SpeechEvent::SpeechStart => {
+                                t_speech_start = Some(Instant::now());
+                                info!(target: "performance", "[+0ms] SpeechStart");
+                                #[cfg(feature = "tui")]
+                                tui_tx.send(tui::events::TuiEvent::StateChange(
+                                    tui::events::PipelineState::Listening,
+                                )).ok();
+                                *last_speech_at.lock().unwrap() = Instant::now();
 
-                            info!(target: "pipeline", "SpeechStart — firing BARGE_IN");
-                            events.barge_in_tx.send(utterance_epoch.load(Ordering::SeqCst)).ok();
-                            if let Some(announcement) = current_agent_announcement.take() {
-                                info!(target: "pipeline", "SpeechStart interrupted agent announcement — re-queueing");
-                                pending_agent_results.push_front(announcement);
+                                info!(target: "pipeline", "SpeechStart — firing BARGE_IN");
+                                events.barge_in_tx.send(utterance_epoch.load(Ordering::SeqCst)).ok();
+                                if let Some(announcement) = current_agent_announcement.take() {
+                                    info!(target: "pipeline", "SpeechStart interrupted agent announcement — re-queueing");
+                                    pending_agent_results.push_front(announcement);
+                                }
+
+                                let current_commits = turn_commit_counter.load(Ordering::SeqCst);
+                                if current_commits > last_cleared_commit {
+                                    speech_buffer.clear();
+                                    last_cleared_commit = current_commits;
+                                }
+                                speech_buffer_start_offset = speech_buffer.sample_count();
+                                speech_buffer.push(&mono);
+
+                                utterance_epoch.fetch_add(1, Ordering::SeqCst);
                             }
-
-                            let current_commits = turn_commit_counter.load(Ordering::SeqCst);
-                            if current_commits > last_cleared_commit {
-                                speech_buffer.clear();
-                                last_cleared_commit = current_commits;
+                            SpeechEvent::Speech(partial_text) => {
+                                speech_buffer.push(&mono);
+                                debug!(target: "stt", "Partial: {}", partial_text);
                             }
-                            speech_buffer_start_offset = speech_buffer.sample_count();
-                            speech_buffer.push(&mono);
+                            SpeechEvent::SpeechEnd(quality) => {
+                                speech_buffer.push(&mono);
 
-                            utterance_epoch.fetch_add(1, Ordering::SeqCst);
-                        }
-                        SpeechEvent::Speech(partial_text) => {
-                            speech_buffer.push(&mono);
-                            debug!(target: "stt", "Partial: {}", partial_text);
-                        }
-                        SpeechEvent::SpeechEnd(quality) => {
-                            speech_buffer.push(&mono);
-
-                            // NoSpeechGate: reject non-speech transcriptions
-                            if no_speech_gate.should_reject(&quality) {
-                                debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
-                                continue;
-                            }
-
-                            let segment_duration_ms = t_speech_start.as_ref()
-                                .map(|t| t.elapsed().as_millis() as u32)
-                                .unwrap_or(0);
-
-                            if segment_duration_ms < MIN_SPEECH_DURATION_MS {
-                                debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
-                                continue;
-                            }
-
-                            let current_commits = turn_commit_counter.load(Ordering::SeqCst);
-                            if current_commits > last_cleared_commit {
-                                last_cleared_commit = current_commits;
-                            }
-                            let audio = speech_buffer.get_samples_from(speech_buffer_start_offset);
-                            let duration_ms = audio.len() as u32 * 1000 / source_sample_rate;
-
-                            info!(target: "pipeline", "Speech: {}ms (segment {}ms)", duration_ms, segment_duration_ms);
-
-                            let mut segment_text = quality.text;
-
-                            #[cfg(feature = "tui")]
-                            tui_tx.send(tui::events::TuiEvent::StateChange(
-                                tui::events::PipelineState::Transcribing,
-                            )).ok();
-
-                            let vad_elapsed = t_speech_start.take()
-                                .map(|t| t.elapsed().as_millis()).unwrap_or(0);
-                            info!(target: "performance", "[+{}ms] VAD end ({}ms speech)", vad_elapsed, duration_ms);
-                            *t_vad_end.lock().unwrap() = Some(Instant::now());
-
-                            *last_speech_at.lock().unwrap() = Instant::now();
-
-                            let mut is_main_speaker = true;
-                            let mut speaker_label = "Usuario".to_string();
-
-                            if let Some(analyzer) = identity_analyzer.clone() {
-                                let audio_c = audio.clone();
-                                let streak_c = Arc::clone(&non_user_streak);
-                                let mode_c = Arc::clone(&conv_mode);
-                                let amb_trigger = config.speaker_ambient_trigger;
-                                let amb_buf_c = Arc::clone(&ambient_buffer);
-                                let stt_cfg = config.clone();
-                                let sample_rate = config.sample_rate;
-                                let label = speaker_label.clone();
-
-                                tokio::spawn(async move {
-                                    let mut analyzer = analyzer.lock().unwrap();
-                                    let result = analyzer.verify(sample_rate, &audio_c);
-                                    let is_main = result.is_main_speaker;
-                                    let speaker_label = result.speaker_label;
-
-                                    if !is_main {
-                                        let mut streak = streak_c.lock().unwrap();
-                                        *streak = streak.saturating_add(1);
-                                        if *streak >= amb_trigger {
-                                            let mut mode = mode_c.lock().unwrap();
-                                            if *mode == ConversationMode::Active {
-                                                *mode = ConversationMode::Ambient;
-                                                drop(mode);
-                                                info!(
-                                                    target: "pipeline",
-                                                    "Ambient mode: {} consecutive non-user voices",
-                                                    *streak
-                                                );
-                                            }
-                                        }
-                                        let t0 = Instant::now();
-                                        if let Ok(provider) = create_provider(&stt_cfg)
-                                            && let Ok(quality) = provider.transcribe_complete(&audio_c)
-                                            && !quality.text.is_empty()
-                                        {
-                                            amb_buf_c.lock().unwrap().push(speaker_label.clone(), quality.text.clone());
-                                            debug!(
-                                                target: "pipeline",
-                                                "Ambient buffer ← {speaker_label}: {} ({}ms)",
-                                                quality.text,
-                                                t0.elapsed().as_millis()
-                                            );
-                                        }
-                                    } else {
-                                        *streak_c.lock().unwrap() = 0;
-                                    }
-                                });
-                            }
-
-                            let mode_snapshot = conv_mode.lock().unwrap().clone();
-                            let ambient_locked = mode_snapshot == ConversationMode::AmbientLocked;
-                            let ambient_auto   = mode_snapshot == ConversationMode::Ambient;
-                            let wake_word_check = config.wake_word.clone();
-
-                            // ── ACP permission gate (FIFO queue) ──────────────────
-                            if let Some(entry) = pending_agent_questions.pop_front() {
-                                let audio_for_task = audio.clone();
-                                let stt_cfg = config.clone();
-
-                                info!(target: "acp", "Answering pending question for task={} agent={}", entry.task_id, entry.agent_name);
-
-                                tokio::spawn(async move {
-                                    let t0 = Instant::now();
-                                    let answer = if let Ok(provider) = create_provider(&stt_cfg) {
-                                        provider.transcribe_complete(&audio_for_task).map(|q| q.text).unwrap_or_default()
-                                    } else {
-                                        String::new()
-                                    };
-                                    info!(target: "acp", "STT for permission question took {}ms", t0.elapsed().as_millis());
-                                    let outcome = map_answer_to_outcome(&answer);
-                                    info!(target: "acp", "Permission answer: {:?} → {}", answer, outcome);
-                                    let _ = entry.response_tx.send(outcome);
-                                });
-                                continue;
-                            }
-
-                            let stt_elapsed_ms = segment_duration_ms as u128;
-                            info!(
-                                target: "performance",
-                                "[+{}ms] STT transcription complete (audio={}samples, {}chars)",
-                                stt_elapsed_ms, audio.len(), segment_text.len()
-                            );
-                            debug!(target: "stt", "Segment final: {}", segment_text);
-
-                            if segment_text.trim().is_empty() {
-                                debug!(target: "pipeline", "Empty transcription — skipping");
-                                continue;
-                            }
-
-                            let mut final_text = segment_text;
-
-                            if ambient_locked {
-                                let lower = final_text.to_lowercase();
-                                if !lower.contains(&wake_word_check.to_lowercase()) {
-                                    ambient_buffer.lock().unwrap()
-                                        .push("Usuario".to_string(), final_text.clone());
-                                    debug!(target: "pipeline", "Ambient (locked): no wake word — buffered");
+                                // NoSpeechGate: reject non-speech transcriptions
+                                if no_speech_gate.should_reject(&quality) {
+                                    debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
                                     continue;
                                 }
-                                info!(target: "pipeline", "Ambient (locked): wake word detected");
-                            } else if ambient_auto {
-                                *conv_mode.lock().unwrap() = ConversationMode::Active;
-                                info!(target: "pipeline", "Auto-ambient: main user spoke — returning Active");
-                            }
 
-                            // Inject ambient context if query contains a referential.
-                            final_text = {
-                                let buf = ambient_buffer.lock().unwrap();
-                                if crate::audio::ambient_buffer::has_referential(&final_text) {
-                                    if let Some(ctx) = buf.format_context() {
-                                        format!("{ctx}\n---\n{final_text}")
+                                let segment_duration_ms = t_speech_start.as_ref()
+                                    .map(|t| t.elapsed().as_millis() as u32)
+                                    .unwrap_or(0);
+
+                                if segment_duration_ms < MIN_SPEECH_DURATION_MS {
+                                    debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
+                                    continue;
+                                }
+
+                                let current_commits = turn_commit_counter.load(Ordering::SeqCst);
+                                if current_commits > last_cleared_commit {
+                                    last_cleared_commit = current_commits;
+                                }
+                                let audio = speech_buffer.get_samples_from(speech_buffer_start_offset);
+                                let duration_ms = audio.len() as u32 * 1000 / source_sample_rate;
+
+                                info!(target: "pipeline", "Speech: {}ms (segment {}ms)", duration_ms, segment_duration_ms);
+
+                                let mut segment_text = quality.text;
+
+                                #[cfg(feature = "tui")]
+                                tui_tx.send(tui::events::TuiEvent::StateChange(
+                                    tui::events::PipelineState::Transcribing,
+                                )).ok();
+
+                                let vad_elapsed = t_speech_start.take()
+                                    .map(|t| t.elapsed().as_millis()).unwrap_or(0);
+                                info!(target: "performance", "[+{}ms] VAD end ({}ms speech)", vad_elapsed, duration_ms);
+                                *t_vad_end.lock().unwrap() = Some(Instant::now());
+
+                                *last_speech_at.lock().unwrap() = Instant::now();
+
+                                let mut is_main_speaker = true;
+                                let mut speaker_label = "Usuario".to_string();
+
+                                if let Some(analyzer) = identity_analyzer.clone() {
+                                    let audio_c = audio.clone();
+                                    let streak_c = Arc::clone(&non_user_streak);
+                                    let mode_c = Arc::clone(&conv_mode);
+                                    let amb_trigger = config.speaker_ambient_trigger;
+                                    let amb_buf_c = Arc::clone(&ambient_buffer);
+                                    let stt_cfg = config.clone();
+                                    let sample_rate = config.sample_rate;
+                                    let label = speaker_label.clone();
+
+                                    tokio::spawn(async move {
+                                        let mut analyzer = analyzer.lock().unwrap();
+                                        let result = analyzer.verify(sample_rate, &audio_c);
+                                        let is_main = result.is_main_speaker;
+                                        let speaker_label = result.speaker_label;
+
+                                        if !is_main {
+                                            let mut streak = streak_c.lock().unwrap();
+                                            *streak = streak.saturating_add(1);
+                                            if *streak >= amb_trigger {
+                                                let mut mode = mode_c.lock().unwrap();
+                                                if *mode == ConversationMode::Active {
+                                                    *mode = ConversationMode::Ambient;
+                                                    drop(mode);
+                                                    info!(
+                                                        target: "pipeline",
+                                                        "Ambient mode: {} consecutive non-user voices",
+                                                        *streak
+                                                    );
+                                                }
+                                            }
+                                            let t0 = Instant::now();
+                                            if let Ok(provider) = create_provider(&stt_cfg)
+                                                && let Ok(quality) = provider.transcribe_complete(&audio_c)
+                                                && !quality.text.is_empty()
+                                            {
+                                                amb_buf_c.lock().unwrap().push(speaker_label.clone(), quality.text.clone());
+                                                debug!(
+                                                    target: "pipeline",
+                                                    "Ambient buffer ← {speaker_label}: {} ({}ms)",
+                                                    quality.text,
+                                                    t0.elapsed().as_millis()
+                                                );
+                                            }
+                                        } else {
+                                            *streak_c.lock().unwrap() = 0;
+                                        }
+                                    });
+                                }
+
+                                let mode_snapshot = conv_mode.lock().unwrap().clone();
+                                let ambient_locked = mode_snapshot == ConversationMode::AmbientLocked;
+                                let ambient_auto   = mode_snapshot == ConversationMode::Ambient;
+                                let wake_word_check = config.wake_word.clone();
+
+                                // ── ACP permission gate (FIFO queue) ──────────────────
+                                if let Some(entry) = pending_agent_questions.pop_front() {
+                                    let audio_for_task = audio.clone();
+                                    let stt_cfg = config.clone();
+
+                                    info!(target: "acp", "Answering pending question for task={} agent={}", entry.task_id, entry.agent_name);
+
+                                    tokio::spawn(async move {
+                                        let t0 = Instant::now();
+                                        let answer = if let Ok(provider) = create_provider(&stt_cfg) {
+                                            provider.transcribe_complete(&audio_for_task).map(|q| q.text).unwrap_or_default()
+                                        } else {
+                                            String::new()
+                                        };
+                                        info!(target: "acp", "STT for permission question took {}ms", t0.elapsed().as_millis());
+                                        let outcome = map_answer_to_outcome(&answer);
+                                        info!(target: "acp", "Permission answer: {:?} → {}", answer, outcome);
+                                        let _ = entry.response_tx.send(outcome);
+                                    });
+                                    continue;
+                                }
+
+                                let stt_elapsed_ms = segment_duration_ms as u128;
+                                info!(
+                                    target: "performance",
+                                    "[+{}ms] STT transcription complete (audio={}samples, {}chars)",
+                                    stt_elapsed_ms, audio.len(), segment_text.len()
+                                );
+                                debug!(target: "stt", "Segment final: {}", segment_text);
+
+                                if segment_text.trim().is_empty() {
+                                    debug!(target: "pipeline", "Empty transcription — skipping");
+                                    continue;
+                                }
+
+                                let mut final_text = segment_text;
+
+                                if ambient_locked {
+                                    let lower = final_text.to_lowercase();
+                                    if !lower.contains(&wake_word_check.to_lowercase()) {
+                                        ambient_buffer.lock().unwrap()
+                                            .push("Usuario".to_string(), final_text.clone());
+                                        debug!(target: "pipeline", "Ambient (locked): no wake word — buffered");
+                                        continue;
+                                    }
+                                    info!(target: "pipeline", "Ambient (locked): wake word detected");
+                                } else if ambient_auto {
+                                    *conv_mode.lock().unwrap() = ConversationMode::Active;
+                                    info!(target: "pipeline", "Auto-ambient: main user spoke — returning Active");
+                                }
+
+                                // Inject ambient context if query contains a referential.
+                                final_text = {
+                                    let buf = ambient_buffer.lock().unwrap();
+                                    if crate::audio::ambient_buffer::has_referential(&final_text) {
+                                        if let Some(ctx) = buf.format_context() {
+                                            format!("{ctx}\n---\n{final_text}")
+                                        } else {
+                                            final_text
+                                        }
                                     } else {
                                         final_text
                                     }
-                                } else {
-                                    final_text
+                                };
+
+                                if final_text.trim().is_empty() {
+                                    debug!(target: "pipeline", "Empty after context injection — skipping");
+                                    continue;
                                 }
-                            };
 
-                            if final_text.trim().is_empty() {
-                                debug!(target: "pipeline", "Empty after context injection — skipping");
-                                continue;
+                                if let Some(t0) = t_vad_end.lock().unwrap().as_ref() {
+                                    info!(
+                                        target: "performance",
+                                        "[+{}ms] STT done → transcript channel",
+                                        t0.elapsed().as_millis()
+                                    );
+                                }
+                                let uid = utterance_epoch.load(Ordering::SeqCst);
+                                transcript_tx.send(PipelineFrame::TranscriptReady {
+                                    utterance_id: uid,
+                                    text: final_text,
+                                }).await.ok();
                             }
-
-                            if let Some(t0) = t_vad_end.lock().unwrap().as_ref() {
-                                info!(
-                                    target: "performance",
-                                    "[+{}ms] STT done → transcript channel",
-                                    t0.elapsed().as_millis()
-                                );
-                            }
-                            let uid = utterance_epoch.load(Ordering::SeqCst);
-                            transcript_tx.send(PipelineFrame::TranscriptReady {
-                                utterance_id: uid,
-                                text: final_text,
-                            }).await.ok();
                         }
                     }
                 }
+            } => {}
+            _ = tokio::signal::ctrl_c() => {
+                info!(target: "voicebot", "Shutting down...");
+                events.barge_in_tx.send(0).ok();
+                play_cancel.store(true, Ordering::SeqCst);
+                shutdown.store(true, Ordering::SeqCst);
             }
-        } => {}
-        _ = tokio::signal::ctrl_c() => {
-            info!(target: "voicebot", "Shutting down...");
-            events.barge_in_tx.send(0).ok();
-            play_cancel.store(true, Ordering::SeqCst);
-            shutdown.store(true, Ordering::SeqCst);
         }
-    }
 
     Ok(())
 }

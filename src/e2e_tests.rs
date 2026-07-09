@@ -205,6 +205,10 @@ impl E2eHarness {
             let history_c = Arc::clone(&self.shared_history);
             let turn_c = Arc::clone(&turn_commit);
             let sid = self.session_id;
+            let filler_c = Arc::new(crate::audio::filler::FillerController::new(
+                Arc::clone(&self.audio_output),
+                sample_rate,
+            ));
             #[cfg(feature = "tui")]
             let tui_tx_c = tokio::sync::mpsc::unbounded_channel::<crate::tui::events::TuiEvent>().0;
             #[cfg(feature = "control")]
@@ -226,6 +230,7 @@ impl E2eHarness {
                     history_c,
                     turn_c,
                     proactive_tx,
+                    filler_c,
                     #[cfg(feature = "tui")]
                     tui_tx_c,
                     #[cfg(feature = "control")]

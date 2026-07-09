@@ -55,6 +55,10 @@ impl Tool for RunShellTool {
         true
     }
 
+    fn preamble(&self) -> Option<&'static str> {
+        Some("Ejecutando el comando.")
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

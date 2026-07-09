@@ -11,6 +11,7 @@ pub mod read_file;
 pub mod recover_historical_context;
 pub mod run_agent;
 pub mod run_shell;
+pub mod subtask;
 pub mod switch_plugin;
 pub mod take_screenshot;
 pub mod web_search;
@@ -38,6 +39,7 @@ pub use run_agent::{
     AcpWriter, ActiveTask, JsonRpcMessage, PendingInteractionEntry, RunAgentTool, format_history,
 };
 pub use run_shell::RunShellTool;
+pub use subtask::{ListTasksTool, SubtaskTracker};
 pub use switch_plugin::SwitchPluginTool;
 pub use take_screenshot::TakeScreenshotTool;
 pub use web_search::WebSearchTool;
@@ -56,6 +58,12 @@ pub trait Tool: Send + Sync {
     /// result via ProactiveEvent instead of blocking the LLM turn for another round-trip.
     fn is_background(&self) -> bool {
         false
+    }
+    /// Returns a short spoken preamble for background tools. The pipeline speaks
+    /// this immediately when the tool starts, before the tool finishes. If `None`,
+    /// a generic fallback is used.
+    fn preamble(&self) -> Option<&'static str> {
+        None
     }
     /// If true, the tool's result suppresses any LLM response — the pipeline
     /// stops without sending output to the user. Used for the NOOP tool.
@@ -77,6 +85,8 @@ pub trait Tool: Send + Sync {
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
     cached_tool_defs: Mutex<Option<Vec<serde_json::Value>>>,
+    /// Tracks background tool executions so the LLM can query their status via `list_tasks`.
+    pub subtask_tracker: Arc<SubtaskTracker>,
 }
 
 impl Default for ToolRegistry {
@@ -90,7 +100,14 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
             cached_tool_defs: Mutex::new(None),
+            subtask_tracker: Arc::new(SubtaskTracker::new()),
         }
+    }
+
+    /// Register the built-in list_tasks tool that queries the subtask tracker.
+    pub fn register_list_tasks(&mut self) {
+        let tracker = Arc::clone(&self.subtask_tracker);
+        self.register(ListTasksTool::new(tracker));
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {

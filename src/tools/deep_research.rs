@@ -65,6 +65,10 @@ impl Tool for DeepResearchTool {
         true
     }
 
+    fn preamble(&self) -> Option<&'static str> {
+        Some("Investigando en profundidad.")
+    }
+
     async fn run(&self, args: &str) -> String {
         let query = match serde_json::from_str::<serde_json::Value>(args) {
             Ok(v) => v["query"].as_str().unwrap_or("").trim().to_string(),

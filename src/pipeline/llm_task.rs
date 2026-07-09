@@ -36,6 +36,7 @@ pub async fn llm_task(
     shared_history: Arc<RwLock<String>>,
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
+    filler_controller: Arc<crate::audio::filler::FillerController>,
     #[cfg(feature = "tui")] tui_tx: crate::tui::events::TuiEventTx,
     #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
 ) {
@@ -328,24 +329,28 @@ pub async fn llm_task(
                 match tool_call {
                     Some((name, args)) => {
                         if tools.lock().unwrap().is_background(&name) {
-                            let ack = match name.as_str() {
-                                "web_search" => "Buscando.",
-                                "run_shell" => "Ejecutando.",
-                                _ => "Procesando en segundo plano, le aviso al terminar.",
-                            };
+                            let tool_for_preamble = tools.lock().unwrap().get_tool_arc(&name);
+                            let ack = tool_for_preamble
+                                .and_then(|t| t.preamble().map(String::from))
+                                .unwrap_or_else(|| {
+                                    "Procesando en segundo plano, le aviso al terminar.".to_string()
+                                });
                             let _ = llm_tx
                                 .send(super::frames::PipelineFrame::LLMToken {
                                     utterance_id: pipeline_id,
-                                    token: ack.to_string(),
+                                    token: ack.clone(),
                                 })
                                 .await;
                             let _ = llm_tx
                                 .send(super::frames::PipelineFrame::LLMResponseDone {
                                     utterance_id: pipeline_id,
-                                    full_text: ack.to_string(),
+                                    full_text: ack.clone(),
                                 })
                                 .await;
                             events.llm_post_finished.notify_one();
+
+                            // Start background processing sound
+                            filler_controller.start();
 
                             let tc_id = format!("bg_{}_{}_{}", pipeline_id, iter, name);
                             let tool_call_msg = serde_json::json!({
@@ -384,6 +389,17 @@ pub async fn llm_task(
                             let proactive_c = proactive_tx.clone();
                             let tc_id_c = tc_id.clone();
                             let tool_arc = tools_c.lock().unwrap().get_tool_arc(&name);
+
+                            // Track subtask
+                            let description =
+                                format!("{}: {}", name, args.chars().take(80).collect::<String>());
+                            tools.lock().unwrap().subtask_tracker.add(
+                                tc_id.clone(),
+                                name.clone(),
+                                description,
+                            );
+
+                            let tracker_c = tools.lock().unwrap().subtask_tracker.clone();
                             tokio::spawn(async move {
                                 info!(target: "pipeline", "Background tool `{}` started", name_c);
                                 let result = match tool_arc {
@@ -395,6 +411,14 @@ pub async fn llm_task(
                                     "Background tool `{}` finished ({} chars): {:?}",
                                     name_c, result.len(), result
                                 );
+                                // Update subtask tracker
+                                if result.starts_with("Error:")
+                                    || result.starts_with("Unknown tool:")
+                                {
+                                    tracker_c.fail(&tc_id_c, result.clone());
+                                } else {
+                                    tracker_c.complete(&tc_id_c, result.clone());
+                                }
                                 proactive_c
                                     .send(ProactiveEvent::AgentResult {
                                         task: name_c,
