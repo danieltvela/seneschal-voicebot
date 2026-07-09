@@ -52,14 +52,15 @@ servers:
       #     # - gemma-4-26B-A4B-it-UD-Q4_K_XL
       #     # - gemma-4-26B-A4B-it-UD-Q8_K_XL
       #     # - Qwen3.6-35B-A3B-UD-Q4_K_M
-      # omlx:
-      #   port: 8001
-      #   token: "asdf"
-      #   models: []
-      #     # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
-      #     # - gemma-4-26B-A4B-it-MLX-4bit
-      #     # - "Qwen3.6-35B-A3B-4bit"
-      #     # - "Qwen3.6-35B-A3B-UD-MLX-4bit"
+      omlx:
+        port: 8000
+        token: "asdf"
+        models:
+          - gemma-4-26B-A4B-it-QAT-MLX-4bit
+          # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
+          # - gemma-4-26B-A4B-it-MLX-4bit
+          # - "Qwen3.6-35B-A3B-4bit"
+          # - "Qwen3.6-35B-A3B-UD-MLX-4bit"
       mlx-lm:
         port: 8080
         token: ""
