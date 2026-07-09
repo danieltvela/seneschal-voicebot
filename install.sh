@@ -1277,7 +1277,7 @@ check_path() {
 # Probe LLM_URL/v1/models with a short timeout. Sets VOICEBOT_LLM_UP=1|0.
 detect_llm_server() {
     step "Probing LLM server"
-    _llm_url="${LLM_URL:-http://localhost:8000}"
+    _llm_url="${_LLM_URL:-http://127.0.0.1:8000}"
     # Convert base URL to /v1/models endpoint.
     _probe_url="${_llm_url%/}/v1/models"
     info "  Checking $_probe_url ..."
