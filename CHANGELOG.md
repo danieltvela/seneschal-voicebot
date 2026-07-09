@@ -4,6 +4,17 @@ All notable changes to Seneschal Voicebot will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.1.0-alpha.5 (2026-07-09)
+
+### Features
+- **[#120](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/120)**: Conversation improvements — spoken fillers, async tool result injection, subtask tracking, background sound during tool calls
+- **[#118](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/118)**: Reduced AGENTS.md size by splitting documentation into `doc/` directory
+
+### Bug Fixes
+- **[#121](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/121)**: Install script LLM provider check used wrong URL
+
+---
+
 ## v0.1.0-alpha.4 (2026-07-08)
 
 ### Features
