@@ -337,7 +337,8 @@ pub async fn llm_task(
                                 tool_for_preamble
                                     .and_then(|t| t.preamble().map(String::from))
                                     .unwrap_or_else(|| {
-                                        "Procesando en segundo plano, le aviso al terminar.".to_string()
+                                        "Procesando en segundo plano, le aviso al terminar."
+                                            .to_string()
                                     })
                             };
                             let _ = llm_tx
@@ -479,10 +480,12 @@ pub async fn llm_task(
                         });
 
                         // Flush sentence splitter between pre-tool narration and post-tool response
-                        let _ = llm_tx.send(PipelineFrame::LLMResponseDone {
-                            utterance_id: pipeline_id,
-                            full_text: String::new(),
-                        }).await;
+                        let _ = llm_tx
+                            .send(PipelineFrame::LLMResponseDone {
+                                utterance_id: pipeline_id,
+                                full_text: String::new(),
+                            })
+                            .await;
 
                         let tool_call_id = format!("call_{}_{}", name, iter);
                         let content_value = if llm_text.trim().is_empty() {

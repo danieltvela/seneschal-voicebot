@@ -386,6 +386,22 @@ async fn async_main() -> Result<()> {
                 let mut count = 0;
                 for def in tool_defs {
                     let prefixed_name = format!("{}_mcp__{}", server.name, def.name);
+
+                    // Skip MCP tools that duplicate the built-in apple_events tool.
+                    // The apple-mcp npm package has known bugs (returns "Untitled List"
+                    // with 0 reminders instead of real data). The built-in AppleEventsTool
+                    // uses native AppleScript and works correctly.
+                    if config.apple_events_enabled
+                        && (def.name == "reminders" || def.name == "calendar")
+                    {
+                        info!(
+                            target: "mcp",
+                            "Skipping MCP tool `{}` — superseded by built-in apple_events",
+                            prefixed_name
+                        );
+                        continue;
+                    }
+
                     let prefixed_desc =
                         format!("[MCP server: {}] {}", server.name, def.description);
                     info!(

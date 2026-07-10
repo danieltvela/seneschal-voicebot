@@ -1,7 +1,19 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use tokio::process::Command;
 
 use super::Tool;
+
+/// Maximum reminders to enumerate via AppleScript before truncating.
+/// Reminders supports fast batch property access via range (`reminders 1 thru N`).
+const MAX_REMINDERS: i32 = 50;
+/// Maximum events to enumerate. Calendar AppleScript is extremely slow for batch
+/// property access on large calendars (5000+ events), so we use a conservative
+/// limit that works reliably across all calendar sizes.
+const MAX_EVENTS: i32 = 5;
+/// Timeout for each osascript invocation.
+const OSA_TIMEOUT: Duration = Duration::from_secs(15);
 
 const USAGE: &str = "Valid operations:\n\
   Calendar:\n\
@@ -57,13 +69,13 @@ fn as_date_script(var: &str, iso: &str) -> String {
 }
 
 async fn osascript(script: &str) -> String {
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        OSA_TIMEOUT,
+        Command::new("osascript").arg("-e").arg(script).output(),
+    )
+    .await;
     match output {
-        Ok(out) if out.status.success() => {
+        Ok(Ok(out)) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if text.is_empty() {
                 "OK".to_string()
@@ -71,7 +83,7 @@ async fn osascript(script: &str) -> String {
                 text
             }
         }
-        Ok(out) => {
+        Ok(Ok(out)) => {
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
             if stderr.contains("-1743")
                 || stderr.contains("not allowed")
@@ -84,8 +96,11 @@ async fn osascript(script: &str) -> String {
                 format!("Error: {stderr}")
             }
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             format!("Failed to run osascript: {e}. This tool requires macOS.")
+        }
+        Err(_) => {
+            "Operation timed out after 15 seconds. The operation may be too slow (e.g. too many reminders to enumerate). Try narrowing the request to a specific list or date range.".to_string()
         }
     }
 }
@@ -103,24 +118,41 @@ impl AppleEventsTool {
     }
 
     async fn list_events(&self, params: &serde_json::Value) -> String {
-        let calendar = params["calendar"].as_str().unwrap_or("Calendar");
-        let from = params["from"].as_str().unwrap_or("2000-01-01T00:00:00");
-        let to = params["to"].as_str().unwrap_or("2099-12-31T23:59:00");
-        let from_script = as_date_script("startDate", from);
-        let to_script = as_date_script("endDate", to);
+        let calendar = params["calendar"]
+            .as_str()
+            .filter(|c| !c.is_empty())
+            .map(|c| format!("first calendar whose name is \"{c}\""))
+            .unwrap_or_else(|| "first calendar".to_string());
+
+        // Calendar AppleScript is fundamentally slow for batch property access on
+        // large calendars (5000+ events). Each `property of (events 1 thru N of cal)`
+        // call resolves N Apple Event references, and the cost scales with both N
+        // and the total calendar size. Testing showed:
+        //   - 5104-event calendar: 5 events × 2 properties = OK, 5 × 3 = timeout
+        //   - 857-event calendar:  10 events × 3 properties = OK
+        //
+        // We use a conservative limit (5 events, 2 properties: summary + start date)
+        // that works reliably across all calendar sizes. End dates are omitted
+        // because they push large calendars over the timeout.
         let script = format!(
             "tell application \"Calendar\"\n\
-             set cal to first calendar whose name is \"{calendar}\"\n\
-             {from_script}\
-             {to_script}\
-             set matchingEvents to (every event of cal \
-             whose start date ≥ startDate and start date ≤ endDate)\n\
+             set cal to {calendar}\n\
+             set totalCount to count of events of cal\n\
+             set maxCount to {MAX_EVENTS}\n\
+             if totalCount < maxCount then set maxCount to totalCount\n\
+             set AppleScript's text item delimiters to linefeed\n\
+             set allSummaries to summary of (events 1 thru maxCount of cal)\n\
+             set allStarts to start date of (events 1 thru maxCount of cal)\n\
              set output to \"\"\n\
-             repeat with e in matchingEvents\n\
-             set output to output & summary of e & \" | \" & \
-             (start date of e as string) & \" → \" & (end date of e as string) & \"\n\"\n\
+             repeat with i from 1 to maxCount\n\
+             set output to output & (item i of allSummaries) & \" | \" & \
+             ((item i of allStarts) as string) & \"\n\"\n\
              end repeat\n\
-             if output is \"\" then set output to \"No events found.\"\n\
+             if output is \"\" then\n\
+             set output to \"No events found.\"\n\
+             else if totalCount > maxCount then\n\
+             set output to output & \"(Showing first \" & maxCount & \" of \" & totalCount & \" events)\"\n\
+             end if\n\
              return output\n\
              end tell"
         );
@@ -128,7 +160,11 @@ impl AppleEventsTool {
     }
 
     async fn create_event(&self, params: &serde_json::Value) -> String {
-        let calendar = params["calendar"].as_str().unwrap_or("Calendar");
+        let calendar = params["calendar"]
+            .as_str()
+            .filter(|c| !c.is_empty())
+            .map(|c| format!("first calendar whose name is \"{c}\""))
+            .unwrap_or_else(|| "first calendar".to_string());
         let title = params["title"].as_str().unwrap_or("Untitled Event");
         let start = params["start"].as_str().unwrap_or("2024-01-01T09:00:00");
         let end = params["end"].as_str().unwrap_or("2024-01-01T10:00:00");
@@ -159,7 +195,7 @@ impl AppleEventsTool {
 
         let script = format!(
             "tell application \"Calendar\"\n\
-             set cal to first calendar whose name is \"{calendar}\"\n\
+             set cal to {calendar}\n\
              {start_script}\
              {end_script}\
              make new event at end of events of cal with properties {{{props}}}\n\
@@ -170,14 +206,18 @@ impl AppleEventsTool {
     }
 
     async fn delete_event(&self, params: &serde_json::Value) -> String {
-        let calendar = params["calendar"].as_str().unwrap_or("Calendar");
+        let calendar = params["calendar"]
+            .as_str()
+            .filter(|c| !c.is_empty())
+            .map(|c| format!("first calendar whose name is \"{c}\""))
+            .unwrap_or_else(|| "first calendar".to_string());
         let title = params["title"].as_str().unwrap_or("");
         if title.is_empty() {
             return "Missing 'title' for delete_event.".to_string();
         }
         let script = format!(
             "tell application \"Calendar\"\n\
-             set cal to first calendar whose name is \"{calendar}\"\n\
+             set cal to {calendar}\n\
              set targetEvent to first event of cal whose summary is \"{title}\"\n\
              delete targetEvent\n\
              return \"Event deleted: {title}\"\n\
@@ -200,23 +240,49 @@ impl AppleEventsTool {
     async fn list_reminders(&self, params: &serde_json::Value) -> String {
         let list = params["list"]
             .as_str()
+            .filter(|l| !l.is_empty())
             .map(|l| format!("whose name is \"{l}\""))
             .unwrap_or_default();
+
+        let show_completed = params["show_completed"].as_bool().unwrap_or(false);
+
+        // Use range access (`reminders 1 thru N`) + batch property fetch.
+        // Iterating with `repeat with r in every reminder` or `item i of matchingReminders`
+        // is O(n²) due to per-item Apple Event IPC, which hangs on lists with thousands
+        // of reminders. Range access + batch `name of (reminders 1 thru N)` is O(n).
+        // The `whose completed is false` filter is also O(n) but with a large constant
+        // factor that hangs on 3000+ reminder lists, so we filter in the loop instead.
         let script = format!(
             "tell application \"Reminders\"\n\
              set targetList to first list {list}\n\
-             set matchingReminders to every reminder of targetList\n\
+             set totalCount to count of reminders of targetList\n\
+             set maxCount to {MAX_REMINDERS}\n\
+             if totalCount < maxCount then set maxCount to totalCount\n\
+             set AppleScript's text item delimiters to linefeed\n\
+             set allNames to name of (reminders 1 thru maxCount of targetList)\n\
+             set allDue to due date of (reminders 1 thru maxCount of targetList)\n\
+             set allCompleted to completed of (reminders 1 thru maxCount of targetList)\n\
              set output to \"\"\n\
-             repeat with r in matchingReminders\n\
+             set shown to 0\n\
+             repeat with i from 1 to maxCount\n\
+             if {show_completed} or (item i of allCompleted) is false then\n\
+             set rName to item i of allNames\n\
              set dueStr to \"\"\n\
-             if due date of r is not missing value then\n\
-             set dueStr to \" [due: \" & (due date of r as string) & \"]\"\n\
+             set d to item i of allDue\n\
+             if d is not missing value then\n\
+             set dueStr to \" [due: \" & (d as string) & \"]\"\n\
              end if\n\
              set completedStr to \"\"\n\
-             if completed of r then set completedStr to \" ✓\"\n\
-             set output to output & name of r & dueStr & completedStr & \"\n\"\n\
+             if item i of allCompleted then set completedStr to \" ✓\"\n\
+             set output to output & rName & dueStr & completedStr & \"\n\"\n\
+             set shown to shown + 1\n\
+             end if\n\
              end repeat\n\
-             if output is \"\" then set output to \"No reminders found.\"\n\
+             if output is \"\" then\n\
+             set output to \"No reminders found.\"\n\
+             else if totalCount > maxCount then\n\
+             set output to output & \"(Showing \" & shown & \" of \" & totalCount & \" reminders)\"\n\
+             end if\n\
              return output\n\
              end tell"
         );
@@ -275,6 +341,7 @@ impl AppleEventsTool {
         }
         let list = params["list"]
             .as_str()
+            .filter(|l| !l.is_empty())
             .map(|l| format!("first list whose name is \"{l}\""))
             .unwrap_or_else(|| "first list".to_string());
         let script = format!(
@@ -296,6 +363,7 @@ impl AppleEventsTool {
         }
         let list = params["list"]
             .as_str()
+            .filter(|l| !l.is_empty())
             .map(|l| format!("first list whose name is \"{l}\""))
             .unwrap_or_else(|| "first list".to_string());
         let script = format!(
@@ -380,6 +448,10 @@ impl Tool for AppleEventsTool {
                 "due_date": {
                     "type": "string",
                     "description": "Due date in ISO 8601 (for reminders)"
+                },
+                "show_completed": {
+                    "type": "boolean",
+                    "description": "If true, list_reminders includes completed reminders (default: false, only incomplete)"
                 }
             },
             "required": ["operation"]
