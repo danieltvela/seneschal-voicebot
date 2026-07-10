@@ -561,7 +561,13 @@ async fn async_main() -> Result<()> {
 
     // ── Database ──────────────────────────────────────────────────────────────
     let db = Database::new(&config.db_path).await?;
-    let is_first_launch = db.is_first_launch().await.unwrap_or(false);
+    let is_first_launch = match db.is_first_launch().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(target: "db", "Failed to check first launch status: {} — assuming not first launch", e);
+            false
+        }
+    };
     let session_id = db.get_or_create_session().await?;
     config.llm_system_prompt = db
         .ensure_active_system_prompt(session_id, &config.llm_system_prompt)
@@ -1376,13 +1382,19 @@ async fn async_main() -> Result<()> {
                                     tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
                                         .await
                                         .ok();
-                                    // Send startup greeting
-                                    let now = chrono::Local::now();
-                                    let time_str = now.format("%H:%M").to_string();
-                                    let date_str = now.format("%d/%m/%Y").to_string();
-                                    let notification = i18n::get_notification("startup", &config.language)
-                                        .replace("{time_str}", &time_str)
-                                        .replace("{date_str}", &date_str);
+                                    // Send greeting (first_launch or startup)
+                                    let key = if is_first_launch { "first_launch" } else { "startup" };
+                                    let notification = i18n::get_notification(key, &config.language);
+                                    let notification = if is_first_launch {
+                                        notification.to_string()
+                                    } else {
+                                        let now = chrono::Local::now();
+                                        let time_str = now.format("%H:%M").to_string();
+                                        let date_str = now.format("%d/%m/%Y").to_string();
+                                        notification
+                                            .replace("{time_str}", &time_str)
+                                            .replace("{date_str}", &date_str)
+                                    };
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
                                 }
                             }
