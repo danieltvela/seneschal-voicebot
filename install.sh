@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Voicebot installer — GitHub release edition
 # Usage: curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/main/install.sh | sh
 #
@@ -1011,6 +1011,341 @@ select_voice_kokoro() {
     info "  Selected Kokoro voice: $SELECTED_KOKORO_VOICE ($SELECTED_KOKORO_LANG)"
 }
 
+# ── External agent configuration ─────────────────────────────────────────
+# Asks the user whether they want to integrate external agents (Hermes,
+# OpenCode, or a custom agent). Collects the necessary environment variables
+# and writes them to $VOICEBOT_HOME/.env so dotenvy loads them at startup.
+#
+# Agent env var format (multi-agent):
+#   AGENTS=hermes,opencode
+#   AGENT_HERMES_MODE=acp
+#   AGENT_HERMES_ACP_COMMAND=hermes acp
+#   AGENT_HERMES_WHEN_TO_USE="..."
+#   AGENT_HERMES_INSTRUCTIONS="..."
+#
+# Sets global arrays:
+#   _AGENT_NAMES[]     — comma-separated names (populates AGENTS)
+#   _AGENT_MODES[]     — "cli" or "acp" per agent
+#   _AGENT_COMMANDS[]  — CLI command per agent
+#   _AGENT_ACP_CMDS[]  — ACP command per agent
+#   _AGENT_WARMUPS[]   — "1" or "" per agent
+#   _AGENT_WHEN[]      — when_to_use description per agent
+#   _AGENT_INSTR[]     — instructions per agent
+
+# Internal counter for agent arrays
+_AGENT_COUNT=0
+
+# Add an agent to the configuration arrays.
+# Args: name mode [cli_command] [acp_command] [warmup] [when_to_use] [instructions]
+_add_agent() {
+    _idx=$_AGENT_COUNT
+    _AGENT_NAMES[$_idx]="$1"
+    _AGENT_MODES[$_idx]="$2"
+    _AGENT_COMMANDS[$_idx]="${3:-}"
+    _AGENT_ACP_CMDS[$_idx]="${4:-}"
+    _AGENT_WARMUPS[$_idx]="${5:-}"
+    _AGENT_WHEN[$_idx]="${6:-}"
+    _AGENT_INSTR[$_idx]="${7:-}"
+    _AGENT_COUNT=$((_AGENT_COUNT + 1))
+}
+
+# Configure Hermes agent. Prompts for install + mode.
+_configure_hermes() {
+    step "Configure Hermes agent"
+    info "  Hermes is an external AI agent that handles complex tasks:"
+    info "  code generation, deep research, calendar management, and"
+    info "  multi-step workflows that Voicebot cannot do on its own."
+    info ""
+    info "  Installation:  pip install 'hermes-agent[acp]'"
+    info "  More info:     https://github.com/NousResearch/hermes-agent"
+    printf "\n" >&2
+
+    _hermes_installed=$(confirm "Is Hermes already installed?" "n")
+    if [ "$_hermes_installed" != "y" ]; then
+        _install_hermes=$(confirm "Install Hermes now? (requires Python 3.8+)" "n")
+        if [ "$_install_hermes" = "y" ]; then
+            info "  Installing Hermes..."
+            if command -v pip3 >/dev/null 2>&1; then
+                pip3 install 'hermes-agent[acp]' 2>/dev/null && \
+                    info "  Hermes installed successfully." || \
+                    warn "  Hermes installation failed. Install manually:"
+            elif command -v pip >/dev/null 2>&1; then
+                pip install 'hermes-agent[acp]' 2>/dev/null && \
+                    info "  Hermes installed successfully." || \
+                    warn "  Hermes installation failed. Install manually:"
+            else
+                warn "  Python pip not found. Install Hermes manually:"
+            fi
+            warn "    pip install 'hermes-agent[acp]'"
+        else
+            warn "  Skipping Hermes installation."
+            warn "  You can install it later: pip install 'hermes-agent[acp]'"
+            return
+        fi
+    fi
+
+    # Choose mode: ACP (persistent, recommended) or CLI (one-shot)
+    _hermes_mode=$(pick_from_list "Hermes communication mode" 1 \
+        "ACP (persistent session, recommended)" \
+        "CLI (one-shot subprocess)")
+
+    case "$_hermes_mode" in
+        "ACP"*)
+            _hermes_acp_cmd=$(ask "Hermes ACP command" "hermes acp")
+            _hermes_cli_cmd=""
+            _hermes_mode_val="acp"
+            ;;
+        "CLI"*)
+            _hermes_cli_cmd=$(ask "Hermes CLI command" "hermes chat")
+            _hermes_acp_cmd=""
+            _hermes_mode_val="cli"
+            ;;
+    esac
+
+    _hermes_warmup=$(confirm "Warm up Hermes at Voicebot startup? (reduces first-call latency)" "y")
+    if [ "$_hermes_warmup" = "y" ]; then
+        _hermes_warmup_val="1"
+    else
+        _hermes_warmup_val=""
+    fi
+
+    # Default when_to_use and instructions based on language
+    if [ "${_LANGUAGE:-en}" = "es" ]; then
+        _hermes_when="Único agente externo disponible. Punto de contacto para lo que Voicebot no puede resolver con sus propias herramientas: programación y código, investigación profunda, gestión de calendario, flujos de múltiples pasos, y cualquier tarea que requiera razonamiento extendido o herramientas del sistema."
+        _hermes_instr="Eres Hermes, el gateway de agentes externos. Puedes redirigir internamente a especialistas (programadores, investigadores, etc.). Recibe la consulta de Voicebot, coordina los recursos necesarios y devuelves una respuesta clara y ejecutable."
+    else
+        _hermes_when="Primary external agent. Handle tasks Voicebot cannot resolve with its own tools: code generation, deep research, calendar management, multi-step workflows, and any task requiring extended reasoning or system tools."
+        _hermes_instr="You are Hermes, the external agent gateway. You can internally redirect to specialists (programmers, researchers, etc.). Receive the query from Voicebot, coordinate the necessary resources, and return a clear, actionable response."
+    fi
+
+    _hermes_when=$(ask "When to use Hermes (press Enter for default)" "$_hermes_when")
+    _hermes_instr=$(ask "Hermes instructions (press Enter for default)" "$_hermes_instr")
+
+    _add_agent "hermes" "$_hermes_mode_val" "$_hermes_cli_cmd" "$_hermes_acp_cmd" \
+        "$_hermes_warmup_val" "$_hermes_when" "$_hermes_instr"
+    info "  Hermes agent configured (mode=$_hermes_mode_val)."
+}
+
+# Configure OpenCode agent.
+_configure_opencode() {
+    step "Configure OpenCode agent"
+    info "  OpenCode can be used as an external coding agent for Voicebot."
+    info "  It handles code generation, refactoring, and file operations."
+    info ""
+    info "  Installation:  npm install -g opencode  (or use your package manager)"
+    printf "\n" >&2
+
+    _opencode_installed=$(confirm "Is OpenCode already installed?" "n")
+    if [ "$_opencode_installed" != "y" ]; then
+        warn "  OpenCode is not installed. You can still configure it for later."
+        warn "  Install it first:  npm install -g opencode"
+    fi
+
+    _opencode_mode=$(pick_from_list "OpenCode communication mode" 1 \
+        "CLI (one-shot subprocess)" \
+        "ACP (persistent session)")
+
+    case "$_opencode_mode" in
+        "CLI"*)
+            _opencode_cli_cmd=$(ask "OpenCode CLI command" "opencode")
+            _opencode_acp_cmd=""
+            _opencode_mode_val="cli"
+            ;;
+        "ACP"*)
+            _opencode_acp_cmd=$(ask "OpenCode ACP command" "opencode acp")
+            _opencode_cli_cmd=""
+            _opencode_mode_val="acp"
+            ;;
+    esac
+
+    if [ "${_LANGUAGE:-en}" = "es" ]; then
+        _opencode_when="Tareas de programación en Rust, refactorización, búsqueda en código base, y edición de archivos. Úsalo para cambios de código complejos."
+        _opencode_instr="Eres OpenCode, un agente de programación autónomo. Recibe tareas de código de Voicebot y ejecútalas: generar código, refactorizar, buscar patrones, y editar archivos. Devuelve un resumen claro de lo que hiciste."
+    else
+        _opencode_when="Rust programming tasks, refactoring, codebase search, and file editing. Use for complex code changes."
+        _opencode_instr="You are OpenCode, an autonomous programming agent. Receive code tasks from Voicebot and execute them: generate code, refactor, search patterns, and edit files. Return a clear summary of what you did."
+    fi
+
+    _opencode_when=$(ask "When to use OpenCode (press Enter for default)" "$_opencode_when")
+    _opencode_instr=$(ask "OpenCode instructions (press Enter for default)" "$_opencode_instr")
+
+    _add_agent "opencode" "$_opencode_mode_val" "$_opencode_cli_cmd" "$_opencode_acp_cmd" \
+        "" "$_opencode_when" "$_opencode_instr"
+    info "  OpenCode agent configured (mode=$_opencode_mode_val)."
+}
+
+# Configure a custom agent with user-provided details.
+_configure_custom_agent() {
+    step "Configure custom agent"
+    info "  Add your own external agent. It must support stdin/stdout"
+    info "  communication (CLI mode) or the ACP protocol (ACP mode)."
+    printf "\n" >&2
+
+    _custom_name=$(ask "Agent name (e.g. claude, copilot, mybot)" "custom")
+    # Sanitize: lowercase, replace spaces/hyphens with underscores for env var safety
+    _custom_name=$(printf "%s" "$_custom_name" | tr '[:upper:]' '[:lower:]' | tr ' -' '_')
+    _custom_upper=$(printf "%s" "$_custom_name" | tr '[:lower:]' '[:upper:]')
+
+    _custom_mode=$(pick_from_list "Communication mode for $_custom_name" 1 \
+        "CLI (one-shot subprocess)" \
+        "ACP (persistent session)")
+
+    case "$_custom_mode" in
+        "CLI"*)
+            _custom_cli_cmd=$(ask "CLI command for $_custom_name" "$_custom_name")
+            _custom_acp_cmd=""
+            _custom_mode_val="cli"
+            ;;
+        "ACP"*)
+            _custom_acp_cmd=$(ask "ACP command for $_custom_name" "$_custom_name acp")
+            _custom_cli_cmd=""
+            _custom_mode_val="acp"
+            ;;
+    esac
+
+    if [ "$_custom_mode_val" = "acp" ]; then
+        _custom_warmup=$(confirm "Warm up $_custom_name at Voicebot startup?" "n")
+        if [ "$_custom_warmup" = "y" ]; then
+            _custom_warmup_val="1"
+        else
+            _custom_warmup_val=""
+        fi
+    else
+        _custom_warmup_val=""
+    fi
+
+    if [ "${_LANGUAGE:-en}" = "es" ]; then
+        _custom_when="Agente personalizado $_custom_name. Úsalo para tareas específicas que requiere el usuario."
+        _custom_instr="Eres $_custom_name, un agente externo. Recibe tareas de Voicebot y ejecútalas. Devuelve un resumen claro."
+    else
+        _custom_when="Custom agent $_custom_name. Use for specific tasks requested by the user."
+        _custom_instr="You are $_custom_name, an external agent. Receive tasks from Voicebot and execute them. Return a clear summary."
+    fi
+
+    _custom_when=$(ask "When to use $_custom_name (press Enter for default)" "$_custom_when")
+    _custom_instr=$(ask "Instructions for $_custom_name (press Enter for default)" "$_custom_instr")
+
+    _add_agent "$_custom_name" "$_custom_mode_val" "$_custom_cli_cmd" "$_custom_acp_cmd" \
+        "$_custom_warmup_val" "$_custom_when" "$_custom_instr"
+    info "  Custom agent '$_custom_name' configured (mode=$_custom_mode_val)."
+}
+
+# Main entry point for external agent configuration.
+configure_external_agents() {
+    step "External agent integration"
+    info "  Voicebot can delegate complex tasks to external AI agents."
+    info "  Agents handle: code generation, research, file operations,"
+    info "  calendar management, and multi-step workflows."
+    info ""
+    info "  Available agents:"
+    info "    - Hermes   : General-purpose agent (hermes-agent)"
+    info "    - OpenCode : Coding assistant (opencode)"
+    info "    - Custom   : Your own agent (any CLI or ACP-compatible tool)"
+    printf "\n" >&2
+
+    # Reset agent arrays
+    _AGENT_COUNT=0
+
+    # Ask which agents to configure
+    _configure_any=$(confirm "Configure external agents?" "y")
+    if [ "$_configure_any" != "y" ]; then
+        info "  Skipping external agent configuration."
+        return
+    fi
+
+    # Loop until user says they're done
+    while true; do
+        printf "\n" >&2
+        _agent_choice=$(pick_from_list "Select an agent to configure" 1 \
+            "Hermes (hermes-agent)" \
+            "OpenCode" \
+            "Custom agent" \
+            "Done (no more agents)")
+
+        case "$_agent_choice" in
+            "Hermes"*)
+                _configure_hermes
+                ;;
+            "OpenCode"*)
+                _configure_opencode
+                ;;
+            "Custom"*)
+                _configure_custom_agent
+                ;;
+            "Done"*)
+                break
+                ;;
+        esac
+    done
+
+    if [ "$_AGENT_COUNT" -eq 0 ]; then
+        info "  No agents configured."
+        return
+    fi
+
+    # Build AGENTS comma-separated list
+    _AGENTS_LIST=""
+    _i=0
+    while [ "$_i" -lt "$_AGENT_COUNT" ]; do
+        if [ -z "$_AGENTS_LIST" ]; then
+            _AGENTS_LIST="${_AGENT_NAMES[$_i]}"
+        else
+            _AGENTS_LIST="$_AGENTS_LIST,${_AGENT_NAMES[$_i]}"
+        fi
+        _i=$((_i + 1))
+    done
+    info "  Agents configured: $_AGENTS_LIST"
+}
+
+# Write agent configuration to $VOICEBOT_HOME/.env
+_write_agent_env() {
+    if [ "$_AGENT_COUNT" -eq 0 ]; then
+        return
+    fi
+
+    _env_file="$VOICEBOT_HOME/.env"
+    {
+        printf "\n"
+        printf "# ── External Agents ──────────────────────────────────────────\n"
+        printf "# Generated by install.sh — edit to customize agent behavior.\n"
+        printf "# These env vars are loaded by Voicebot at startup via dotenvy.\n"
+        printf "\n"
+        printf "# Comma-separated list of agent names\n"
+        printf "AGENTS=\"%s\"\n" "$_AGENTS_LIST"
+        printf "\n"
+
+        _i=0
+        while [ "$_i" -lt "$_AGENT_COUNT" ]; do
+            _name="${_AGENT_NAMES[$_i]}"
+            _upper=$(printf "%s" "$_name" | tr '[:lower:]' '[:upper:]')
+            printf "# ── Agent: %s ──────────────────────────────────────────\n" "$_name"
+            printf "AGENT_%s_MODE=\"%s\"\n" "$_upper" "${_AGENT_MODES[$_i]}"
+
+            if [ -n "${_AGENT_COMMANDS[$_i]}" ]; then
+                printf "AGENT_%s_COMMAND=\"%s\"\n" "$_upper" "${_AGENT_COMMANDS[$_i]}"
+            fi
+            if [ -n "${_AGENT_ACP_CMDS[$_i]}" ]; then
+                printf "AGENT_%s_ACP_COMMAND=\"%s\"\n" "$_upper" "${_AGENT_ACP_CMDS[$_i]}"
+            fi
+            if [ -n "${_AGENT_WARMUPS[$_i]}" ]; then
+                printf "AGENT_%s_ACP_WARMUP=%s\n" "$_upper" "${_AGENT_WARMUPS[$_i]}"
+            fi
+            if [ -n "${_AGENT_WHEN[$_i]}" ]; then
+                # Escape double quotes in when_to_use for env file
+                _escaped_when=$(printf "%s" "${_AGENT_WHEN[$_i]}" | sed 's/"/\\"/g')
+                printf "AGENT_%s_WHEN_TO_USE=\"%s\"\n" "$_upper" "$_escaped_when"
+            fi
+            if [ -n "${_AGENT_INSTR[$_i]}" ]; then
+                _escaped_instr=$(printf "%s" "${_AGENT_INSTR[$_i]}" | sed 's/"/\\"/g')
+                printf "AGENT_%s_INSTRUCTIONS=\"%s\"\n" "$_upper" "$_escaped_instr"
+            fi
+            printf "\n"
+            _i=$((_i + 1))
+        done
+    } >> "$_env_file"
+    info "  Agent env vars written: $_env_file"
+}
+
 # ── Search provider configuration ────────────────────────────────────────
 # Offers a choice between Brave (free, default), Tavily, Exa, and SearXNG.
 # Sets _SEARCH_PROVIDER and associated env vars consumed by create_env().
@@ -1241,7 +1576,8 @@ install_launcher() {
     cat > "$_launcher" << LAUNCHEOF
 #!/bin/sh
 # voicebot launcher — generated by install.sh
-# Edit $VOICEBOT_HOME/voicebot.pro.toml to configure your setup.
+# Edit \$VOICEBOT_HOME/voicebot.pro.toml to configure your setup.
+# Agent env vars in \$VOICEBOT_HOME/.env are loaded at startup.
 VOICEBOT_HOME="\${VOICEBOT_HOME:-$VOICEBOT_HOME}"
 
 # Point to installed config file
@@ -1251,6 +1587,8 @@ export VOICEBOT_CONFIG_FILE="\$VOICEBOT_HOME/voicebot.pro.toml"
 # Environment variables are optional and only used to override values
 # defined in the configuration file. Do not hard-code defaults here.
 
+# cd to VOICEBOT_HOME so dotenvy finds .env (agent configuration)
+cd "\$VOICEBOT_HOME" || exit 1
 exec "\$VOICEBOT_HOME/bin/voicebot" "\$@" 2>/dev/null
 LAUNCHEOF
     chmod +x "$_launcher"
@@ -1387,6 +1725,9 @@ main() {
     # Web search provider (Brave free by default)
     configure_search_provider
 
+    # External agent configuration (Hermes, OpenCode, Custom)
+    configure_external_agents
+
     # Voice selection happens AFTER models are installed because the
     # Kokoro enumerator invokes the binary.
     if [ "$OS" = "Darwin" ]; then
@@ -1397,6 +1738,7 @@ main() {
     fi
 
     create_env
+    _write_agent_env
     install_launcher
     detect_llm_server
     smoke_test
