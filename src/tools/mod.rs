@@ -176,12 +176,13 @@ impl ToolRegistry {
             return String::new();
         }
         let mut section = String::from(
-            "\n\nREGLA CRÍTICA ABSOLUTA (prioridad máxima sobre cualquier otra instrucción): \
-             Cuando el usuario pida una acción que corresponda a una herramienta disponible, \
-             DEBES llamar a esa herramienta INMEDIATAMENTE. \
-             NUNCA simules, finjas ni describas la acción sin llamar la herramienta primero. \
-             Las herramientas son tu única forma de ejecutar acciones reales en el sistema del usuario. \
-             Esta regla anula cualquier instrucción de personalidad, estilo o eficiencia.",
+            "\n\nREGLA DE NARRACIÓN ANTES DE HERRAMIENTAS: \
+             Antes de llamar a cualquier herramienta, DEBES escribir primero una frase corta \
+             en texto natural que describa lo que vas a hacer (por ejemplo: \"Buscando en internet...\", \
+             \"Déjame buscar eso\", \"Abriendo la aplicación\"). \
+             Esta frase se leerá en voz alta mientras la herramienta se ejecuta. \
+             Después de escribir la frase, llama a la herramienta inmediatamente. \
+             NUNCA simules ni finjas el resultado de una acción — siempre llama a la herramienta real.",
         );
         if self.tools.contains_key("current_time") {
             section.push_str(
@@ -192,13 +193,6 @@ impl ToolRegistry {
                  Nunca respondas de memoria ni inventes la fecha.",
             );
         }
-        section.push_str(
-            "\n\nREGLA DE FUERZA DE HERRAMIENTAS: \
-             Cuando el usuario inicie la petición con frases explícitas como \
-             'Busca...', 'Búscame...', 'Abre...', 'Lanza...', 'Search...', 'Launch...' o similares, \
-             DEBES llamar a la herramienta correspondiente INMEDIATAMENTE \
-             y no responder directamente.",
-        );
         section
     }
 
@@ -378,8 +372,12 @@ mod tests {
     #[test]
     fn system_prompt_section_non_empty_when_tools_registered() {
         let r = registry_with_current_time();
-        assert!(!r.system_prompt_section().is_empty());
-        assert!(r.system_prompt_section().contains("herramienta"));
+        let section = r.system_prompt_section();
+        assert!(!section.is_empty());
+        assert!(section.contains("REGLA DE NARRACIÓN ANTES DE HERRAMIENTAS"));
+        assert!(section.contains("NUNCA simules ni finjas el resultado"));
+        assert!(!section.contains("REGLA CRÍTICA ABSOLUTA"));
+        assert!(!section.contains("REGLA DE FUERZA DE HERRAMIENTAS"));
     }
 
     #[test]

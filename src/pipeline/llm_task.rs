@@ -330,21 +330,26 @@ pub async fn llm_task(
                     Some((name, args)) => {
                         if tools.lock().unwrap().is_background(&name) {
                             let tool_for_preamble = tools.lock().unwrap().get_tool_arc(&name);
-                            let ack = tool_for_preamble
-                                .and_then(|t| t.preamble().map(String::from))
-                                .unwrap_or_else(|| {
-                                    "Procesando en segundo plano, le aviso al terminar.".to_string()
-                                });
+                            // Use model's own text if present, otherwise fallback to synthetic preamble
+                            let ack_text = if !llm_text.trim().is_empty() {
+                                llm_text.clone()
+                            } else {
+                                tool_for_preamble
+                                    .and_then(|t| t.preamble().map(String::from))
+                                    .unwrap_or_else(|| {
+                                        "Procesando en segundo plano, le aviso al terminar.".to_string()
+                                    })
+                            };
                             let _ = llm_tx
                                 .send(super::frames::PipelineFrame::LLMToken {
                                     utterance_id: pipeline_id,
-                                    token: ack.clone(),
+                                    token: ack_text.clone(),
                                 })
                                 .await;
                             let _ = llm_tx
                                 .send(super::frames::PipelineFrame::LLMResponseDone {
                                     utterance_id: pipeline_id,
-                                    full_text: ack.clone(),
+                                    full_text: ack_text.clone(),
                                 })
                                 .await;
                             events.llm_post_finished.notify_one();
@@ -353,9 +358,14 @@ pub async fn llm_task(
                             filler_controller.start();
 
                             let tc_id = format!("bg_{}_{}_{}", pipeline_id, iter, name);
+                            let content_value = if llm_text.trim().is_empty() {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::Value::String(llm_text.clone())
+                            };
                             let tool_call_msg = serde_json::json!({
                                 "role": "assistant",
-                                "content": serde_json::Value::Null,
+                                "content": content_value,
                                 "tool_calls": [{
                                     "id": tc_id,
                                     "type": "function",
@@ -468,10 +478,21 @@ pub async fn llm_task(
                             result: result.clone(),
                         });
 
+                        // Flush sentence splitter between pre-tool narration and post-tool response
+                        let _ = llm_tx.send(PipelineFrame::LLMResponseDone {
+                            utterance_id: pipeline_id,
+                            full_text: String::new(),
+                        }).await;
+
                         let tool_call_id = format!("call_{}_{}", name, iter);
+                        let content_value = if llm_text.trim().is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::Value::String(llm_text.clone())
+                        };
                         messages.push(serde_json::json!({
                             "role": "assistant",
-                            "content": serde_json::Value::Null,
+                            "content": content_value,
                             "tool_calls": [{
                                 "id": tool_call_id,
                                 "type": "function",
