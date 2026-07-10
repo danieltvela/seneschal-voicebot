@@ -7,11 +7,11 @@
         "argent",
         "mcp"
       ],
-      "enabled": true
+      "enabled": false
     },
     "xcode": {
       "type": "local",
-      "enabled": true,
+      "enabled": false,
       "command": [
         "xcrun",
         "mcpbridge"
