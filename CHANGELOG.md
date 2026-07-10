@@ -4,6 +4,17 @@ All notable changes to Seneschal Voicebot will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.1.0-alpha.6 (2026-07-10)
+
+### Features
+- **[#122](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/122)**: External agent integration (Hermes, OpenCode, custom) in install script
+
+### Bug Fixes
+- **[#124](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/124)**: Voicebot can create reminders but cannot read existing ones
+- **[#125](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/125)**: Welcome message not sent to LLM on app launch
+
+---
+
 ## v0.1.0-alpha.5 (2026-07-09)
 
 ### Features
