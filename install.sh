@@ -925,7 +925,7 @@ select_voice_macos() {
 test_voice_macos() {
     _voice="$1"
     info "  Testing voice with 'say'..."
-    if say -v "$_voice" "Hi, I'm voicebot. This is a test of my voice." 2>/dev/null; then
+    if say -v "$_voice" "Hello, this is Seneschal" 2>/dev/null; then
         info "  Voice test played."
     else
         warn "  'say' test failed — voice may not be installed."
@@ -1645,7 +1645,7 @@ smoke_test() {
     fi
     if [ "$OS" = "Darwin" ] && [ -n "${SELECTED_VOICE:-}" ]; then
         # Use `say` directly — no need to launch the whole binary.
-        if say -v "$SELECTED_VOICE" "Hola, esto es voicebot." 2>/dev/null; then
+        if say -v "$SELECTED_VOICE" "Hola, esto es Senescal" 2>/dev/null; then
             info "  Smoke test passed (macOS AVSpeech)."
         else
             warn "  Smoke test inconclusive (say returned non-zero)."
