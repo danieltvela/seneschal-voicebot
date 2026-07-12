@@ -24,7 +24,7 @@ vad_confirm_probes = 2
 language = "en"
 
 # ── STT ───────────────────────────────────────────────────────────────────────
-stt_provider = "speech"
+stt_provider = "whisper"
 whisper_model = "models/ggml-large-v3-turbo.bin"
 whisper_threads = 0
 stt_early_reuse_enabled = false
@@ -75,7 +75,7 @@ llm_temperature = 0.5
 llm_thinking = false
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
-tts_provider = "avspeech"
+tts_provider = "kokoro"
 avspeech_voice = ""
 avspeech_rate = 0.55
 kokoro_model = "models/kokoro-v1.0.onnx"

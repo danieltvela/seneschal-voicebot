@@ -1155,7 +1155,7 @@ mod tests {
                 assert_eq!(config.sample_rate, 16000);
                 assert_eq!(config.language, "en");
                 assert_eq!(config.whisper_model, "models/ggml-large-v3-turbo.bin");
-                assert_eq!(config.stt_provider, "speech");
+                assert_eq!(config.stt_provider, "whisper");
             },
         );
     }
