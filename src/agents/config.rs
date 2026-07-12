@@ -7,7 +7,7 @@ use std::env;
 pub struct AgentTomlConfig {
     /// Unique name (e.g. "hermes").
     pub name: String,
-    /// Communication mode: "cli" or "acp".
+    /// Communication mode: "cli", "acp", or "remote".
     pub mode: String,
     /// CLI command. Used only when mode = "cli".
     #[serde(default)]
@@ -18,6 +18,27 @@ pub struct AgentTomlConfig {
     /// Send warmup prompt at startup.
     #[serde(default)]
     pub acp_warmup: bool,
+    /// OpenCode remote URL (e.g. "http://localhost:4096"). Used only when mode = "remote".
+    #[serde(default)]
+    pub remote_url: String,
+    /// Working directory for the remote OpenCode session.
+    #[serde(default)]
+    pub remote_dir: String,
+    /// Custom path for creating a remote session (default: "/session" for OpenCode).
+    #[serde(default)]
+    pub remote_session_path: String,
+    /// Custom path for submitting a message (default: "/session/{id}/message" for OpenCode).
+    /// The "{id}" placeholder is replaced with the session ID.
+    #[serde(default)]
+    pub remote_message_path: String,
+    /// Custom path for the SSE event stream (default: "/event" for OpenCode).
+    /// The "{id}" placeholder is replaced with the session ID.
+    #[serde(default)]
+    pub remote_event_path: String,
+    /// Hermes API key for Bearer auth. When set, the transport uses Hermes protocol
+    /// (POST /v1/runs with {"input": …}, per-run events, run_id field).
+    #[serde(default)]
+    pub remote_api_key: String,
     /// LLM-facing text: when to delegate to this agent.
     pub when_to_use: String,
     /// Agent-facing instructions.
@@ -32,6 +53,12 @@ impl From<AgentTomlConfig> for AgentConfig {
             command: src.command,
             acp_command: src.acp_command.unwrap_or_default(),
             acp_warmup: src.acp_warmup,
+            remote_url: src.remote_url,
+            remote_dir: src.remote_dir,
+            remote_session_path: src.remote_session_path,
+            remote_message_path: src.remote_message_path,
+            remote_event_path: src.remote_event_path,
+            remote_api_key: src.remote_api_key,
             when_to_use: src.when_to_use,
             instructions: src.instructions,
         }
@@ -41,12 +68,13 @@ impl From<AgentTomlConfig> for AgentConfig {
 /// Single external agent definition loaded from environment variables.
 ///
 /// Each agent gets its own tool (`run_{name}`), its own system prompt
-/// section (when-to-use + instructions), and independent mode (cli/acp).
+/// section (when-to-use + instructions), and independent mode (cli/acp/remote).
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     /// Unique name used as tool suffix: `run_{name}`.
     pub name: String,
-    /// Communication mode: `"cli"` (one-shot subprocess) or `"acp"` (persistent JSON-RPC stdio).
+    /// Communication mode: `"cli"` (one-shot subprocess), `"acp"` (persistent JSON-RPC stdio),
+    /// or `"remote"` (OpenCode HTTP transport).
     pub mode: String,
     /// CLI command (e.g. `"hermes chat"`). Used only when `mode = "cli"`.
     pub command: Option<String>,
@@ -54,6 +82,18 @@ pub struct AgentConfig {
     pub acp_command: String,
     /// When true, send a warmup prompt at startup to force model load.
     pub acp_warmup: bool,
+    /// OpenCode remote URL (e.g. "http://localhost:4096"). Used only when `mode = "remote"`.
+    pub remote_url: String,
+    /// Working directory for the remote OpenCode session.
+    pub remote_dir: String,
+    /// Custom path for creating a remote session (default: "/session").
+    pub remote_session_path: String,
+    /// Custom path for submitting a message (default: "/session/{id}/message").
+    pub remote_message_path: String,
+    /// Custom path for the SSE event stream (default: "/event").
+    pub remote_event_path: String,
+    /// Hermes API key for Bearer auth. When set, the transport uses Hermes protocol.
+    pub remote_api_key: String,
     /// LLM-facing text: when to delegate to this agent.
     /// Appended to the system prompt so the primary LLM knows which agent to pick.
     pub when_to_use: String,
@@ -215,6 +255,16 @@ fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
 
     let acp_warmup = env::var(format!("AGENT_{}_ACP_WARMUP", upper)).as_deref() == Ok("1");
 
+    let remote_url = env::var(format!("AGENT_{}_REMOTE_URL", upper)).unwrap_or_default();
+    let remote_dir = env::var(format!("AGENT_{}_REMOTE_DIR", upper)).unwrap_or_default();
+    let remote_session_path =
+        env::var(format!("AGENT_{}_REMOTE_SESSION_PATH", upper)).unwrap_or_default();
+    let remote_message_path =
+        env::var(format!("AGENT_{}_REMOTE_MESSAGE_PATH", upper)).unwrap_or_default();
+    let remote_event_path =
+        env::var(format!("AGENT_{}_REMOTE_EVENT_PATH", upper)).unwrap_or_default();
+    let remote_api_key = env::var(format!("AGENT_{}_REMOTE_API_KEY", upper)).unwrap_or_default();
+
     let when_to_use = env::var(format!("AGENT_{}_WHEN_TO_USE", upper))
         .unwrap_or_else(|_| default_when_to_use(name));
 
@@ -227,6 +277,12 @@ fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
         command,
         acp_command,
         acp_warmup,
+        remote_url,
+        remote_dir,
+        remote_session_path,
+        remote_message_path,
+        remote_event_path,
+        remote_api_key,
         when_to_use,
         instructions,
     })
@@ -250,6 +306,12 @@ fn load_legacy_agent() -> Option<AgentConfig> {
         command,
         acp_command,
         acp_warmup,
+        remote_url: String::new(),
+        remote_dir: String::new(),
+        remote_session_path: String::new(),
+        remote_message_path: String::new(),
+        remote_event_path: String::new(),
+        remote_api_key: String::new(),
         when_to_use,
         instructions,
     })
@@ -382,6 +444,12 @@ mod tests {
                 command: None,
                 acp_command: "hermes acp".to_string(),
                 acp_warmup: false,
+                remote_url: String::new(),
+                remote_dir: String::new(),
+                remote_session_path: String::new(),
+                remote_message_path: String::new(),
+                remote_event_path: String::new(),
+                remote_api_key: String::new(),
                 when_to_use: "Test when to use".to_string(),
                 instructions: "Test instructions".to_string(),
             }],
@@ -418,6 +486,12 @@ mod tests {
                     command: None,
                     acp_command: Some("hermes acp".to_string()),
                     acp_warmup: true,
+                    remote_url: String::new(),
+                    remote_dir: String::new(),
+                    remote_session_path: String::new(),
+                    remote_message_path: String::new(),
+                    remote_event_path: String::new(),
+                    remote_api_key: String::new(),
                     when_to_use: "Para todo".to_string(),
                     instructions: "Eres Hermes".to_string(),
                 }];
@@ -440,6 +514,12 @@ mod tests {
                     command: Some("test-agent run".to_string()),
                     acp_command: None,
                     acp_warmup: false,
+                    remote_url: String::new(),
+                    remote_dir: String::new(),
+                    remote_session_path: String::new(),
+                    remote_message_path: String::new(),
+                    remote_event_path: String::new(),
+                    remote_api_key: String::new(),
                     when_to_use: "Para pruebas".to_string(),
                     instructions: "Test agent".to_string(),
                 }];
@@ -466,6 +546,12 @@ mod tests {
                 command: None,
                 acp_command: Some("hermes acp".to_string()),
                 acp_warmup: true,
+                remote_url: "http://localhost:4096".to_string(),
+                remote_dir: "/tmp".to_string(),
+                remote_session_path: String::new(),
+                remote_message_path: String::new(),
+                remote_event_path: String::new(),
+                remote_api_key: String::new(),
                 when_to_use: "Para todo".to_string(),
                 instructions: "Eres Hermes".to_string(),
             };
@@ -476,6 +562,70 @@ mod tests {
             assert_eq!(agent.command, None);
             assert_eq!(agent.acp_command, "hermes acp");
             assert!(agent.acp_warmup);
+            assert_eq!(agent.remote_url, "http://localhost:4096");
+            assert_eq!(agent.remote_dir, "/tmp");
+        }
+
+        #[test]
+        fn remote_api_key_loaded_from_env() {
+            with_vars(
+                [
+                    ("AGENTS", Some("testagent")),
+                    ("AGENT_TESTAGENT_MODE", Some("remote")),
+                    ("AGENT_TESTAGENT_REMOTE_URL", Some("http://localhost:8642")),
+                    ("AGENT_TESTAGENT_REMOTE_API_KEY", Some("sk-hermes-key")),
+                    ("AGENT_TESTAGENT_WHEN_TO_USE", Some("test")),
+                    ("AGENT_TESTAGENT_INSTRUCTIONS", Some("test")),
+                ],
+                || {
+                    let reg = AgentRegistry::from_env();
+                    assert_eq!(reg.agents.len(), 1);
+                    assert_eq!(reg.agents[0].remote_api_key, "sk-hermes-key");
+                },
+            );
+        }
+
+        #[test]
+        fn remote_api_key_defaults_to_empty() {
+            with_vars(
+                [
+                    ("AGENTS", Some("testagent")),
+                    ("AGENT_TESTAGENT_MODE", Some("remote")),
+                    ("AGENT_TESTAGENT_REMOTE_URL", Some("http://localhost:8642")),
+                    ("AGENT_TESTAGENT_WHEN_TO_USE", Some("test")),
+                    ("AGENT_TESTAGENT_INSTRUCTIONS", Some("test")),
+                ],
+                || {
+                    let reg = AgentRegistry::from_env();
+                    assert_eq!(reg.agents.len(), 1);
+                    assert_eq!(reg.agents[0].remote_api_key, "");
+                },
+            );
+        }
+
+        #[test]
+        fn toml_remote_api_key_loaded() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let toml_agents = vec![AgentTomlConfig {
+                    name: "hermes".to_string(),
+                    mode: "remote".to_string(),
+                    command: None,
+                    acp_command: None,
+                    acp_warmup: false,
+                    remote_url: "http://localhost:8642".to_string(),
+                    remote_dir: String::new(),
+                    remote_session_path: String::new(),
+                    remote_message_path: String::new(),
+                    remote_event_path: String::new(),
+                    remote_api_key: "toml-hermes-key".to_string(),
+                    when_to_use: "test".to_string(),
+                    instructions: "test".to_string(),
+                }];
+
+                let reg = AgentRegistry::from_config_and_env(toml_agents);
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].remote_api_key, "toml-hermes-key");
+            });
         }
     }
 }

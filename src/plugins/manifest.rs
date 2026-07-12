@@ -43,6 +43,18 @@ pub struct PluginAgentConfig {
     pub acp_command: Option<String>,
     #[serde(default)]
     pub acp_warmup: bool,
+    #[serde(default)]
+    pub remote_url: String,
+    #[serde(default)]
+    pub remote_dir: String,
+    #[serde(default)]
+    pub remote_session_path: String,
+    #[serde(default)]
+    pub remote_message_path: String,
+    #[serde(default)]
+    pub remote_event_path: String,
+    #[serde(default)]
+    pub remote_api_key: String,
     pub when_to_use: String,
     pub instructions: String,
 }
@@ -55,6 +67,12 @@ impl From<PluginAgentConfig> for AgentConfig {
             command: src.command,
             acp_command: src.acp_command.unwrap_or_default(),
             acp_warmup: src.acp_warmup,
+            remote_url: src.remote_url,
+            remote_dir: src.remote_dir,
+            remote_session_path: src.remote_session_path,
+            remote_message_path: src.remote_message_path,
+            remote_event_path: src.remote_event_path,
+            remote_api_key: src.remote_api_key,
             when_to_use: src.when_to_use,
             instructions: src.instructions,
         }

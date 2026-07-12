@@ -42,6 +42,9 @@ async-channel = "2"
 async-trait = "0.1"
 futures-util = "0.3"
 
+# CancellationToken and other async utilities
+tokio-util = "0.7"
+
 # DB
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "=0.8.6", features = ["sqlite", "runtime-tokio-native-tls"] }

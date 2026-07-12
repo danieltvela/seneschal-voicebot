@@ -6,6 +6,7 @@ pub mod deep_research;
 pub mod mcp_tool;
 pub mod noop;
 pub mod open_app;
+pub mod open_terminal;
 pub mod quick_search;
 pub mod read_file;
 pub mod recover_historical_context;
@@ -30,6 +31,8 @@ pub use deep_research::DeepResearchTool;
 pub use mcp_tool::McpToolProxy;
 pub use noop::NoopTool;
 pub use open_app::OpenAppTool;
+#[cfg(target_os = "macos")]
+pub use open_terminal::OpenTerminalTool;
 pub use quick_search::QuickSearchTool;
 pub use read_file::ReadFileTool;
 #[allow(unused_imports)]

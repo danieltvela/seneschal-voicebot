@@ -1,10 +1,23 @@
 pub mod config;
+pub mod hermes_events;
+pub mod opencode_events;
+pub mod opencode_transport;
 pub mod session_events;
 pub mod session_manager;
 
 #[allow(unused_imports)]
 pub use config::AgentTomlConfig;
 pub use config::{AgentConfig, AgentRegistry};
+#[allow(unused_imports)]
+pub use hermes_events::{
+    HermesEvent, HermesMilestone, extract_milestone as extract_hermes_milestone, parse_hermes_event,
+};
+#[allow(unused_imports)]
+pub use opencode_events::{
+    OpenCodeEvent, OpenCodeMilestone, extract_milestone, parse_opencode_event,
+};
+#[allow(unused_imports)]
+pub use opencode_transport::{HttpAgentTransport, OpenCodeHttpTransport};
 #[allow(unused_imports)]
 pub use session_events::{AcpSessionEvent, create_event_channel, parse_session_update};
 #[allow(unused_imports)]
@@ -55,6 +68,14 @@ pub enum ProactiveEvent {
     /// connected). The main loop should start capture, swap the output device,
     /// and send the startup greeting.
     DeviceConnected,
+    /// A milestone event from a remote agent (e.g. OpenCode tool invocation).
+    /// The pipeline should narrate the milestone via TTS so the user knows
+    /// what the agent is doing.
+    AgentMilestone {
+        agent_name: String,
+        milestone: String,
+        correlation_id: String,
+    },
 }
 
 impl std::fmt::Debug for ProactiveEvent {
@@ -87,6 +108,17 @@ impl std::fmt::Debug for ProactiveEvent {
                 write!(f, "PluginSwitch(plugin_id={plugin_id})")
             }
             Self::DeviceConnected => write!(f, "DeviceConnected"),
+            Self::AgentMilestone {
+                agent_name,
+                milestone,
+                correlation_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "AgentMilestone(agent={agent_name}, milestone={milestone:?}, correlation_id={correlation_id})"
+                )
+            }
         }
     }
 }

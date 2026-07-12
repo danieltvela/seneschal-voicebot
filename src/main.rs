@@ -41,7 +41,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::agents::{AcpSessionManager, AgentRegistry, ProactiveEvent};
+use crate::agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport, ProactiveEvent};
 use crate::analysis::ContextLens;
 use crate::analysis::identity::IdentityAnalyzer;
 use crate::audio::ambient_buffer::AmbientBuffer;
@@ -67,6 +67,8 @@ use crate::plugins::{
 };
 use crate::profile::ProfileFact;
 use crate::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
+#[cfg(target_os = "macos")]
+use crate::tools::OpenTerminalTool;
 use crate::tools::{
     ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy,
     NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool,
@@ -326,14 +328,39 @@ async fn async_main() -> Result<()> {
             run_agent_tool = run_agent_tool.with_synthesis(sec.clone());
             info!(target: "seneschal", "run_{} result synthesis via secondary LLM enabled", agent.name);
         }
-        if agent.mode == "acp" {
+        if agent.mode == "remote" {
+            if !agent.remote_url.is_empty() {
+                let mut transport =
+                    OpenCodeHttpTransport::new(agent.remote_url.clone(), agent.remote_dir.clone());
+                if !agent.remote_api_key.is_empty() {
+                    transport = transport.with_api_key(agent.remote_api_key.clone());
+                    info!(target: "seneschal", "run_{} Hermes transport enabled (url={}, api_key=set)",
+                        agent.name, agent.remote_url);
+                } else {
+                    info!(target: "seneschal", "run_{} OpenCode remote transport enabled (url={})",
+                        agent.name, agent.remote_url);
+                }
+                run_agent_tool = run_agent_tool.with_opencode_transport(Arc::new(transport));
+            }
+        } else if agent.mode == "acp" {
             run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
             run_agent_tool = run_agent_tool.with_hermes_viewer(config.hermes_session_viewer);
         }
         tool_registry.register(run_agent_tool);
     }
 
-    // ── ACP pre-warm (per-agent) ─────────────────────────────────────────────
+    // ── OpenTerminalTool: macOS-only, registered when remote agents exist ─────
+    #[cfg(target_os = "macos")]
+    if agent_registry.agents.iter().any(|a| a.mode == "remote") {
+        let dir = std::env::current_dir()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        tool_registry.register(OpenTerminalTool { directory: dir });
+        info!(target: "seneschal", "open_terminal tool enabled (macOS + remote agents)");
+    }
+
+    // ── ACP pre-warm (per-agent) — skipped for remote agents ────────────────
     for agent in &agent_registry.agents {
         if agent.mode != "acp" || !agent.acp_warmup {
             continue;
@@ -1396,6 +1423,19 @@ async fn async_main() -> Result<()> {
                                             .replace("{date_str}", &date_str)
                                     };
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                                }
+                                ProactiveEvent::AgentMilestone { milestone, .. } => {
+                                    // Speak the milestone text via TTS so the user hears progress.
+                                    if !pipeline_state_rx.borrow().is_busy() {
+                                        transcript_tx
+                                            .send(PipelineFrame::SystemNotification {
+                                                text: milestone,
+                                            })
+                                            .await
+                                            .ok();
+                                    } else {
+                                        debug!(target: "pipeline", "AgentMilestone skipped (pipeline busy): {milestone}");
+                                    }
                                 }
                             }
                             continue;

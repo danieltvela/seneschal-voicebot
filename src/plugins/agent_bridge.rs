@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::agents::{AcpSessionManager, AgentConfig, ProactiveEvent};
+use crate::agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport, ProactiveEvent};
 use crate::config::HermesSessionViewerMode;
 use crate::llm::LlmProvider;
 use crate::tools::{ActiveTask, RunAgentTool, Tool, ToolRegistry};
@@ -65,7 +65,16 @@ pub fn register_plugin_agent_tools(
             run_agent_tool = run_agent_tool.with_synthesis(Arc::clone(client));
         }
 
-        if agent.mode == "acp" {
+        if agent.mode == "remote" {
+            if !agent.remote_url.is_empty() {
+                let mut transport =
+                    OpenCodeHttpTransport::new(agent.remote_url.clone(), agent.remote_dir.clone());
+                if !agent.remote_api_key.is_empty() {
+                    transport = transport.with_api_key(agent.remote_api_key.clone());
+                }
+                run_agent_tool = run_agent_tool.with_opencode_transport(Arc::new(transport));
+            }
+        } else if agent.mode == "acp" {
             if let Some(ref mgr) = session_manager {
                 run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(mgr));
             }

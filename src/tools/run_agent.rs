@@ -14,7 +14,9 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::Tool;
-use crate::agents::{AcpSessionManager, AgentConfig, ProactiveEvent};
+use crate::agents::{
+    AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, ProactiveEvent,
+};
 use crate::config::{Config, HermesSessionViewerMode};
 
 use crate::llm::{LlmProvider, Message};
@@ -225,9 +227,10 @@ async fn synthesize_agent_result(
 
 /// Unified agent delegation tool.
 ///
-/// Supports two modes (selected by the `config.mode` field):
+/// Supports three modes (selected by the `config.mode` field):
 /// - `"cli"` — spawns the agent as a one-shot CLI subprocess (fire-and-forget).
 /// - `"acp"` — maintains a persistent ACP subprocess via JSON-RPC 2.0 over stdio.
+/// - `"remote"` — connects to an OpenCode HTTP server for prompt submission.
 ///
 /// Additionally handles two inline commands that require no subprocess:
 /// - `run_<name>: cancel` — cancels the currently running ACP task.
@@ -239,6 +242,7 @@ pub struct RunAgentTool {
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
+    opencode_transport: Option<Arc<OpenCodeHttpTransport>>,
     hermes_viewer_mode: HermesSessionViewerMode,
     tool_name: OnceLock<&'static str>,
 }
@@ -257,6 +261,7 @@ impl RunAgentTool {
             proactive_tx,
             synthesis_client: None,
             session_manager: None,
+            opencode_transport: None,
             hermes_viewer_mode: HermesSessionViewerMode::Off,
             tool_name: OnceLock::new(),
         }
@@ -276,6 +281,12 @@ impl RunAgentTool {
     /// Attach a secondary LLM client for result synthesis.
     pub fn with_synthesis(mut self, client: Arc<dyn LlmProvider>) -> Self {
         self.synthesis_client = Some(client);
+        self
+    }
+
+    /// Attach an OpenCode HTTP transport for remote mode.
+    pub fn with_opencode_transport(mut self, transport: Arc<OpenCodeHttpTransport>) -> Self {
+        self.opencode_transport = Some(transport);
         self
     }
 
@@ -322,6 +333,206 @@ impl RunAgentTool {
                 tasks.join("\n")
             )
         }
+    }
+
+    /// Remote mode: submit prompt to OpenCode or Hermes HTTP server, deliver result proactively.
+    async fn run_remote(&self, task: String) -> String {
+        let transport = match &self.opencode_transport {
+            Some(t) => Arc::clone(t),
+            None => return "Error: Remote transport not configured.".to_string(),
+        };
+
+        if transport.is_hermes() {
+            return self.run_remote_hermes(transport, task).await;
+        }
+
+        // ── OpenCode mode ─────────────────────────────────────────────────
+        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let proactive_tx = self.proactive_tx.clone();
+        let synthesis_client = self.synthesis_client.clone();
+        let agent_name = self.config.name.clone();
+
+        tokio::spawn(async move {
+            info!(target: "opencode", "RunAgentTool(remote): task started: {:?}", task);
+
+            // Get or create session
+            let session = match transport.get_or_create_session().await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(target: "opencode", "Session creation failed: {e}");
+                    let _ = proactive_tx
+                        .send(ProactiveEvent::AgentResult {
+                            task,
+                            result: format!("OpenCode session error: {e}"),
+                            tool_call_id: None,
+                            correlation_id: String::new(),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // ── Subscribe to SSE events for milestone narration ────────────────
+            let (mut milestone_rx, sse_cancel) = transport.subscribe_events(&session.session_id);
+
+            // ── Submit prompt (runs in parallel with SSE subscriber) ──────────
+            let cancel = transport.cancellation_token();
+            let submit_handle = tokio::spawn({
+                let transport = Arc::clone(&transport);
+                let session_id = session.session_id.clone();
+                let query = query.clone();
+                async move { transport.submit_prompt(&session_id, &query, cancel).await }
+            });
+
+            // ── Forward milestones while prompt runs ──────────────────────────
+            let milestone_tx = proactive_tx.clone();
+            let milestone_task = tokio::spawn(async move {
+                while let Some(ms) = milestone_rx.recv().await {
+                    let _ = milestone_tx
+                        .send(ProactiveEvent::AgentMilestone {
+                            agent_name: agent_name.clone(),
+                            milestone: ms.milestone,
+                            correlation_id: ms.correlation_id,
+                        })
+                        .await;
+                }
+            });
+
+            // ── Wait for prompt submission result ─────────────────────────────
+            let result = match submit_handle.await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!(target: "opencode", "Prompt submission failed: {e}");
+                    format!("OpenCode error: {e}")
+                }
+                Err(e) => {
+                    warn!(target: "opencode", "Prompt task panicked: {e}");
+                    format!("OpenCode internal error: {e}")
+                }
+            };
+
+            // Cancel SSE subscriber and abort milestone forwarding
+            sse_cancel.cancel();
+            milestone_task.abort();
+
+            info!(target: "opencode", "RunAgentTool(remote): task complete ({} chars)", result.len());
+
+            let final_result =
+                synthesize_agent_result(&task, result, synthesis_client.as_deref()).await;
+
+            if proactive_tx
+                .send(ProactiveEvent::AgentResult {
+                    task,
+                    result: final_result,
+                    tool_call_id: None,
+                    correlation_id: String::new(),
+                })
+                .await
+                .is_err()
+            {
+                warn!(
+                    "RunAgentTool(remote): failed to deliver agent result: main loop channel closed"
+                );
+            }
+        });
+
+        "[Tarea delegada al agente remoto. El resultado llegará en breve.]".to_string()
+    }
+
+    /// Hermes remote mode: submit prompt via Hermes protocol
+    /// (POST /v1/runs with {"input": prompt}, per-run events, cancel via POST /v1/runs/{id}/stop).
+    async fn run_remote_hermes(&self, transport: Arc<HttpAgentTransport>, task: String) -> String {
+        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let proactive_tx = self.proactive_tx.clone();
+        let synthesis_client = self.synthesis_client.clone();
+        let agent_name = self.config.name.clone();
+        tokio::spawn(async move {
+            info!(target: "hermes", "RunAgentTool(hermes): task started: {:?}", task);
+
+            // ── Submit prompt creates a new run ─────────────────────────────
+            let cancel = transport.cancellation_token();
+            let submit_transport: Arc<HttpAgentTransport> = Arc::clone(&transport);
+            let query_submit = query.clone();
+
+            let submit_handle = tokio::spawn(async move {
+                // For Hermes we pass an empty session_id — the run is created
+                // by submit_prompt using session_create_path (/v1/runs).
+                submit_transport
+                    .submit_prompt("", &query_submit, cancel)
+                    .await
+            });
+
+            // ── Subscribe to SSE events once the run_id is available ─────────
+            let event_transport: Arc<HttpAgentTransport> = Arc::clone(&transport);
+            let event_agent_name = agent_name.clone();
+            let event_proactive_tx = proactive_tx.clone();
+            let event_task = tokio::spawn(async move {
+                // Poll for the run_id to become available (Hermes creates it)
+                let run_id = loop {
+                    if let Some(rid) = event_transport.get_last_run_id().await {
+                        break rid;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                };
+
+                let (mut milestone_rx, cancel_token) =
+                    event_transport.subscribe_hermes_events(&run_id);
+
+                while let Some(ms) = milestone_rx.recv().await {
+                    let _ = event_proactive_tx
+                        .send(ProactiveEvent::AgentMilestone {
+                            agent_name: event_agent_name.clone(),
+                            milestone: ms.milestone,
+                            correlation_id: ms.correlation_id,
+                        })
+                        .await;
+                }
+
+                cancel_token.cancel();
+            });
+
+            // ── Wait for prompt submission result ─────────────────────────────
+            let result = match submit_handle.await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!(target: "hermes", "Hermes prompt submission failed: {e}");
+                    // Cancel the run if submission failed
+                    if let Some(run_id) = transport.get_last_run_id().await.as_deref() {
+                        let _ = transport.cancel_run(run_id).await;
+                    }
+                    format!("Hermes error: {e}")
+                }
+                Err(e) => {
+                    warn!(target: "hermes", "Hermes prompt task panicked: {e}");
+                    format!("Hermes internal error: {e}")
+                }
+            };
+
+            // Cancel the event subscriber
+            event_task.abort();
+
+            info!(target: "hermes", "RunAgentTool(hermes): task complete ({} chars)", result.len());
+
+            let final_result =
+                synthesize_agent_result(&task, result, synthesis_client.as_deref()).await;
+
+            if proactive_tx
+                .send(ProactiveEvent::AgentResult {
+                    task,
+                    result: final_result,
+                    tool_call_id: None,
+                    correlation_id: String::new(),
+                })
+                .await
+                .is_err()
+            {
+                warn!(
+                    "RunAgentTool(hermes): failed to deliver agent result: main loop channel closed"
+                );
+            }
+        });
+
+        "[Tarea delegada al agente remoto (Hermes). El resultado llegará en breve.]".to_string()
     }
 
     /// CLI mode: spawn agent as one-shot subprocess, deliver result proactively.
@@ -593,6 +804,7 @@ impl Tool for RunAgentTool {
         }
 
         match self.config.mode.as_str() {
+            "remote" => self.run_remote(task).await,
             "acp" => self.run_acp(task).await,
             _ => self.run_cli(task).await,
         }
@@ -1350,6 +1562,12 @@ mod tests {
             command,
             acp_command: format!("{name} acp"),
             acp_warmup: false,
+            remote_url: String::new(),
+            remote_dir: String::new(),
+            remote_session_path: String::new(),
+            remote_message_path: String::new(),
+            remote_event_path: String::new(),
+            remote_api_key: String::new(),
             when_to_use: "Test".to_string(),
             instructions: "Test instructions".to_string(),
         }
