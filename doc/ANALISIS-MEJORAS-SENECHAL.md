@@ -27,7 +27,7 @@ A continuación se detallan las mejoras y funcionalidades adicionales categoriza
 - **VAD adaptativo**: Reducir el umbral de silence de 1.5s a valores configurables (ej: 800ms) para respuestas más rápidas.
 - **Early termination en TTS**: Sintetizar la primera frase mientras el LLM genera las siguientes (ya implementado parcialmente con SentenceSplitter).
 
-**Impacto:** Crítico para la experiencia de usuario — la velocidad es una de las características clave de un voicebot.
+**Impacto:** Crítico para la experiencia de usuario — la velocidad es una de las características clave de un seneschal.
 
 ### 1.2 Detección de Intención de Conversación (Conversation Awareness)
 
@@ -35,7 +35,7 @@ A continuación se detallan las mejoras y funcionalidades adicionales categoriza
 
 **Falta implementar:**
 
-- Detectar cuando el usuario está hablando **al voicebot** vs. speaking-elsewhere (conversación con otras personas o hacia la pantalla).
+- Detectar cuando el usuario está hablando **al seneschal** vs. speaking-elsewhere (conversación con otras personas o hacia la pantalla).
 - Diferenciar entre comandos directos ("Hey Seneschal, haz esto") vs. respuestas contextuales.
 - Soporte para múltiples usuarios con identificación de quién habla.
 
@@ -105,7 +105,7 @@ A continuación se detallan las mejoras y funcionalidades adicionales categoriza
 
 - **Fallback entre agentes**: Si Hermes falla, intentar otro agente disponible.
 - **Selección dinámica de agente**: Berdasarkan el tipo de tarea (codificación vs. búsqueda vs. análisis).
-- **Comunicación bidireccional**: El agente puede pedir clarificación al usuario (el voicebot habla: "¿continúo?").
+- **Comunicación bidireccional**: El agente puede pedir clarificación al usuario (el seneschal habla: "¿continúo?").
 - **Timeout configurable por tipo de tarea**: Mayor para tareas complejas, menor para queries simples.
 
 ### 2.4 Conversaciones Proactivas (Initiative Conversations)

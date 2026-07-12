@@ -16,8 +16,8 @@ use tracing::debug;
 use tracing_subscriber::EnvFilter;
 
 // Re-use library modules from the voicebot crate.
-use voicebot::config::{Config, HermesSessionViewerMode};
-use voicebot::tools::run_agent::{AcpWriter, JsonRpcMessage};
+use seneschal::config::{Config, HermesSessionViewerMode};
+use seneschal::tools::run_agent::{AcpWriter, JsonRpcMessage};
 
 /// How permission requests from the agent are handled.
 #[derive(Debug, Clone, Copy, PartialEq)]

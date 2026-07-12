@@ -4,11 +4,11 @@ use db_inspect::db::AppState;
 use db_inspect::routes::create_router;
 use std::sync::Arc;
 
-/// Voicebot database inspector — standalone viewer for Voicebot's SQLite database.
+/// Seneschal database inspector — standalone viewer for Seneschal's SQLite database.
 #[derive(Parser, Debug)]
 #[command(name = "db-inspect")]
 struct Args {
-    /// Path to the Voicebot SQLite database
+    /// Path to the Seneschal SQLite database
     #[arg(long)]
     db: Option<String>,
 }

@@ -36,7 +36,7 @@ pub async fn supervise(
         restart_count += 1;
         if restart_count > MAX_RESTARTS {
             let msg = format!(
-                "LLM server crashed {} times. Please check the logs and restart voicebot.",
+                "LLM server crashed {} times. Please check the logs and restart seneschal.",
                 restart_count
             );
             error!(target: "llm_manager", "{}", msg);
@@ -68,7 +68,7 @@ pub async fn supervise(
                 restart_count += 1;
                 if restart_count > MAX_RESTARTS {
                     let msg =
-                        "LLM server could not be restarted. Please restart voicebot.".to_string();
+                        "LLM server could not be restarted. Please restart seneschal.".to_string();
                     error!(target: "llm_manager", "{}", msg);
                     let _ = notify_tx.send(msg).await;
                     break;

@@ -216,7 +216,7 @@ impl McpClient {
             .ok_or_else(|| anyhow::anyhow!("MCP_COMMAND is empty"))?;
         let args = &parts[1..];
 
-        // Redirect server stderr to voicebot.log so it doesn't clutter TUI output.
+        // Redirect server stderr to seneschal.log so it doesn't clutter TUI output.
         let log_path = Config::log_file_path();
         let stderr_sink = std::fs::OpenOptions::new()
             .create(true)
@@ -311,7 +311,7 @@ impl McpClient {
                 serde_json::json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {"name": "voicebot", "version": "0.1.0"},
+                    "clientInfo": {"name": "seneschal", "version": "0.1.0"},
                 }),
             )
             .await?;

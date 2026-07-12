@@ -29,7 +29,7 @@ CHANGELOG_FILE="$PROJECT_ROOT/CHANGELOG.md"
 GITEA_URL="${GITEA_URL:-http://tesla.local:3000}"
 GITEA_TOKEN="${GITEA_TOKEN:-}"
 REPO_OWNER="danielvela"
-REPO_NAME="seneschal-voicebot"
+REPO_NAME="seneschal"
 API_BASE="${GITEA_URL}/api/v1"
 
 DRY_RUN=false

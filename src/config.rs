@@ -4,8 +4,8 @@ use std::env;
 use std::path::PathBuf;
 use tracing::warn;
 
-/// Embedded default configuration. Keep `voicebot.pro.toml` in sync with this constant.
-const DEFAULT_CONFIG_TOML: &str = include_str!("../voicebot.pro.toml");
+/// Embedded default configuration. Keep `seneschal.pro.toml` in sync with this constant.
+const DEFAULT_CONFIG_TOML: &str = include_str!("../seneschal.pro.toml");
 
 /// Mode for the Hermes ACP session log viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -28,16 +28,16 @@ impl std::str::FromStr for HermesSessionViewerMode {
     }
 }
 
-/// Active Voicebot runtime environment.
+/// Active Seneschal runtime environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum VoicebotEnv {
+pub enum SeneschalEnv {
     #[default]
     Pro,
     Dev,
 }
 
-impl VoicebotEnv {
+impl SeneschalEnv {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pro => "pro",
@@ -46,10 +46,10 @@ impl VoicebotEnv {
     }
 
     pub fn from_env_var() -> Self {
-        match env::var("VOICEBOT_ENV") {
+        match env::var("SENECHAL_ENV") {
             Ok(v) => v.parse().unwrap_or_else(|e| {
                 warn!(
-                    "Invalid VOICEBOT_ENV value '{}': {}; defaulting to pro",
+                    "Invalid SENECHAL_ENV value '{}': {}; defaulting to pro",
                     v, e
                 );
                 Self::Pro
@@ -59,14 +59,16 @@ impl VoicebotEnv {
     }
 }
 
-impl std::str::FromStr for VoicebotEnv {
+impl std::str::FromStr for SeneschalEnv {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "pro" | "production" => Ok(Self::Pro),
             "dev" | "development" => Ok(Self::Dev),
-            _ => Err(format!("Invalid VoicebotEnv: {s}. Expected 'pro' or 'dev'")),
+            _ => Err(format!(
+                "Invalid SeneschalEnv: {s}. Expected 'pro' or 'dev'"
+            )),
         }
     }
 }
@@ -344,7 +346,7 @@ pub struct Config {
     pub control_port: Option<u16>,
 
     // ── Self-managed LLM process ──────────────────────────────────────────────
-    /// When true, voicebot launches and supervises the LLM server process.
+    /// When true, seneschal launches and supervises the LLM server process.
     /// Requires LLM_COMMAND to be set. (LLM_SELF_MANAGED, default false)
     pub llm_self_managed: bool,
     /// Full shell command to launch the LLM server (LLM_COMMAND).
@@ -385,9 +387,9 @@ pub struct Config {
     pub apple_events_enabled: bool,
 
     // ── Plugins ───────────────────────────────────────────────────────────────
-    /// Paths to plugin directories or files (VOICEBOT_PLUGINS, comma-separated).
+    /// Paths to plugin directories or files (SENECHAL_PLUGINS, comma-separated).
     pub plugins: Vec<PathBuf>,
-    /// Name of the currently active plugin (VOICEBOT_ACTIVE_PLUGIN).
+    /// Name of the currently active plugin (SENECHAL_ACTIVE_PLUGIN).
     /// Empty string in TOML maps to None.
     #[serde(deserialize_with = "deserialize_empty_string_as_none")]
     pub active_plugin: Option<String>,
@@ -436,12 +438,12 @@ impl Config {
     }
 
     fn resolve_config_path() -> Result<Option<PathBuf>> {
-        if let Ok(path) = env::var("VOICEBOT_CONFIG_FILE") {
+        if let Ok(path) = env::var("SENECHAL_CONFIG_FILE") {
             return Ok(Some(PathBuf::from(path)));
         }
 
-        let env = VoicebotEnv::from_env_var();
-        let cwd_config = PathBuf::from(format!("voicebot.{}.toml", env.as_str()));
+        let env = SeneschalEnv::from_env_var();
+        let cwd_config = PathBuf::from(format!("seneschal.{}.toml", env.as_str()));
         if cwd_config.exists() {
             return Ok(Some(cwd_config));
         }
@@ -453,10 +455,10 @@ impl Config {
         Ok(None)
     }
 
-    /// Returns the env-specific log file path (e.g. `voicebot.pro.log`).
+    /// Returns the env-specific log file path (e.g. `seneschal.pro.log`).
     /// This is a free function because it is needed before `Config` is loaded.
     pub fn log_file_path() -> String {
-        format!("voicebot.{}.log", VoicebotEnv::from_env_var().as_str())
+        format!("seneschal.{}.log", SeneschalEnv::from_env_var().as_str())
     }
 
     fn merge_toml(base: toml::Value, overlay: toml::Value) -> toml::Value {
@@ -525,7 +527,7 @@ impl Config {
         }
 
         // Language
-        if let Ok(v) = env::var("VOICEBOT_LANGUAGE") {
+        if let Ok(v) = env::var("SENECHAL_LANGUAGE") {
             self.language = v;
         }
 
@@ -856,7 +858,7 @@ impl Config {
         }
 
         // Plugins
-        if let Ok(v) = env::var("VOICEBOT_PLUGINS") {
+        if let Ok(v) = env::var("SENECHAL_PLUGINS") {
             self.plugins = v
                 .split(',')
                 .map(|s| s.trim().to_string())
@@ -864,7 +866,7 @@ impl Config {
                 .map(PathBuf::from)
                 .collect();
         }
-        if let Ok(v) = env::var("VOICEBOT_ACTIVE_PLUGIN") {
+        if let Ok(v) = env::var("SENECHAL_ACTIVE_PLUGIN") {
             self.active_plugin = if v.is_empty() { None } else { Some(v) };
         }
 
@@ -1148,13 +1150,13 @@ mod tests {
     #[test]
     fn config_loads_project_defaults_from_file() {
         // With no env overrides, Config::from_env() should read the project's
-        // voicebot.toml (cwd) and produce the documented defaults.
+        // seneschal.toml (cwd) and produce the documented defaults.
         temp_env::with_vars(
             [
                 ("AUDIO_SAMPLE_RATE", None::<&str>),
-                ("VOICEBOT_LANGUAGE", None::<&str>),
+                ("SENECHAL_LANGUAGE", None::<&str>),
                 ("WHISPER_MODEL", None::<&str>),
-                ("VOICEBOT_CONFIG_FILE", None::<&str>),
+                ("SENECHAL_CONFIG_FILE", None::<&str>),
             ],
             || {
                 let config = Config::from_env().unwrap();
@@ -1171,9 +1173,9 @@ mod tests {
         temp_env::with_vars(
             [
                 ("AUDIO_SAMPLE_RATE", Some("48000")),
-                ("VOICEBOT_LANGUAGE", Some("en")),
+                ("SENECHAL_LANGUAGE", Some("en")),
                 ("WHISPER_MODEL", Some("custom.bin")),
-                ("VOICEBOT_CONFIG_FILE", None::<&str>),
+                ("SENECHAL_CONFIG_FILE", None::<&str>),
             ],
             || {
                 let config = Config::from_env().unwrap();
@@ -1188,7 +1190,7 @@ mod tests {
     fn custom_config_file_via_env_var() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "voicebot-test-custom-{}-{:?}.toml",
+            "seneschal-test-custom-{}-{:?}.toml",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -1204,9 +1206,9 @@ whisper_model = "custom.bin"
 
         temp_env::with_vars(
             [
-                ("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap())),
+                ("SENECHAL_CONFIG_FILE", Some(path.to_str().unwrap())),
                 ("AUDIO_SAMPLE_RATE", None::<&str>),
-                ("VOICEBOT_LANGUAGE", None::<&str>),
+                ("SENECHAL_LANGUAGE", None::<&str>),
                 ("WHISPER_MODEL", None::<&str>),
             ],
             || {
@@ -1224,7 +1226,7 @@ whisper_model = "custom.bin"
     fn partial_config_file_keeps_embedded_defaults() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "voicebot-test-partial-{}-{:?}.toml",
+            "seneschal-test-partial-{}-{:?}.toml",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -1232,9 +1234,9 @@ whisper_model = "custom.bin"
 
         temp_env::with_vars(
             [
-                ("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap())),
+                ("SENECHAL_CONFIG_FILE", Some(path.to_str().unwrap())),
                 ("AUDIO_SAMPLE_RATE", None::<&str>),
-                ("VOICEBOT_LANGUAGE", None::<&str>),
+                ("SENECHAL_LANGUAGE", None::<&str>),
                 ("WHISPER_MODEL", None::<&str>),
             ],
             || {
@@ -1252,13 +1254,13 @@ whisper_model = "custom.bin"
     fn malformed_config_file_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "voicebot-test-bad-{}-{:?}.toml",
+            "seneschal-test-bad-{}-{:?}.toml",
             std::process::id(),
             std::thread::current().id()
         ));
         std::fs::write(&path, "sample_rate = \"not-a-number\"\n").unwrap();
 
-        temp_env::with_var("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap()), || {
+        temp_env::with_var("SENECHAL_CONFIG_FILE", Some(path.to_str().unwrap()), || {
             let result = Config::from_env();
             assert!(
                 result.is_err(),
@@ -1272,35 +1274,35 @@ whisper_model = "custom.bin"
     // ── PRO/DEV environment isolation ──────────────────────────────────────────
 
     #[test]
-    fn voicebot_env_from_env_var_defaults_to_pro() {
-        temp_env::with_var("VOICEBOT_ENV", None::<&str>, || {
-            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Pro);
+    fn seneschal_env_from_env_var_defaults_to_pro() {
+        temp_env::with_var("SENECHAL_ENV", None::<&str>, || {
+            assert_eq!(SeneschalEnv::from_env_var(), SeneschalEnv::Pro);
         });
     }
 
     #[test]
-    fn voicebot_env_from_env_var_explicit_pro() {
-        temp_env::with_var("VOICEBOT_ENV", Some("pro"), || {
-            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Pro);
+    fn seneschal_env_from_env_var_explicit_pro() {
+        temp_env::with_var("SENECHAL_ENV", Some("pro"), || {
+            assert_eq!(SeneschalEnv::from_env_var(), SeneschalEnv::Pro);
         });
     }
 
     #[test]
-    fn voicebot_env_from_env_var_explicit_dev() {
-        temp_env::with_var("VOICEBOT_ENV", Some("dev"), || {
-            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Dev);
+    fn seneschal_env_from_env_var_explicit_dev() {
+        temp_env::with_var("SENECHAL_ENV", Some("dev"), || {
+            assert_eq!(SeneschalEnv::from_env_var(), SeneschalEnv::Dev);
         });
     }
 
     #[test]
-    fn voicebot_env_from_env_var_invalid_defaults_to_pro() {
-        temp_env::with_var("VOICEBOT_ENV", Some("staging"), || {
-            assert_eq!(VoicebotEnv::from_env_var(), VoicebotEnv::Pro);
+    fn seneschal_env_from_env_var_invalid_defaults_to_pro() {
+        temp_env::with_var("SENECHAL_ENV", Some("staging"), || {
+            assert_eq!(SeneschalEnv::from_env_var(), SeneschalEnv::Pro);
         });
     }
 
     #[test]
-    fn voicebot_env_from_str_case_insensitive() {
+    fn seneschal_env_from_str_case_insensitive() {
         let pro_variants = [
             "pro",
             "PRO",
@@ -1311,8 +1313,8 @@ whisper_model = "custom.bin"
         ];
         for variant in pro_variants {
             assert_eq!(
-                variant.parse::<VoicebotEnv>().unwrap(),
-                VoicebotEnv::Pro,
+                variant.parse::<SeneschalEnv>().unwrap(),
+                SeneschalEnv::Pro,
                 "{variant} should parse as Pro"
             );
         }
@@ -1327,57 +1329,57 @@ whisper_model = "custom.bin"
         ];
         for variant in dev_variants {
             assert_eq!(
-                variant.parse::<VoicebotEnv>().unwrap(),
-                VoicebotEnv::Dev,
+                variant.parse::<SeneschalEnv>().unwrap(),
+                SeneschalEnv::Dev,
                 "{variant} should parse as Dev"
             );
         }
     }
 
     #[test]
-    fn voicebot_env_from_str_invalid_returns_error() {
-        let result = "invalid".parse::<VoicebotEnv>();
+    fn seneschal_env_from_str_invalid_returns_error() {
+        let result = "invalid".parse::<SeneschalEnv>();
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().contains("Invalid VoicebotEnv"),
-            "error should mention Invalid VoicebotEnv"
+            result.unwrap_err().contains("Invalid SeneschalEnv"),
+            "error should mention Invalid SeneschalEnv"
         );
     }
 
     #[test]
     fn config_log_file_path_returns_pro_for_default() {
-        temp_env::with_var("VOICEBOT_ENV", None::<&str>, || {
-            assert_eq!(Config::log_file_path(), "voicebot.pro.log");
+        temp_env::with_var("SENECHAL_ENV", None::<&str>, || {
+            assert_eq!(Config::log_file_path(), "seneschal.pro.log");
         });
     }
 
     #[test]
     fn config_log_file_path_returns_pro_for_pro() {
-        temp_env::with_var("VOICEBOT_ENV", Some("pro"), || {
-            assert_eq!(Config::log_file_path(), "voicebot.pro.log");
+        temp_env::with_var("SENECHAL_ENV", Some("pro"), || {
+            assert_eq!(Config::log_file_path(), "seneschal.pro.log");
         });
     }
 
     #[test]
     fn config_log_file_path_returns_dev_for_dev() {
-        temp_env::with_var("VOICEBOT_ENV", Some("dev"), || {
-            assert_eq!(Config::log_file_path(), "voicebot.dev.log");
+        temp_env::with_var("SENECHAL_ENV", Some("dev"), || {
+            assert_eq!(Config::log_file_path(), "seneschal.dev.log");
         });
     }
 
     #[test]
     fn pro_config_file_loads_with_pro_paths() {
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let pro_toml = project_root.join("voicebot.pro.toml");
+        let pro_toml = project_root.join("seneschal.pro.toml");
 
         temp_env::with_vars(
             [
-                ("VOICEBOT_CONFIG_FILE", Some(pro_toml.to_str().unwrap())),
-                ("VOICEBOT_ENV", Some("pro")),
+                ("SENECHAL_CONFIG_FILE", Some(pro_toml.to_str().unwrap())),
+                ("SENECHAL_ENV", Some("pro")),
             ],
             || {
                 let config = Config::from_env().unwrap();
-                assert_eq!(config.db_path, "data/pro/voicebot.db");
+                assert_eq!(config.db_path, "data/pro/seneschal.db");
                 assert_eq!(config.s_dream_jsonl_dir, "data/pro/archives");
                 assert_eq!(config.speaker_enrollment_path, "data/pro/speaker.emb");
                 assert_eq!(config.ws_port, Some(9090u16));
@@ -1389,16 +1391,16 @@ whisper_model = "custom.bin"
     #[test]
     fn dev_config_file_loads_with_dev_paths() {
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let dev_toml = project_root.join("voicebot.dev.toml");
+        let dev_toml = project_root.join("seneschal.dev.toml");
 
         temp_env::with_vars(
             [
-                ("VOICEBOT_CONFIG_FILE", Some(dev_toml.to_str().unwrap())),
-                ("VOICEBOT_ENV", Some("dev")),
+                ("SENECHAL_CONFIG_FILE", Some(dev_toml.to_str().unwrap())),
+                ("SENECHAL_ENV", Some("dev")),
             ],
             || {
                 let config = Config::from_env().unwrap();
-                assert_eq!(config.db_path, "data/dev/voicebot.db");
+                assert_eq!(config.db_path, "data/dev/seneschal.db");
                 assert_eq!(config.s_dream_jsonl_dir, "data/dev/archives");
                 assert_eq!(config.speaker_enrollment_path, "data/dev/speaker.emb");
                 assert_eq!(config.ws_port, Some(9091u16));
@@ -1411,7 +1413,7 @@ whisper_model = "custom.bin"
     fn config_file_override_takes_precedence_over_env_specific_file() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "voicebot-test-env-override-{}-{:?}.toml",
+            "seneschal-test-env-override-{}-{:?}.toml",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -1426,8 +1428,8 @@ llm_max_tokens = 9999
 
         temp_env::with_vars(
             [
-                ("VOICEBOT_CONFIG_FILE", Some(path.to_str().unwrap())),
-                ("VOICEBOT_ENV", Some("dev")),
+                ("SENECHAL_CONFIG_FILE", Some(path.to_str().unwrap())),
+                ("SENECHAL_ENV", Some("dev")),
             ],
             || {
                 let config = Config::from_env().unwrap();
@@ -1442,16 +1444,16 @@ llm_max_tokens = 9999
     }
 
     #[test]
-    fn from_env_defaults_to_pro_on_invalid_voicebot_env() {
+    fn from_env_defaults_to_pro_on_invalid_seneschal_env() {
         temp_env::with_vars(
             [
-                ("VOICEBOT_ENV", Some("staging")),
-                ("VOICEBOT_CONFIG_FILE", None::<&str>),
+                ("SENECHAL_ENV", Some("staging")),
+                ("SENECHAL_CONFIG_FILE", None::<&str>),
             ],
             || {
                 let config = Config::from_env()
                     .expect("invalid VOICEBOT_ENV should default to pro, not error");
-                assert_eq!(config.db_path, "data/pro/voicebot.db");
+                assert_eq!(config.db_path, "data/pro/seneschal.db");
                 assert_eq!(config.s_dream_jsonl_dir, "data/pro/archives");
             },
         );

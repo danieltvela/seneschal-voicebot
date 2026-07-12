@@ -108,4 +108,4 @@ jobs:
             libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1 libclang-dev clang
 
       - name: Build (kokoro)
-        run: . "$HOME/.cargo/env" && cargo build --release --bin voicebot --features kokoro
+        run: . "$HOME/.cargo/env" && cargo build --release --bin seneschal --features kokoro

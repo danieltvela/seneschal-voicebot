@@ -9,7 +9,7 @@ This document describes the full lifecycle of `async_main()`: how the process st
 ```
 async_main()
   │
-  ├─ Init tracing (to voicebot.log if TUI enabled)
+  ├─ Init tracing (to seneschal.log if TUI enabled)
   ├─ Load .env (dotenvy)
   ├─ Load config (Config::from_env)
   ├─ Device/voice listing shortcuts (--list-devices, --list-voices)
@@ -127,7 +127,7 @@ WhisperSTTVAD internals (`src/stt/mod.rs`):
 - 300ms pre-roll retained before VAD onset
 - whisper-cpp-plus (`WhisperContext`) transcribes on SpeechEnd
 - Max segment: 20s before forced cut
-- Config: `WHISPER_MODEL`, `VAD_MODEL`, `VOICEBOT_LANGUAGE`, `VAD_SILENCE_MS`
+- Config: `WHISPER_MODEL`, `VAD_MODEL`, `SENECHAL_LANGUAGE`, `VAD_SILENCE_MS`
 
 ---
 

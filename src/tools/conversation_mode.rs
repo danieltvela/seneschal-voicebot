@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::tools::Tool;
 
-/// Whether the voicebot is actively listening or only responding to its wake word.
+/// Whether Seneschal is actively listening or only responding to its wake word.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConversationMode {
     /// Default — responds to the enrolled user's voice normally.
@@ -18,7 +18,7 @@ pub enum ConversationMode {
     AmbientLocked,
 }
 
-/// Tool that lets the LLM switch the voicebot between Active and Ambient mode.
+/// Tool that lets the LLM switch Seneschal between Active and Ambient mode.
 pub struct SetConversationModeTool {
     mode: Arc<Mutex<ConversationMode>>,
 }

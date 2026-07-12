@@ -39,19 +39,19 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --bin voicebot --target ${{ matrix.target }} --features speech,avspeech,tui
+        run: cargo build --release --bin seneschal --target ${{ matrix.target }} --features speech,avspeech,tui
 
       - name: Package
         run: |
-          BIN="target/${{ matrix.target }}/release/voicebot"
+          BIN="target/${{ matrix.target }}/release/seneschal"
           strip "$BIN"
-          tar -czf "voicebot-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" voicebot
-          shasum -a 256 "voicebot-${{ matrix.target }}.tar.gz" > "voicebot-${{ matrix.target }}.tar.gz.sha256"
+          tar -czf "seneschal-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
+          shasum -a 256 "seneschal-${{ matrix.target }}.tar.gz" > "seneschal-${{ matrix.target }}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: voicebot-${{ matrix.target }}
-          path: voicebot-${{ matrix.target }}.tar.gz*
+          name: seneschal-${{ matrix.target }}
+          path: seneschal-${{ matrix.target }}.tar.gz*
           if-no-files-found: error
           retention-days: 1
 
@@ -91,22 +91,22 @@ jobs:
   #           libasound2-dev espeak-ng pkg-config build-essential libssl-dev cmake libclang-dev libgomp1
   #
   #     - name: Build
-  #       run: cargo build --release --bin voicebot --target ${{ matrix.target }} --features kokoro
+  #       run: cargo build --release --bin seneschal --target ${{ matrix.target }} --features kokoro
   #
   #     # ── Package binary ────────────────────────────────────────────────────
   #     - name: Package
   #       run: |
-  #         BIN="target/${{ matrix.target }}/release/voicebot"
+  #         BIN="target/${{ matrix.target }}/release/seneschal"
   #         strip "$BIN" 2>/dev/null || true
-  #         tar -czf "voicebot-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" voicebot
-  #         sha256sum "voicebot-${{ matrix.target }}.tar.gz" > "voicebot-${{ matrix.target }}.tar.gz.sha256"
+  #         tar -czf "seneschal-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
+  #         sha256sum "seneschal-${{ matrix.target }}.tar.gz" > "seneschal-${{ matrix.target }}.tar.gz.sha256"
   #         echo "Tarball contents:"
-  #         tar -tzf "voicebot-${{ matrix.target }}.tar.gz"
+  #         tar -tzf "seneschal-${{ matrix.target }}.tar.gz"
   #
   #     - uses: actions/upload-artifact@v4
   #       with:
-  #         name: voicebot-${{ matrix.target }}
-  #         path: voicebot-${{ matrix.target }}.tar.gz*
+  #         name: seneschal-${{ matrix.target }}
+  #         path: seneschal-${{ matrix.target }}.tar.gz*
   #         if-no-files-found: error
   #         retention-days: 1
 
@@ -141,7 +141,7 @@ jobs:
             echo ""
             echo "Pin a specific version:"
             echo '```sh'
-            echo "VOICEBOT_VERSION=${TAG} \\"
+            echo "SENECHAL_VERSION=${TAG} \\"
             echo "  curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | sh"
             echo '```'
             echo 'EOF'
@@ -150,7 +150,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Voicebot ${{ github.ref_name }}
+          name: Seneschal ${{ github.ref_name }}
           body: ${{ steps.body.outputs.body }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

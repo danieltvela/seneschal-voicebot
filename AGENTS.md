@@ -1,9 +1,9 @@
-# Voicebot — Agent Instructions
+# Seneschal — Agent Instructions
 
 ## Legal & Naming
 
 - **Jarvis®** is a trademark of Marvel Studios/Disney. This is an independent fan project.
-- Refer to this project as **"Voicebot"**. Never "Jarvis" or "Hive".
+- Refer to this project as **"Seneschal"**. Never "Jarvis" or "Hive".
 
 ---
 

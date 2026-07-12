@@ -4,10 +4,10 @@ Read from `.env` (dotenvy loads automatically):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VOICEBOT_ENV` | `pro` | Environment: pro (default) or dev. Selects voicebot.{env}.toml and data/{env}/ paths. |
+| `SENECHAL_ENV` | `pro` | Environment: pro (default) or dev. Selects seneschal.{env}.toml and data/{env}/ paths. |
 | `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
 | `AUDIO_CHANNELS` | `1` | Audio channels |
-| `VOICEBOT_LANGUAGE` | `en` | Language (`en` or `es`) |
+| `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
 | `STT_PROVIDER` | `speech` | `speech` (default on macOS), `whisper`, or `parakeet` |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |

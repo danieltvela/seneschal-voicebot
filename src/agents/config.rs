@@ -129,7 +129,7 @@ impl AgentRegistry {
 
             if !names.is_empty() {
                 let agents: Vec<_> = names.into_iter().filter_map(load_agent_from_env).collect();
-                tracing::info!(target: "voicebot", "Loaded {} agent(s) from AGENTS env var", agents.len());
+                tracing::info!(target: "seneschal", "Loaded {} agent(s) from AGENTS env var", agents.len());
                 return Self { agents };
             }
         }
@@ -142,7 +142,7 @@ impl AgentRegistry {
         if (has_command || has_mode || has_acp)
             && let Some(agent) = load_legacy_agent()
         {
-            tracing::info!(target: "voicebot", "Loaded legacy agent from env vars");
+            tracing::info!(target: "seneschal", "Loaded legacy agent from env vars");
             return Self {
                 agents: vec![agent],
             };
@@ -151,7 +151,7 @@ impl AgentRegistry {
         // ── TOML [[agents]] fallback ────────────────────────────────────────
         if !toml_agents.is_empty() {
             let agents: Vec<AgentConfig> = toml_agents.into_iter().map(AgentConfig::from).collect();
-            tracing::info!(target: "voicebot", "Loaded {} agent(s) from TOML config", agents.len());
+            tracing::info!(target: "seneschal", "Loaded {} agent(s) from TOML config", agents.len());
             return Self { agents };
         }
 
@@ -266,7 +266,7 @@ fn default_acp_command(name: &str) -> String {
 /// Default "when to use" text for known agent names.
 fn default_when_to_use(name: &str) -> String {
     match name {
-        "hermes" => "Único agente externo disponible. Punto de contacto para lo que Voicebot \
+        "hermes" => "Único agente externo disponible. Punto de contacto para lo que Seneschal \
                       no puede resolver con sus propias herramientas: programación y código, \
                       investigación profunda, gestión de calendario, flujos de múltiples pasos, \
                       y cualquier tarea que requiera razonamiento extendido o herramientas \
@@ -280,9 +280,9 @@ fn default_when_to_use(name: &str) -> String {
 fn default_instructions(name: &str) -> String {
     match name {
         "hermes" => "Eres Hermes, el gateway de agentes externos. Puedes redirigir \
-                      internamente a especialistas (programadores, investigadores, etc.). \
-                      Recibe la consulta de Voicebot, coordina los recursos necesarios y devuelves \
-                      una respuesta clara y ejecutable."
+                       internamente a especialistas (programadores, investigadores, etc.). \
+                       Recibe la consulta de Seneschal, coordina los recursos necesarios y devuelves \
+                       una respuesta clara y ejecutable."
             .to_string(),
         _ => format!(
             "Eres un agente externo ({name}). Resuelve la tarea delegada de forma autónoma."

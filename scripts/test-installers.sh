@@ -1,5 +1,5 @@
 #!/bin/bash
-# Voicebot installer smoke-test harness
+# Seneschal installer smoke-test harness
 #
 # Tests install.sh without real network access by
 # placing a mock curl and a mock `say` on PATH that serve local fixture files.
@@ -27,12 +27,12 @@ mkdir -p "$FIXTURE_DIR" "$MOCK_BIN"
 
 echo "=== Setting up test fixtures ==="
 
-cat > "$FIXTURE_DIR/voicebot" << 'EOF'
+cat > "$FIXTURE_DIR/seneschal" << 'EOF'
 #!/bin/sh
-echo "Voicebot stub"
+echo "Seneschal stub"
 EOF
-chmod +x "$FIXTURE_DIR/voicebot"
-tar -czf "$FIXTURE_DIR/voicebot-stub.tar.gz" -C "$FIXTURE_DIR" voicebot
+chmod +x "$FIXTURE_DIR/seneschal"
+tar -czf "$FIXTURE_DIR/seneschal-stub.tar.gz" -C "$FIXTURE_DIR" seneschal
 
 echo "STUB_WHISPER_TINY"   > "$FIXTURE_DIR/ggml-tiny.bin"
 echo "STUB_WHISPER_SMALL"  > "$FIXTURE_DIR/ggml-small.bin"
@@ -110,8 +110,8 @@ fi
 
 # File download — serve from fixtures based on URL pattern
 case "$URL" in
-    *voicebot-*.tar.gz*)
-        cp "$MOCK_FIXTURE_DIR/voicebot-stub.tar.gz" "$OUT_FILE" ;;
+    *seneschal-*.tar.gz*)
+        cp "$MOCK_FIXTURE_DIR/seneschal-stub.tar.gz" "$OUT_FILE" ;;
     *ggml-tiny.bin*)
         cp "$MOCK_FIXTURE_DIR/ggml-tiny.bin" "$OUT_FILE" ;;
     *ggml-small.bin*)
@@ -230,10 +230,10 @@ echo ""
 INSTALL_DIR="$TEST_DIR/install-test"
 
 run_installer_noninteractive "$PROJECT_ROOT/install.sh" \
-    "VOICEBOT_HOME=$INSTALL_DIR" \
+    "SENESCHAL_HOME=$INSTALL_DIR" \
     "BIN_DIR=$INSTALL_DIR/launcher" \
     "GITHUB_REPO=localhost:9876" \
-    "VOICEBOT_VERSION=" \
+    "SENESCHAL_VERSION=" \
     "WHISPER_MODEL_URL=http://localhost:9876/ggml-large-v3-turbo.bin" \
     "VAD_MODEL_URL=http://localhost:9876/silero_vad.onnx" \
     "KOKORO_MODEL_URL=http://localhost:9876/kokoro-v1.0.onnx" \
@@ -242,12 +242,12 @@ run_installer_noninteractive "$PROJECT_ROOT/install.sh" \
 echo ""
 echo "--- Verifying install.sh ---"
 ERR=0
-check_file "$INSTALL_DIR/bin/voicebot"                          "Binary installed"        || ERR=1
+check_file "$INSTALL_DIR/bin/seneschal"                        "Binary installed"        || ERR=1
 check_file "$INSTALL_DIR/models/ggml-large-v3-turbo.bin"        "Whisper model (default size)" || ERR=1
 check_file "$INSTALL_DIR/models/ggml-silero-vad.bin"            "VAD model"               || ERR=1
 check_file "$INSTALL_DIR/.env"                                  "Default config"          || ERR=1
-check_file "$INSTALL_DIR/launcher/voicebot"                     "Launcher script"         || ERR=1
-check_grep "$INSTALL_DIR/launcher/voicebot" "voicebot"          "Launcher references binary"            || ERR=1
+check_file "$INSTALL_DIR/launcher/seneschal"                   "Launcher script"         || ERR=1
+check_grep "$INSTALL_DIR/launcher/seneschal" "seneschal"        "Launcher references binary"            || ERR=1
 
 if [ "$(uname -s)" = "Linux" ]; then
     check_file "$INSTALL_DIR/models/kokoro-v1.0.onnx"  "Kokoro model (Linux)"   || ERR=1
@@ -279,7 +279,7 @@ echo ""
 TINY_DIR="$TEST_DIR/install-tiny-test"
 
 run_installer_noninteractive "$PROJECT_ROOT/install.sh" \
-    "VOICEBOT_HOME=$TINY_DIR" \
+    "SENESCHAL_HOME=$TINY_DIR" \
     "BIN_DIR=$TINY_DIR/launcher" \
     "GITHUB_REPO=localhost:9876" \
     "WHISPER_MODEL_URL=http://localhost:9876/ggml-tiny.bin" \
@@ -310,7 +310,7 @@ if [ "$SIMULATE_LLM_DOWN" = "1" ]; then
     LLM_DOWN_DIR="$TEST_DIR/llm-down-test"
 
     run_installer_noninteractive "$PROJECT_ROOT/install.sh" \
-        "VOICEBOT_HOME=$LLM_DOWN_DIR" \
+        "SENESCHAL_HOME=$LLM_DOWN_DIR" \
         "BIN_DIR=$LLM_DOWN_DIR/launcher" \
         "GITHUB_REPO=localhost:9876" \
         "WHISPER_MODEL_URL=http://localhost:9876/ggml-large-v3-turbo.bin" \
@@ -320,7 +320,7 @@ if [ "$SIMULATE_LLM_DOWN" = "1" ]; then
 
     # Installer should still complete and produce files; LLM warning is printed.
     ERR=0
-    check_file "$LLM_DOWN_DIR/bin/voicebot" "Binary installed even with LLM down" || ERR=1
+    check_file "$LLM_DOWN_DIR/bin/seneschal" "Binary installed even with LLM down" || ERR=1
     if [ "$ERR" = "1" ]; then
         echo ""
         echo "FAILED: LLM-down test"

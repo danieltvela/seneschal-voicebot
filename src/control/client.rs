@@ -7,9 +7,9 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, trace, warn};
 
-/// Client for the Voicebot Control API.
+/// Client for the Seneschal Control API.
 ///
-/// Provides programmatic control over the voicebot pipeline for testing,
+/// Provides programmatic control over the seneschal pipeline for testing,
 /// debugging, and automation. Supports both sync and async operations.
 #[derive(Clone)]
 pub struct ControlClient {
@@ -79,7 +79,7 @@ pub enum ControlClientError {
     StateAssertionFailed { expected: String, actual: String },
 }
 
-/// Events emitted by the voicebot control system.
+/// Events emitted by the seneschal control system.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientControlEvent {
@@ -182,7 +182,7 @@ impl ControlClient {
     // HEALTH & STATE
     // ============================================================================
 
-    /// Check if the voicebot control server is healthy.
+    /// Check if the seneschal control server is healthy.
     pub async fn health_check(&self) -> Result<HealthResponse, ControlClientError> {
         let url = format!("{}/control/health", self.base_url);
         let response = self

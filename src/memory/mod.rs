@@ -206,12 +206,12 @@ mod tests {
     #[test]
     fn context_contains_header_and_memories() {
         let memories = vec![
-            mem(1, "User is building a Rust voicebot"),
+            mem(1, "User is building a Rust seneschal"),
             mem(2, "User prefers Spanish for UI"),
         ];
         let ctx = build_memory_context(&memories);
         assert!(ctx.contains("[MEMORIES]"));
-        assert!(ctx.contains("- User is building a Rust voicebot"));
+        assert!(ctx.contains("- User is building a Rust seneschal"));
         assert!(ctx.contains("- User prefers Spanish for UI"));
     }
 
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn parse_add_memories() {
         let json = r#"[
-            {"content": "User works on seneschal voicebot", "category": "project", "action": "add"},
+            {"content": "User works on seneschal", "category": "project", "action": "add"},
             {"content": "User prefers concise responses", "category": "preference", "action": "add"}
         ]"#;
         let result = parse_memory_response(json);

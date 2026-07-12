@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-mlx-lm.sh — Launch mlx-lm server optimized for single-user voicebot,
+# start-mlx-lm.sh — Launch mlx-lm server optimized for single-user seneschal,
 #                    or print connection info for a remote llama.cpp server.
 #
 # Usage:

@@ -1,7 +1,7 @@
 # Code Style & Patterns
 
 - **Error handling**: `anyhow::Result` with context strings; `thiserror` for custom types.
-- **Logging**: `tracing` throughout (no println!); logs → `voicebot.log` when TUI active.
+- **Logging**: `tracing` throughout (no println!); logs → `seneschal.log` when TUI active.
 - **Async**: tokio runtime + channels (`mpsc`, `broadcast`) for inter-stage comms.
 - **Cancellation**: `CancellationToken` (tokio-util) for barge-in support.
 - **Serialization**: serde + serde_json.

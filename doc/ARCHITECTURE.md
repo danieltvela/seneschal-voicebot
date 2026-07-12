@@ -293,7 +293,7 @@ assistant LLM to reformulate and vocalize.
 
 Location: `src/control/`
 
-An HTTP + SSE server (built on axum) for external management of the voicebot.
+An HTTP + SSE server (built on axum) for external management of the seneschal.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -367,7 +367,7 @@ All config is loaded from environment variables (`.env` file supported via `dote
 | `AUDIO_SAMPLE_RATE` | `16000` | Microphone sample rate |
 | `AUDIO_DEVICE` | — | Substring match for input device name |
 | `AUDIO_OUTPUT_DEVICE` | — | Substring match for output device name |
-| `VOICEBOT_LANGUAGE` | `es` | `es` or `en` — Whisper language + TTS voice |
+| `SENECHAL_LANGUAGE` | `es` | `es` or `en` — Whisper language + TTS voice |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Path to GGML model |
 | `LLM_URL` | `http://localhost:8000` | OpenAI-compatible endpoint (mlx-lm: 8000; oMLX: 8001) |
 | `LLM_MODEL` | — | Model name sent in API requests |
@@ -383,7 +383,7 @@ All config is loaded from environment variables (`.env` file supported via `dote
 | `KOKORO_VOICES` | — | Path to `voices-v1.0.bin` |
 | `KOKORO_VOICE` | `af_bella` | Voice style name |
 | `KOKORO_LANGUAGE` | `en-us` | BCP-47 language for espeak-ng |
-| `DB_PATH` | `voicebot.db` | SQLite database file |
+| `DB_PATH` | `seneschal.db` | SQLite database file |
 | `SHELL_ENABLED` | `0` | `1` to enable the `run_shell` tool |
 | `AGENT_COMMAND` | — | External agent CLI command (enables `run_agent_async`) |
 | `DAEMON_ENABLED` | `0` | `1` to enable InferenceDaemon |
@@ -425,7 +425,7 @@ All logging uses [`tracing`](https://docs.rs/tracing). Filter targets independen
 
 | Target | Level(s) used | What it covers |
 |--------|--------------|----------------|
-| `voicebot` | info | Startup, config summary, shutdown |
+| `seneschal` | info | Startup, config summary, shutdown |
 | `audio` | info, debug, trace | Device selection, CPAL stream events, resampling |
 | `pipeline` | info, debug | Per-utterance lifecycle; barge-in; tool calls; cancellation; `[pipe=N]` run IDs |
 | `performance` | info, debug | End-to-end latency milestones |
@@ -467,7 +467,7 @@ RUST_LOG=debug cargo run
 
 ```bash
 cargo test                          # all unit + integration tests
-cargo test -p voicebot <name>       # single test
+cargo test -p seneschal <name>       # single test
 RUST_LOG=debug cargo run            # verbose pipeline logs
 RUST_LOG=info,tts=debug cargo run   # TTS-only debug
 ```

@@ -7,7 +7,7 @@ DB_INSPECT="$PROJECT_DIR/db-inspect"
 
 case "${1:-help}" in
   run)
-    DB_PATH="${2:-../data/voicebot.db}"
+    DB_PATH="${2:-../data/seneschal.db}"
     cd "$DB_INSPECT"
     exec cargo run -- --db "$DB_PATH"
     ;;

@@ -10,7 +10,7 @@ use std::env;
 /// Captures the current screen to a temporary file and returns the raw PNG
 /// bytes.
 pub async fn capture_screen() -> Result<Vec<u8>, String> {
-    capture_screen_to("/tmp/voicebot_screenshot.png").await
+    capture_screen_to("/tmp/seneschal_screenshot.png").await
 }
 
 /// Open the Screen Recording privacy pane in System Settings.

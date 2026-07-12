@@ -157,7 +157,7 @@ mcp_tool_timeout_secs = 30
 llm_self_managed = false
 
 # ── Persistence ───────────────────────────────────────────────────────────────
-db_path = "data/dev/voicebot.db"
+db_path = "data/dev/seneschal.db"
 
 # ── Hermes ACP session log viewer ─────────────────────────────────────────────
 hermes_session_viewer = "off"

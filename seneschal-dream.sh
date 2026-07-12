@@ -12,4 +12,4 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
     set +a
 fi
 
-cargo run --bin voicebot -- --dream
+cargo run --bin seneschal -- --dream

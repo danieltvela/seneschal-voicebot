@@ -74,8 +74,8 @@ Labels exist but no issue templates — the agent handles formatting naturally.
 
 ## Git Worktrees (Isolated Binary Model)
 To avoid context switching for the human and resource collisions, use an isolated binary model:
-- **Human Zone:** `/Users/danielvela/projects/ai/voicebot` (Main stable context). Validates and merges PRs.
-- **AI Zone:** `/Users/danielvela/projects/ai/voicebot-ai` (Autonomous cycle zone).
+- **Human Zone:** `/Users/danielvela/projects/ai/seneschal` (Main stable context). Validates and merges PRs.
+- **AI Zone:** `/Users/danielvela/projects/ai/seneschal-ai` (Autonomous cycle zone).
   - Agents MUST perform all work here.
-  - Each issue requires its own worktree/branch: `git worktree add -b feature/issue-N /Users/danielvela/projects/ai/voicebot-ai`.
+  - Each issue requires its own worktree/branch: `git worktree add -b feature/issue-N /Users/danielvela/projects/ai/seneschal-ai`.
   - When a task is completed and a PR is opened, the worktree is cleared or moved to the next task.

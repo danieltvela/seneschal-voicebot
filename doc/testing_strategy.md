@@ -1,4 +1,4 @@
-# Testing Strategy for Voicebot
+# Testing Strategy for Seneschal
 
 ## Test Layers Overview
 
@@ -41,7 +41,7 @@ cargo test e2e::basic_conversation_mocked_transcript -- --ignored --nocapture
 cargo test e2e::stt_ -- --ignored --nocapture
 
 # Tests for a specific package
-cargo test -p voicebot
+cargo test -p seneschal
 
 # Feature-gated: with TTS backends
 cargo test --features avspeech   # macOS only

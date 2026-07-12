@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/qa.sh — Voicebot Quality Assurance harness.
+# scripts/qa.sh — Seneschal Quality Assurance harness.
 #
 # Public API:
 #   bash scripts/qa.sh [MODE|STAGE]
@@ -242,7 +242,7 @@ print_summary() {
 }
 
 main() {
-    banner "Voicebot QA harness — mode: $MODE"
+    banner "Seneschal QA harness — mode: $MODE"
     printf '  project : %s\n' "$PROJECT_ROOT"
     printf '  cargo   : %s (%s)\n' "$CARGO" "$($CARGO --version 2>/dev/null || echo 'not found')"
     printf '  rustc   : %s\n' "$(rustc --version 2>/dev/null || echo 'not found')"

@@ -1,5 +1,5 @@
+use seneschal::control_client::ControlClient;
 use std::time::Duration;
-use voicebot::control_client::ControlClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

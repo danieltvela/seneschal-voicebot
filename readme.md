@@ -10,7 +10,7 @@ Real-time voice interaction with natural conversation flow, proactive assistance
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS-red.svg)](https://www.apple.com/macos)
 
-> *Formerly "Jarvis Voicebot". Now Seneschal. Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project with no commercial intent. See [LICENSE-VOICEBOT.md](LICENSE-VOICEBOT.md) for full details.*
+> *Formerly "Jarvis Voicebot". Now Seneschal. Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project with no commercial intent. See [LICENSE-SENESCHAL.md](LICENSE-SENESCHAL.md) for full details.*
 
 </div>
 
@@ -21,7 +21,7 @@ Real-time voice interaction with natural conversation flow, proactive assistance
 ### Quick Install (recommended for end users)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/refs/heads/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/danielvela/seneschal/refs/heads/master/install.sh | sh
 ```
 
 The installer downloads all required models and sets up a working configuration.
@@ -31,8 +31,8 @@ The installer downloads all required models and sets up a working configuration.
 #### 1. Clone the repository
 
 ```bash
-git clone https://github.com/danieltvela/voicebot.git
-cd voicebot
+git clone https://github.com/danielvela/seneschal.git
+cd seneschal
 ```
 
 ### 2. Configure environment variables
@@ -62,7 +62,7 @@ LLM_MODEL=mlx-community/Qwen3-8B-4bit
 TTS_PROVIDER=avspeech
 AVSPEECH_VOICE="Jorge (Enhanced)"
 AVSPEECH_RATE=0.55
-VOICEBOT_LANGUAGE=es
+SENECHAL_LANGUAGE=es
 ```
 
 ### 3. Start the LLM server
@@ -233,7 +233,7 @@ Seneschal supports a **plugin system** that lets you bundle MCP servers, agents,
 
 **How it works:**
 - Each plugin is a directory containing a `manifest.toml`
-- Available plugins are configured in `voicebot.{env}.toml` via `plugins` array
+- Available plugins are configured in `seneschal.{env}.toml` via `plugins` array
 - One plugin can be active at a time (set via `active_plugin` config field)
 - The LLM can switch plugins at runtime using the `switch_plugin` tool
 - Plugin config overrides are cleanly reverted when deactivated
@@ -262,7 +262,7 @@ llm_temperature = 0.1
 llm_max_tokens = 2048
 ```
 
-2. Configure in `voicebot.dev.toml`:
+2. Configure in `seneschal.dev.toml`:
 
 ```toml
 plugins = ["path/to/my-plugin"]
@@ -427,7 +427,7 @@ Most configuration is done via environment variables (or `.env` file):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **Voice & Language** | | |
-| `VOICEBOT_LANGUAGE` | `es` | Language for STT and TTS |
+| `SENECHAL_LANGUAGE` | `es` | Language for STT and TTS |
 | `VAD_SILENCE_MS` | `200` | Silence threshold (ms) before processing speech |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model file |
 | **STT Provider** | | |
@@ -440,7 +440,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `WHISPER_SILENCE` | `0` | Suppress verbose whisper.cpp logs (Metal/GPU init messages). Set to `1` to silence. |
 | **LLM** | | |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; use IP not `localhost` to avoid DNS latency) |
-| `LLM_SELF_MANAGED` | `0` | If `1`, voicebot launches and supervises the LLM server process automatically. Requires `LLM_COMMAND`. On crash, restarts up to 3 times before logging a fatal error. |
+| `LLM_SELF_MANAGED` | `0` | If `1`, seneschal launches and supervises the LLM server process automatically. Requires `LLM_COMMAND`. On crash, restarts up to 3 times before logging a fatal error. |
 | `LLM_COMMAND` | - | Full shell command to launch the LLM server. Required when `LLM_SELF_MANAGED=1`. |
 | `LLM_MODEL` | `local-model` | Model name or path |
 | `LLM_SYSTEM_PROMPT` | - | System prompt for the LLM |
@@ -473,7 +473,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `AGENT_ACP_COMMAND` | `hermes acp` | Command to start the ACP process (ACP mode only) |
 | `AGENT_ACP_WARMUP` | `0` | Pre-warm the ACP session at startup. Set `1` to spawn and handshake the ACP process at boot, and send a warmup prompt to force model load before first user request. Requires `AGENT_MODE=acp`. |
 | **ACP Log Viewer** | | |
-| `HERMES_SESSION_VIEWER` | `off` | ACP traffic log viewer: `off` (default) or `logfile`. When `logfile`, all JSON-RPC messages (requests, responses, notifications) are written to `/tmp/voicebot_sessions/{session_id}.log` and a Terminal window is opened with `tail -f`. |
+| `HERMES_SESSION_VIEWER` | `off` | ACP traffic log viewer: `off` (default) or `logfile`. When `logfile`, all JSON-RPC messages (requests, responses, notifications) are written to `/tmp/seneschal_sessions/{session_id}.log` and a Terminal window is opened with `tail -f`. |
 
 | **Inference Daemon** | | |
 | `DAEMON_ENABLED` | `0` | Set to `1` to enable the background "is there anything worth saying?" proactive reasoning loop |
@@ -515,7 +515,7 @@ Most configuration is done via environment variables (or `.env` file):
 | **Control API (HTTP + SSE)** | | |
 | `CONTROL_PORT` | - (disabled) | HTTP control/SSE API port. Set to e.g. `9001` to enable. Requires `--features control`. Binds to `127.0.0.1` only. |
 | **Persistence** | | |
-| `DB_PATH` | `data/voicebot.db` | Path to the SQLite database file for chat history persistence. |
+| `DB_PATH` | `data/seneschal.db` | Path to the SQLite database file for chat history persistence. |
 
 See [.env.example](.env.example) for complete environment variable reference.
 
@@ -535,7 +535,7 @@ STT_PROVIDER=whisper cargo run
 
 **Models:** Download from [HuggingFace](https://huggingface.co/ggerganov/whisper.cpp) (ggml-small.bin, ggml-large-v3-turbo.bin, etc.)
 
-**Languages:** 99 languages. Set `VOICEBOT_LANGUAGE=es` or `VOICEBOT_LANGUAGE=en`.
+**Languages:** 99 languages. Set `SENECHAL_LANGUAGE=es` or `SENECHAL_LANGUAGE=en`.
 
 #### Parakeet (requires `--features parakeet`)
 
@@ -551,7 +551,7 @@ STT_PROVIDER=parakeet PARAKEET_MODEL_DIR=./models/parakeet-tdt-0.6b-v2 cargo run
 
 **Models:** Download the ONNX export from [HuggingFace](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx). Required files: `encoder-model.onnx`, `decoder_joint-model.onnx`, `vocab.txt` (and optionally `encoder-model.onnx.data`).
 
-**Languages:** 25 languages with auto-detection. The `VOICEBOT_LANGUAGE` hint is ignored — ParakeetTDT detects language automatically.
+**Languages:** 25 languages with auto-detection. The `SENECHAL_LANGUAGE` hint is ignored — ParakeetTDT detects language automatically.
 
 **Notes:**
 - Both providers use the same Silero VAD (no change to VAD behavior)
@@ -637,13 +637,13 @@ Debug different subsystems using `RUST_LOG`:
 RUST_LOG=pipeline=info cargo run
 
 # Full debugging with performance metrics
-RUST_LOG=performance=debug,voicebot=info cargo run
+RUST_LOG=performance=debug,seneschal=info cargo run
 
 # TTS and audio debug
 RUST_LOG=tts=debug,audio=debug cargo run
 ```
 
-When running with `--features tui`, all logs are redirected to `voicebot.log` in the working directory.
+When running with `--features tui`, all logs are redirected to `seneschal.log` in the working directory.
 
 ### TUI Key Bindings
 
@@ -741,7 +741,7 @@ This project is released under the **MIT License** with **commercialization rest
 
 Jarvis is a trademark of Marvel Studios/Disney. This is an independent fan project.
 
-See [LICENSE-VOICEBOT.md](LICENSE-VOICEBOT.md) for full legal details and license terms.
+See [LICENSE-SENESCHAL.md](LICENSE-SENESCHAL.md) for full legal details and license terms.
 
 ---
 

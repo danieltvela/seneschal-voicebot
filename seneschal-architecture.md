@@ -1,8 +1,8 @@
-# Voicebot — Architecture Analysis & Redesign
+# Seneschal — Architecture Analysis & Redesign
 
 ## 1. Current Data Flows — Diagnosis
 
-The voicebot has **6 concurrent components** communicating through a mix of mechanisms:
+The seneschal has **6 concurrent components** communicating through a mix of mechanisms:
 
 ### Existing flows (mapped from code)
 
@@ -95,7 +95,7 @@ Other threads: InferenceDaemon, EyesDaemon, MCP, ACP Agent, WebSocket server
 An FSM where states can contain sub-states. The system state defines which
 transitions are valid.
 
-Why it matters: the voicebot has obvious states:
+Why it matters: the seneschal has obvious states:
 
 ```
 IDLE

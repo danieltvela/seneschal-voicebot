@@ -827,7 +827,7 @@ mod tests {
     ///
     /// Run manually:
     /// ```sh
-    /// cargo test test_extract_facts_real_llm --bin voicebot -- --ignored --nocapture
+    /// cargo test test_extract_facts_real_llm --bin seneschal -- --ignored --nocapture
     /// ```
     #[tokio::test]
     #[ignore]

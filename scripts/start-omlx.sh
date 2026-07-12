@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-omlx.sh — Launch omlx server optimized for single-user voicebot
+# start-omlx.sh — Launch omlx server optimized for single-user seneschal
 #
 # omlx is an Apple Silicon LLM server with persistent tiered KV caching
 # (hot RAM + SSD), OpenAI-compatible API, and multi-model support.

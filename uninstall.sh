@@ -1,5 +1,5 @@
 #!/bin/sh
-# Voicebot uninstaller
+# Seneschal uninstaller
 # Reverses everything created by install.
 #
 # Usage:
@@ -7,7 +7,7 @@
 #   ./uninstall.sh --yes     # non-interactive / CI
 #
 # Environment overrides (same names as the installer):
-#   VOICEBOT_HOME  — home directory to remove (default: ~/.voicebot)
+#   SENESCHAL_HOME  — home directory to remove (default: ~/.seneschal)
 #   BIN_DIR        — launcher directory (default: ~/.local/bin)
 
 set -e
@@ -37,15 +37,15 @@ else
     _GREEN=''; _YELLOW=''; _RED=''; _NC=''
 fi
 
-info()  { printf "${_GREEN}[voicebot]${_NC} %s\n" "$1" >&2; }
-warn()  { printf "${_YELLOW}[voicebot]${_NC} %s\n" "$1" >&2; }
-error() { printf "${_RED}[voicebot] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
+info()  { printf "${_GREEN}[seneschal]${_NC} %s\n" "$1" >&2; }
+warn()  { printf "${_YELLOW}[seneschal]${_NC} %s\n" "$1" >&2; }
+error() { printf "${_RED}[seneschal] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
 step()  { printf "\n${_GREEN}▶ %s${_NC}\n" "$1" >&2; }
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-VOICEBOT_HOME="${VOICEBOT_HOME:-$HOME/.voicebot}"
+SENESCHAL_HOME="${SENESCHAL_HOME:-$HOME/.seneschal}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-LAUNCHER="$BIN_DIR/voicebot"
+LAUNCHER="$BIN_DIR/seneschal"
 
 # ── Safety guards ─────────────────────────────────────────────────────────────
 # Refuse to delete paths that are obviously dangerous.
@@ -72,13 +72,13 @@ _validate_path() {
     fi
 }
 
-_validate_path "VOICEBOT_HOME" "$VOICEBOT_HOME"
+_validate_path "SENESCHAL_HOME" "$SENESCHAL_HOME"
 _validate_path "BIN_DIR"      "$BIN_DIR"
 
 # ── Detect what exists ──────────────────────────────────────────────────────
 HOME_EXISTS=0
 LAUNCHER_EXISTS=0
-if [ -d "$VOICEBOT_HOME" ]; then
+if [ -d "$SENESCHAL_HOME" ]; then
     HOME_EXISTS=1
 fi
 if [ -f "$LAUNCHER" ]; then
@@ -87,7 +87,7 @@ fi
 
 if [ "$HOME_EXISTS" -eq 0 ] && [ "$LAUNCHER_EXISTS" -eq 0 ]; then
     info "Nothing to uninstall."
-    info "  VOICEBOT_HOME: $VOICEBOT_HOME (not found)"
+    info "  SENESCHAL_HOME: $SENESCHAL_HOME (not found)"
     info "  Launcher:      $LAUNCHER (not found)"
     exit 0
 fi
@@ -98,17 +98,17 @@ if [ "$LAUNCHER_EXISTS" -eq 1 ]; then
     warn "  Launcher script: $LAUNCHER"
 fi
 if [ "$HOME_EXISTS" -eq 1 ]; then
-    warn "  Home directory:  $VOICEBOT_HOME"
+    warn "  Home directory:  $SENESCHAL_HOME"
     # Show a quick inventory so the user knows what's inside.
     _size=""
     if command -v du >/dev/null 2>&1; then
-        _size=$(du -sh "$VOICEBOT_HOME" 2>/dev/null | awk '{print $1}')
+        _size=$(du -sh "$SENESCHAL_HOME" 2>/dev/null | awk '{print $1}')
     fi
     if [ -n "$_size" ]; then
         warn "    Size: $_size"
     fi
     # List top-level entries.
-    for _entry in "$VOICEBOT_HOME"/* "$VOICEBOT_HOME"/.*; do
+    for _entry in "$SENESCHAL_HOME"/* "$SENESCHAL_HOME"/.*; do
         [ -e "$_entry" ] || continue
         _base=$(basename "$_entry")
         case "$_base" in
@@ -142,13 +142,13 @@ fi
 # ── Remove home directory ─────────────────────────────────────────────────────
 if [ "$HOME_EXISTS" -eq 1 ]; then
     step "Removing home directory"
-    rm -rf "$VOICEBOT_HOME"
-    info "  Removed: $VOICEBOT_HOME"
+    rm -rf "$SENESCHAL_HOME"
+    info "  Removed: $SENESCHAL_HOME"
 fi
 
 # ── PATH reminder ─────────────────────────────────────────────────────────────
 step "Uninstall complete"
-info "voicebot has been removed from this system."
+info "seneschal has been removed from this system."
 if [ "$FORCE_YES" -eq 0 ]; then
     case ":$PATH:" in
         *":$BIN_DIR:"*)

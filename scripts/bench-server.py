@@ -4,7 +4,7 @@ bench-server.py — Real-server KV-cache benchmark: llama.cpp vs mlx-lm vs omlx
 
 Starts each server, warms its KV cache with a multi-turn conversation history,
 then measures only the final user turn — the hot-cache scenario that matters
-for real voicebot latency.
+for real seneschal latency.
 
 Metrics
   TTFT  time from request → first content token (ms).  The number you feel.
@@ -39,7 +39,7 @@ import time
 from statistics import mean, stdev
 
 # ── Conversation fixture ──────────────────────────────────────────────────────
-# A realistic voicebot conversation. HISTORY is pre-loaded to warm the KV cache.
+# A realistic seneschal conversation. HISTORY is pre-loaded to warm the KV cache.
 # NEW_QUESTION is the measured turn — only these tokens need prefill when the
 # cache is hot.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eval_prompts.py — Prompt Evaluator for seneschal Voicebot
+eval_prompts.py — Prompt Evaluator for Seneschal
 
 Runs quality benchmark against multiple system prompts to find the best one.
 Uses the same fixture system as bench-models.py but iterates over prompts
@@ -37,7 +37,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "Por defecto, limita tus respuestas a 2-3 frases cortas."
 )
 
-# Tool definitions - should match voicebot tools
+# Tool definitions - should match seneschal tools
 TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -925,7 +925,7 @@ def main():
     W = 82
     print()
     print("═" * W)
-    print("  Prompt Evaluator for seneschal Voicebot")
+    print("  Prompt Evaluator for Seneschal")
     print("═" * W)
     print(f"  Config     : {config_path}")
     print(f"  Prompts   : {len(prompts)} prompt(s)")

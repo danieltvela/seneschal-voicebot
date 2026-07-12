@@ -44,7 +44,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_status(frame, app, status_area);
 }
 
-/// Render the VOICEBOT splash screen (blue, centered).
+/// Render the SENECHAL splash screen (blue, centered).
 fn render_splash(text: &str, width: usize) -> Vec<Line<'static>> {
     let text = text.to_string(); // Clone to make it 'static
     let mut lines: Vec<Line<'static>> = vec![];
@@ -118,7 +118,7 @@ pub fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
 
     match &msg.role {
         Role::Splash => {
-            // Splash screen - show VOICEBOT ASCII art
+            // Splash screen - show SENECHAL ASCII art
             let splash_text = r#"
   _    _     _            ______             
  | |  | |   (_)          (____  \       _    
@@ -390,7 +390,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
 
     let text = Text::from(vec![Line::from(vec![
         Span::styled(
-            " voicebot ",
+            " seneschal ",
             Style::default().fg(Color::Rgb(200, 200, 200)).bold(),
         ),
         Span::raw(" "),

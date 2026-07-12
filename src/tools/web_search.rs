@@ -360,7 +360,7 @@ mod tests {
         assert!(t.should_force_for("Buscar información de Python"));
         assert!(t.should_force_for("search for rust concurrency"));
         assert!(t.should_force_for("look up the capital of France"));
-        assert!(t.should_force_for("google latest voicebot features"));
+        assert!(t.should_force_for("google latest seneschal features"));
     }
 
     #[test]

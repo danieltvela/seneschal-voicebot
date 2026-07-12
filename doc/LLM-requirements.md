@@ -1,6 +1,6 @@
-# LLM Requirements — Voicebot
+# LLM Requirements — Seneschal
 
-> Análisis de los requerimientos que el proyecto Voicebot impone sobre el LLM que lo sirve, y revisión de benchmarks opensource para evaluar candidatos.
+> Análisis de los requerimientos que el proyecto Seneschal impone sobre el LLM que lo sirve, y revisión de benchmarks opensource para evaluar candidatos.
 >
 > **Fecha:** julio 2026
 > **Audiencia:** selección/evaluación de modelos locales (Gemma-family, Qwen3, etc.) servidos vía API OpenAI-compatible (mlx-lm, oMLX, llama.cpp, vLLM).
@@ -27,7 +27,7 @@
 
 ## 1. Resumen ejecutivo
 
-Voicebot es un asistente de voz mono-usuario en Rust con pipeline streaming **STT → LLM → TTS**. El LLM es el componente central: recibe transcripciones del usuario, decide si invocar herramientas, delega tareas complejas a agentes externos, mantiene memoria a largo plazo y produce texto apto para síntesis de voz (sin markdown, sin símbolos, conciso).
+Seneschal es un asistente de voz mono-usuario en Rust con pipeline streaming **STT → LLM → TTS**. El LLM es el componente central: recibe transcripciones del usuario, decide si invocar herramientas, delega tareas complejas a agentes externos, mantiene memoria a largo plazo y produce texto apto para síntesis de voz (sin markdown, sin símbolos, conciso).
 
 **Requerimientos críticos del LLM:**
 
@@ -143,7 +143,7 @@ data: [DONE]
 
 ### 3.8 Gestion de proceso (opcional)
 
-Si `LLM_SELF_MANAGED=true`, Voicebot lanza/gestiona el proceso del servidor LLM (`LLM_COMMAND`). Max 3 restarts, poll 1 s, timeout 120 s.---
+Si `LLM_SELF_MANAGED=true`, Seneschal lanza/gestiona el proceso del servidor LLM (`LLM_COMMAND`). Max 3 restarts, poll 1 s, timeout 120 s.---
 
 ## 4. Prompt del sistema (ensamblado)
 
@@ -162,7 +162,7 @@ El system prompt se ensambla en orden estricto en `src/pipeline/consolidation.rs
 
 ### 4.1 Base prompt (produccion)
 
-**Fuente:** `voicebot.pro.toml:38-66` (embebido en binario via `src/config.rs:8`). Override: `LLM_SYSTEM_PROMPT`.
+**Fuente:** `seneschal.pro.toml:38-66` (embebido en binario via `src/config.rs:8`). Override: `LLM_SYSTEM_PROMPT`.
 
 Persona: mayordomo digital "Jarvis" — mezcla de Jarvis (Iron Man) y Alfred (Batman). Profesional, eficiente, leal, humor seco e ironia britanica. Nunca servil.
 
@@ -374,7 +374,7 @@ Daemon en background:
 
 ## 8. Configuracion que afecta al LLM
 
-**Fuentes:** `src/config.rs`, `voicebot.pro.toml`, `voicebot.dev.toml`.
+**Fuentes:** `src/config.rs`, `seneschal.pro.toml`, `seneschal.dev.toml`.
 
 ### 8.1 LLM primario
 
@@ -393,7 +393,7 @@ Daemon en background:
 | `llm_idle_consolidation_secs` | `LLM_IDLE_CONSOLIDATION_SECS` | 900 | Idle secs antes consolidar |
 | `llm_idle_min_context_pct` | `LLM_IDLE_MIN_CONTEXT_PCT` | 20 | % min contexto para idle consolidation |
 | `llm_history_load_limit` | `LLM_HISTORY_LOAD_LIMIT` | 0 | Max mensajes cargados de DB (0 = ilimitado) |
-| `llm_self_managed` | `LLM_SELF_MANAGED` | false | Voicebot gestiona proceso LLM |
+| `llm_self_managed` | `LLM_SELF_MANAGED` | false | Seneschal gestiona proceso LLM |
 | `llm_command` | `LLM_COMMAND` | — | Comando para lanzar servidor |
 | `llm_system_prompt` | `LLM_SYSTEM_PROMPT` | *(multilinea espanol)* | Override del base prompt |
 
@@ -719,7 +719,7 @@ Reemplazo del bench actual por capas estandarizadas + capas voice-specific:
 ```yaml
 # promptfooconfig.yaml
 prompts:
-  - file://prompts/voicebot-system.txt
+  - file://prompts/seneschal-system.txt
 
 providers:
   - openai:gemma-4-12b-it
@@ -774,5 +774,5 @@ Si se adopta por fases:
 - Cliente LLM: `src/llm/client.rs`
 - Registro de tools: `src/tools/mod.rs`
 - Ensamblado de prompt: `src/pipeline/consolidation.rs:71-102`
-- Config: `src/config.rs`, `voicebot.pro.toml`
+- Config: `src/config.rs`, `seneschal.pro.toml`
 - i18n: `src/i18n.rs`

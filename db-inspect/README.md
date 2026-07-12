@@ -1,10 +1,10 @@
 # db-inspect
 
-Standalone web viewer for Voicebot's SQLite database.
+Standalone web viewer for Seneschal's SQLite database.
 
 ## Purpose
 
-`db-inspect` is a small local HTTP server that exposes Voicebot's SQLite database through a read-write web interface. It is intended for debugging, manual inspection, and light administrative tasks such as removing stale sessions or messages.
+`db-inspect` is a small local HTTP server that exposes Seneschal's SQLite database through a read-write web interface. It is intended for debugging, manual inspection, and light administrative tasks such as removing stale sessions or messages.
 
 ## Build
 
@@ -23,7 +23,7 @@ cargo build --release
 ## Run
 
 ```bash
-cargo run -- --db ../data/voicebot.db
+cargo run -- --db ../data/seneschal.db
 ```
 
 The server starts on `http://127.0.0.1:3000` by default.
@@ -38,7 +38,7 @@ Configuration is layered, highest precedence first:
 
 | Environment variable | Default | Description |
 |---|---|---|
-| `VOICEBOT_DB_PATH` | `../data/voicebot.db` | Path to the Voicebot SQLite database |
+| `SENECHAL_DB_PATH` | `../data/seneschal.db` | Path to the Seneschal SQLite database |
 | `DB_INSPECT_PORT` | `3000` | HTTP server port |
 
 The server always binds to `127.0.0.1` (local-only access).
@@ -79,4 +79,4 @@ cargo test
 
 - The application opens the SQLite database in read-write mode.
 - The server is intentionally bound to `127.0.0.1` and is not meant for network exposure.
-- This tool is independent of Voicebot's main runtime; it only needs access to the SQLite file.
+- This tool is independent of Seneschal's main runtime; it only needs access to the SQLite file.

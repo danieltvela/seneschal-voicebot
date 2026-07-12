@@ -78,7 +78,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build (avspeech)
-        run: cargo build --release --bin voicebot --features avspeech
+        run: cargo build --release --bin seneschal --features avspeech
 
 #  # ── Build Linux ────────────────────────────────────────────────────────────
 #  build-linux:
@@ -102,7 +102,7 @@ jobs:
 #            libasound2-dev espeak-ng pkg-config build-essential cmake libgomp1
 #
 #      - name: Build (kokoro)
-#        run: cargo build --release --bin voicebot --features kokoro
+#        run: cargo build --release --bin seneschal --features kokoro
 
 #  # ── Installer Smoke Test ───────────────────────────────────────────────────
 #  installer-smoke:

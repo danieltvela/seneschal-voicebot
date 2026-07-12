@@ -25,18 +25,18 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
-COPY voicebot.pro.toml ./
+COPY seneschal.pro.toml ./
 COPY src ./src
 COPY tests ./tests
 COPY patches ./patches
 
 RUN . "$CARGO_HOME/env" \
-    && cargo build --release --bin voicebot --features "tui,remote,control"
+    && cargo build --release --bin seneschal --features "tui,remote,control"
 
 FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    VOICEBOT_HOME=/root/.voicebot \
+    SENESCHAL_HOME=/root/.seneschal \
     MODELS_DIR=/build/models
 
 RUN apt-get update -qq \
@@ -50,9 +50,9 @@ RUN apt-get update -qq \
 
 WORKDIR /app
 
-COPY --from=builder /build/target/release/voicebot /usr/local/bin/voicebot
-COPY .gitea/install-test/smoke-test.sh /usr/local/bin/voicebot-smoke-test
-RUN chmod +x /usr/local/bin/voicebot-smoke-test
+COPY --from=builder /build/target/release/seneschal /usr/local/bin/seneschal
+COPY .gitea/install-test/smoke-test.sh /usr/local/bin/seneschal-smoke-test
+RUN chmod +x /usr/local/bin/seneschal-smoke-test
 COPY uninstall.sh /app/uninstall.sh
 RUN chmod +x /app/uninstall.sh
 
@@ -75,4 +75,4 @@ ENV KOKORO_MODEL="$MODELS_DIR/kokoro-v1.0.onnx" \
     VAD_MODEL="$MODELS_DIR/ggml-silero-vad.bin" \
     TTS_PROVIDER=kokoro
 
-ENTRYPOINT ["/usr/local/bin/voicebot-smoke-test"]
+ENTRYPOINT ["/usr/local/bin/seneschal-smoke-test"]

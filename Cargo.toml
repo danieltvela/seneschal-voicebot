@@ -1,10 +1,10 @@
 [package]
-name = "voicebot"
+name = "seneschal"
 version = "0.1.0"
 edition = "2024"
-repository = "https://github.com/madcato/voicebot"
-homepage = "https://github.com/madcato/voicebot"
-documentation = "https://github.com/madcato/voicebot"
+repository = "https://github.com/danielvela/seneschal"
+homepage = "https://github.com/danielvela/seneschal"
+documentation = "https://github.com/danielvela/seneschal"
 
 [dependencies]
 # Async runtime
@@ -135,7 +135,7 @@ remote = ["dep:axum", "dep:tower"]
 control = ["dep:axum", "dep:tower"]
 
 [[bin]]
-name = "voicebot"
+name = "seneschal"
 path = "src/main.rs"
 
 [[bin]]

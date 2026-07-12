@@ -7,7 +7,7 @@ use db_inspect::db::AppState;
 use db_inspect::routes::create_router;
 
 fn fixture_path() -> String {
-    format!("{}/tests/fixtures/voicebot.db", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/tests/fixtures/seneschal.db", env!("CARGO_MANIFEST_DIR"))
 }
 
 async fn app() -> impl tower::Service<
@@ -17,7 +17,7 @@ async fn app() -> impl tower::Service<
 > {
     let fixture = fixture_path();
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-    let db_path = temp_dir.path().join("voicebot.db");
+    let db_path = temp_dir.path().join("seneschal.db");
     std::fs::copy(&fixture, &db_path).expect("failed to copy fixture db");
 
     // Leak the temp dir so the database file remains accessible for the

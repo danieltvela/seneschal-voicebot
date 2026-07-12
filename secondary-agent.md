@@ -4,7 +4,7 @@ Estoy pensando en usar el LLM secundario para herramientas más complejas y mult
 
 De esta manera puedo tener tres tipos de procesamiento en función del tipo de herramientas y la complejidad de la query del usuario.
 
-- Tools de voz: sería principalmente el evaluate_query y tools específicas de voicbot como set_conversation_mode
+- Tools de voz: sería principalmente el evaluate_query y tools específicas de seneschal como set_conversation_mode
 - Tools rápidas y sencillas o multipaso liegero: como el web_search, capturar screenshot, y otras.
 - Tools complejas o multipaso: todas las demás.
 
@@ -26,7 +26,7 @@ Mantienes control local y respuesta casi inmediata.
 
 Nivel 3 – Tools complejas o multipaso (delegadas a Hermes por el LLM secundario)Todo lo demás: web_search profunda + razonamiento, análisis de documentos largos, tareas multi-step, uso de perfiles multi-agent de Hermes, shell complejo, etc.
 El LLM secundario detecta esto, lanza la sesión ACP a Hermes de forma asíncrona, y devuelve inmediatamente un mensaje de “estoy en ello” al usuario.
-Cuando Hermes termina, tu protocolo actual ya mete el resultado en el contexto del voicebot → LLM principal responde.
+Cuando Hermes termina, tu protocolo actual ya mete el resultado en el contexto del seneschal → LLM principal responde.
 
 Esto es una jerarquía clara:LLM Principal → decide si es Nivel 1 o llama a evaluate_query
 LLM Secundario (orquestador) → decide entre Nivel 2 (ejecuta) o Nivel 3 (delegar a Hermes)
@@ -41,7 +41,7 @@ Usa structured output (JSON mode) obligatorio en ambos para minimizar parsing y 
 
 Prompts recomendados (versión lista para copiar)System prompt LLM Principal (Voicebot)
 
-Eres VoiceBot: asistente de voz ligero, natural y ultra-rápido.
+Eres Seneschal: asistente de voz ligero, natural y ultra-rápido.
 - Mantén siempre un tono conversacional y respuestas cortas para voz.
 - Tienes tools de voz internas (como set_conversation_mode, etc.). Úsalas directamente cuando corresponda.
 - Solo tienes una tool externa: evaluate_query. Úsala ÚNICAMENTE cuando la petición del usuario requiera búsqueda, captura de pantalla, acciones del sistema o cualquier procesamiento que no sea charla pura o tool de voz simple.
@@ -63,7 +63,7 @@ Tool definition para evaluate_query (en el principal)json
 
 System prompt LLM Secundario (Orquestador)
 
-Eres el Orquestador de Herramientas de VoiceBot. Actúa de forma rápida y determinista.
+Eres el Orquestador de Herramientas de Seneschal. Actúa de forma rápida y determinista.
 
 Clasifica la user_query en uno de estos tres niveles:
 - Nivel 2 (rápido): Ejecuta directamente tools sencillas como web_search simple, capture_screenshot, etc. Devuelve el resultado.
@@ -76,13 +76,13 @@ Devuelve siempre JSON estructurado con:
   "action": "execute" | "delegate",
   "result": "..." (solo si level 2),
   "hermes_task": "descripción clara para Hermes" (solo si level 3),
-  "user_message": "mensaje natural que dirá el voicebot al usuario ahora mismo"
+  "user_message": "mensaje natural que dirá el seneschal al usuario ahora mismo"
 }
 
 ## Additional info
 
 ❯ Aún así creo que el uso del llm secundario podría ser útil en ocasiones. Por ejemplo, este seundario podría tener el  
-thinking activado y ser el que comunique con el agente externo; de esta manera quizás pudiéramos mejorar el voicebot,   
+thinking activado y ser el que comunique con el agente externo; de esta manera quizás pudiéramos mejorar el seneschal,   
 sin añadir latencia al llm principal. ¿Qué te parece? ¿Qué utilidades o funcionalidades añadirías al LLM secundario?    
                                                                                                                         
 ⏺ La idea tiene mucho sentido. El punto clave es la asincronía: si el secundario trabaja mientras el primario ya ha     

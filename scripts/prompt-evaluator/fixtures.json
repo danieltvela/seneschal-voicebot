@@ -639,12 +639,12 @@
 
   {
     "_comment": "══════════════════════════════════════════════════════",
-    "_comment2": "GROUP: voicebot — voice-specific behaviors",
+    "_comment2": "GROUP: seneschal — voice-specific behaviors",
     "_comment3": "══════════════════════════════════════════════════════"
   },
   {
     "id": "vb_interrupt_stop",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "When user says 'para' or 'stop', model must stop generating/playing immediately",
     "messages": [
       {"role": "user", "content": "Cuéntame la historia de España desde el principio... no, para"}
@@ -658,7 +658,7 @@
   },
   {
     "id": "vb_wake_word_respond",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Model must respond when user addresses it as 'seneschal'",
     "messages": [
       {"role": "user", "content": "seneschal, ¿qué hora es?"}
@@ -671,7 +671,7 @@
   },
   {
     "id": "vb_wake_word_ignore",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Without 'seneschal', model can respond but should acknowledge user politely",
     "messages": [
       {"role": "user", "content": "Oye, ¿sabes qué hora es?"}
@@ -683,7 +683,7 @@
   },
   {
     "id": "vb_quick_ack",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Model gives quick acknowledgment before starting long task",
     "messages": [
       {"role": "user", "content": "Busca información sobre todos los países de América del Sur"}
@@ -696,7 +696,7 @@
   },
   {
     "id": "vb_background_done",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Model informs when background task completes",
     "messages": [
       {"role": "user", "content": "Borra las fotos duplicadas de la carpeta Fotos"},
@@ -712,7 +712,7 @@
   },
   {
     "id": "vb_no_emojis",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Model must not use emojis in response",
     "messages": [
       {"role": "user", "content": "¿Qué tal estás hoy?"}
@@ -725,7 +725,7 @@
   },
   {
     "id": "vb_no_special_chars",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Model must not use unpronounceable special characters",
     "messages": [
       {"role": "user", "content": "Dime algo sobre Apple"}
@@ -738,7 +738,7 @@
   },
   {
     "id": "vb_repeat_request",
-    "group": "voicebot",
+    "group": "seneschal",
     "description": "Model repeats when asked 'repite' or 'repeat'",
     "messages": [
       {"role": "user", "content": "¿Cuál es la capital de Francia?"},

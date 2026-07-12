@@ -50,7 +50,7 @@ use crate::audio::audio_transform::resample_nearest;
 use crate::audio::buffer::AudioBuffer;
 use crate::audio::output::AudioOutput;
 use crate::audio::speaker::SpeakerVerifier;
-use crate::config::{Config, VoicebotEnv};
+use crate::config::{Config, SeneschalEnv};
 use crate::db::{Database, Memory};
 use crate::dream::{SDreamConfig, SDreamDaemon};
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
 async fn async_main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    let active_env = VoicebotEnv::from_env_var();
+    let active_env = SeneschalEnv::from_env_var();
 
     #[cfg(feature = "tui")]
     {
@@ -148,8 +148,8 @@ async fn async_main() -> Result<()> {
         )
         .init();
 
-    info!(target: "voicebot", "Active environment: {}", active_env.as_str());
-    info!(target: "voicebot", "Starting voicebot...");
+    info!(target: "seneschal", "Active environment: {}", active_env.as_str());
+    info!(target: "seneschal", "Starting seneschal...");
     let mut config = Config::from_env()?;
 
     // ── Device listing shortcut ───────────────────────────────────────────────
@@ -205,7 +205,7 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
-    info!(target: "voicebot", "Language: {}", config.language);
+    info!(target: "seneschal", "Language: {}", config.language);
 
     // ── Plugin manager ────────────────────────────────────────────────────────
     let plugin_manager = Arc::new(PluginManager::new(&config.plugins));
@@ -267,17 +267,17 @@ async fn async_main() -> Result<()> {
 
     if config.apple_events_enabled {
         tool_registry.register(AppleEventsTool);
-        info!(target: "voicebot", "apple_events tool enabled (Calendar & Reminders)");
+        info!(target: "seneschal", "apple_events tool enabled (Calendar & Reminders)");
     }
 
     if config.shell_enabled {
         tool_registry.register(RunShellTool::new(config.shell_timeout_secs));
-        info!(target: "voicebot", "run_shell tool enabled (timeout={}s)", config.shell_timeout_secs);
+        info!(target: "seneschal", "run_shell tool enabled (timeout={}s)", config.shell_timeout_secs);
     }
 
     if let Some(ref sec_client) = secondary_llm_client {
         info!(
-            target: "voicebot",
+            target: "seneschal",
             "Vision tool enabled via secondary LLM (model={})",
             config.secondary_llm_model,
         );
@@ -290,10 +290,10 @@ async fn async_main() -> Result<()> {
         let mut wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
         if let Some(ref sec) = secondary_llm_client {
             wst = wst.with_synthesis(sec.clone());
-            info!(target: "voicebot", "web_search synthesis via secondary LLM enabled");
+            info!(target: "seneschal", "web_search synthesis via secondary LLM enabled");
         }
         tool_registry.register(wst);
-        info!(target: "voicebot", "web_search tool enabled (url={})", searxng_url);
+        info!(target: "seneschal", "web_search tool enabled (url={})", searxng_url);
     }
 
     // ── Agent delegation (multi-agent registry) ───────────────────────────────
@@ -305,16 +305,16 @@ async fn async_main() -> Result<()> {
     if let Some(provider) = crate::search::from_config(&config) {
         let provider = Arc::from(provider);
         tool_registry.register(QuickSearchTool::new(Arc::clone(&provider)));
-        info!(target: "voicebot", "quick_search tool enabled (provider={})", provider.name());
+        info!(target: "seneschal", "quick_search tool enabled (provider={})", provider.name());
 
         if let Some(agent) = agent_registry.agents.first() {
             tool_registry.register(DeepResearchTool::new(agent.clone(), shared_history.clone()));
-            info!(target: "voicebot", "deep_research tool enabled (agent={})", agent.name);
+            info!(target: "seneschal", "deep_research tool enabled (agent={})", agent.name);
         }
     }
 
     for agent in &agent_registry.agents {
-        info!(target: "voicebot", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
+        info!(target: "seneschal", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
         let task_map: Arc<dashmap::DashMap<String, ActiveTask>> = Arc::new(dashmap::DashMap::new());
         let mut run_agent_tool = RunAgentTool::new(
             agent.clone(),
@@ -324,7 +324,7 @@ async fn async_main() -> Result<()> {
         );
         if let Some(ref sec) = secondary_llm_client {
             run_agent_tool = run_agent_tool.with_synthesis(sec.clone());
-            info!(target: "voicebot", "run_{} result synthesis via secondary LLM enabled", agent.name);
+            info!(target: "seneschal", "run_{} result synthesis via secondary LLM enabled", agent.name);
         }
         if agent.mode == "acp" {
             run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
@@ -556,7 +556,7 @@ async fn async_main() -> Result<()> {
             (*plugin_manager).clone(),
             plugin_switch_tx,
         ));
-        info!(target: "voicebot", "switch_plugin tool enabled");
+        info!(target: "seneschal", "switch_plugin tool enabled");
     }
 
     // ── Database ──────────────────────────────────────────────────────────────
@@ -602,18 +602,18 @@ async fn async_main() -> Result<()> {
     }
 
     tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
-    info!(target: "voicebot", "recover_historical_context tool enabled");
+    info!(target: "seneschal", "recover_historical_context tool enabled");
 
     tool_registry.register(NoopTool::new(config.noop_tool_instructions.clone()));
     info!(
-        target: "voicebot",
+        target: "seneschal",
         "noop tool enabled (instructions: {})",
         config.noop_tool_instructions,
     );
 
     // Register list_tasks tool for subtask tracking
     tool_registry.register_list_tasks();
-    info!(target: "voicebot", "list_tasks tool enabled");
+    info!(target: "seneschal", "list_tasks tool enabled");
 
     let tools = Arc::new(std::sync::Mutex::new(tool_registry));
 
@@ -1131,7 +1131,7 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    info!(target: "voicebot", "Ready. Speak to interact...");
+    info!(target: "seneschal", "Ready. Speak to interact...");
 
     // ── TUI ───────────────────────────────────────────────────────────────────
     #[cfg(feature = "tui")]
@@ -1728,7 +1728,7 @@ async fn async_main() -> Result<()> {
                 }
             } => {}
             _ = tokio::signal::ctrl_c() => {
-                info!(target: "voicebot", "Shutting down...");
+                info!(target: "seneschal", "Shutting down...");
                 events.barge_in_tx.send(0).ok();
                 play_cancel.store(true, Ordering::SeqCst);
                 shutdown.store(true, Ordering::SeqCst);
@@ -1745,7 +1745,7 @@ async fn async_main() -> Result<()> {
 /// LLM, proactive channel, idle tracker), runs one cycle, and returns so the
 /// process can terminate.
 async fn run_dream_mode(config: &Config) -> Result<()> {
-    info!(target: "voicebot", "S-DREAM standalone mode");
+    info!(target: "seneschal", "S-DREAM standalone mode");
 
     let db = Database::new(&config.db_path).await?;
 
@@ -1786,7 +1786,7 @@ async fn run_dream_mode(config: &Config) -> Result<()> {
     .run_once()
     .await?;
 
-    info!(target: "voicebot", "S-DREAM standalone cycle complete; exiting");
+    info!(target: "seneschal", "S-DREAM standalone cycle complete; exiting");
     Ok(())
 }
 

@@ -95,7 +95,7 @@ async fn get_history(State(state): State<Arc<ControlState>>) -> impl IntoRespons
 async fn get_health() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "healthy",
-        "service": "voicebot-control",
+        "service": "seneschal-control",
     }))
 }
 

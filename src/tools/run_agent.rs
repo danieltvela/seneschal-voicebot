@@ -703,7 +703,7 @@ impl AcpWriter {
             .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(stderr_sink) // hermes logs to stderr → redirect to voicebot.log
+            .stderr(stderr_sink) // hermes logs to stderr → redirect to seneschal.log
             .spawn()
             .map_err(|e| anyhow::anyhow!("ACP: failed to spawn '{}': {}", command, e))?;
 
@@ -763,10 +763,10 @@ impl AcpWriter {
         ))
     }
 
-    /// Open an ACP traffic log file at `/tmp/voicebot_sessions/{session_id}.log`
+    /// Open an ACP traffic log file at `/tmp/seneschal_sessions/{session_id}.log`
     /// and launch a macOS Terminal window tailing it.
     pub fn open_log_file(&mut self, session_id: &str) {
-        let dir = std::path::PathBuf::from("/tmp/voicebot_sessions");
+        let dir = std::path::PathBuf::from("/tmp/seneschal_sessions");
         if let Err(e) = std::fs::create_dir_all(&dir) {
             warn!(target: "agent", "Failed to create log dir: {e}");
             return;
@@ -877,7 +877,7 @@ impl AcpWriter {
                 serde_json::json!({
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "voicebot", "version": "0.1.0"}
+                    "clientInfo": {"name": "seneschal", "version": "0.1.0"}
                 }),
             )
             .await?;
@@ -1727,12 +1727,12 @@ mod tests {
             serde_json::json!({
                 "protocolVersion": 1,
                 "clientCapabilities": {},
-                "clientInfo": {"name": "voicebot", "version": "0.1.0"}
+                "clientInfo": {"name": "seneschal", "version": "0.1.0"}
             }),
         );
         assert_eq!(msg["params"]["protocolVersion"], 1);
         assert!(msg["params"]["clientCapabilities"].is_object());
-        assert_eq!(msg["params"]["clientInfo"]["name"], "voicebot");
+        assert_eq!(msg["params"]["clientInfo"]["name"], "seneschal");
     }
 
     // ── Prompt request format ────────────────────────────────────────────────

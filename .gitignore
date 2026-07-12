@@ -9,7 +9,7 @@
 .env.*.local
 
 # Database and runtime data
-data/voicebot.db
+data/seneschal.db
 data/speaker.emb
 data/*.db
 data/dev/*.db
@@ -36,7 +36,7 @@ data/*.emb
 !.opencode/skill/**
 
 # Development logs
-voicebot.log
+seneschal.log
 *.log
 
 # macOS

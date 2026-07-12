@@ -64,9 +64,9 @@ Microphone → VAD → AudioBuffer → Whisper STT → mlx-lm/oMLX LLM → Sente
 
 ### Seneschal as Pure Voice Layer
 
-The voicebot is deliberately narrow in scope: it owns the audio pipeline and the conversational voice experience. Everything else — computer control, file access, calendar, web, vision, long-running tasks — belongs to an external agent.
+The seneschal is deliberately narrow in scope: it owns the audio pipeline and the conversational voice experience. Everything else — computer control, file access, calendar, web, vision, long-running tasks — belongs to an external agent.
 
-This separation exists for one reason: **response latency**. The more tools and context the voicebot LLM has to consider, the slower the first token arrives. A voice model that only knows about conversation and a handful of instant local operations responds in under 1 second. A voice model that also thinks about shell commands, file trees, and calendar APIs is slower and less reliable.
+This separation exists for one reason: **response latency**. The more tools and context the seneschal LLM has to consider, the slower the first token arrives. A voice model that only knows about conversation and a handful of instant local operations responds in under 1 second. A voice model that also thinks about shell commands, file trees, and calendar APIs is slower and less reliable.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -91,7 +91,7 @@ This separation exists for one reason: **response latency**. The more tools and 
 │  • Eyes: screenshot + vision, system state, calendar       │
 │  • Arms: shell, file r/w, web search, browser, email       │
 │  • Memory: long-term, episodic                             │
-│  • Any future capability without touching voicebot          │
+│  • Any future capability without touching seneschal          │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -238,7 +238,7 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | `SHELL_TIMEOUT_SECS` | `30` | Hard timeout (seconds) per shell command |
 | `AUDIO_INPUT_DEVICE` | system default | Input device name substring |
 | `AUDIO_OUTPUT_DEVICE` | system default | Output device name substring |
-| `DB_PATH` | `data/voicebot.db` | SQLite database file path |
+| `DB_PATH` | `data/seneschal.db` | SQLite database file path |
 | `LIST_AUDIO_DEVICES` | `0` | Print devices and exit |
 | `SPEAKER_MODEL` | auto-detect | Path to speaker embedding ONNX model. Auto-detected from `models/speaker_embedding.onnx` if it exists. |
 | `SPEAKER_ENROLLMENT_PATH` | `data/speaker.emb` | Path where the enrolled speaker embedding is persisted. Delete to re-enroll. |
@@ -269,7 +269,7 @@ Every subsystem has its own `RUST_LOG` target. Use them to see only the logs you
 
 | Target | What it covers |
 |--------|----------------|
-| `voicebot` | Startup, language, feature flags, ready, shutdown |
+| `seneschal` | Startup, language, feature flags, ready, shutdown |
 | `audio` | Microphone/speaker device selection, CPAL events, VAD probabilities, playback errors |
 | `speaker` | Speaker verification enabled/disabled, enrollment, per-utterance similarity verdict |
 | `stt` | Whisper model load, transcription errors, empty-transcript skips |
@@ -302,7 +302,7 @@ RUST_LOG=speaker=debug cargo run --features speaker
 RUST_LOG=stt=info,llm=info cargo run
 
 # Full trace on one subsystem while keeping others quiet
-RUST_LOG=audio=trace,voicebot=info cargo run
+RUST_LOG=audio=trace,seneschal=info cargo run
 
 # Everything at debug level (noisy but complete)
 RUST_LOG=debug cargo run
@@ -387,7 +387,7 @@ Recommended models for Seneschal (low latency + Spanish support):
 
 The most realistic benchmark: starts each server, warms its KV cache with a
 multi-turn conversation, then measures **only the final turn** — the hot-cache
-scenario that governs real voicebot latency.
+scenario that governs real seneschal latency.
 
 ```sh
 python3 scripts/bench-server.py <mlx-model-or-hf-repo> <omlx-model-dir>
@@ -539,7 +539,7 @@ STT → LLM streams tokens
 
 **Implementation:**
 
-MCP uses JSON-RPC 2.0 over stdio (subprocess). The voicebot acts as an MCP client:
+MCP uses JSON-RPC 2.0 over stdio (subprocess). The seneschal acts as an MCP client:
 
 ```
 LLM tool_call
@@ -571,7 +571,7 @@ ToolRegistry
 
 ### 3. Agent Delegation ✅ Implemented
 
-**Goal:** The LLM can delegate complex tasks (research, shell automation, file operations, calendar management, web browsing) to an external agent. The voicebot keeps its voice pipeline unblocked. Results return via the proactive channel and are spoken naturally.
+**Goal:** The LLM can delegate complex tasks (research, shell automation, file operations, calendar management, web browsing) to an external agent. The seneschal keeps its voice pipeline unblocked. Results return via the proactive channel and are spoken naturally.
 
 **Two communication modes: `cli` and `acp`
 
@@ -615,7 +615,7 @@ LLM calls run_agent_async(task)
 
 **ACP mode (`AGENT_MODE=acp`, persistent JSON-RPC stdio):**
 
-Instead of spawning a new subprocess for each delegation, the voicebot maintains a persistent connection to an ACP-compatible agent via JSON-RPC 2.0 over stdio. This enables:
+Instead of spawning a new subprocess for each delegation, the seneschal maintains a persistent connection to an ACP-compatible agent via JSON-RPC 2.0 over stdio. This enables:
 - Bi-directional communication (agent can push updates back)
 - No per-task startup overhead (agent stays warm)
 - Shared session context across delegations
@@ -630,9 +630,9 @@ Instead of spawning a new subprocess for each delegation, the voicebot maintains
 | `AGENT_TIMEOUT_SECS` | `120` | Hard timeout for synchronous agent calls |
 | `AGENT_ACP_WARMUP` | `0` | Send warmup prompt at startup to preload the model (ACP mode only) |
 
-**Agent protocol (CLI mode):** stdin/stdout. The voicebot writes the task as plain text to the subprocess stdin, closes it, and reads the complete response from stdout. Any CLI agent that follows this contract works — Hermes, Claude CLI, a custom Python script, or anything else. Switching agents requires changing only `AGENT_COMMAND`.
+**Agent protocol (CLI mode):** stdin/stdout. The seneschal writes the task as plain text to the subprocess stdin, closes it, and reads the complete response from stdout. Any CLI agent that follows this contract works — Hermes, Claude CLI, a custom Python script, or anything else. Switching agents requires changing only `AGENT_COMMAND`.
 
-**Agent protocol (ACP mode):** JSON-RPC 2.0 over stdio with method-based calls (e.g. `chat/send_message`, `chat/terminate`). The voicebot manages the persistent process lifecycle and routes delegations through the shared connection.
+**Agent protocol (ACP mode):** JSON-RPC 2.0 over stdio with method-based calls (e.g. `chat/send_message`, `chat/terminate`). The seneschal manages the persistent process lifecycle and routes delegations through the shared connection.
 
 **Why stdin/stdout and not HTTP:**
 - No persistent service to manage — the agent starts only when needed
@@ -680,25 +680,25 @@ tokio::select! {
 
 ### 5. Seneschal as Agent Intermediary
 
-**Goal:** The voicebot acts as a voice interface to any existing text-based agent or service — translating user voice to the agent's input format and the agent's text output to speech.
+**Goal:** The seneschal acts as a voice interface to any existing text-based agent or service — translating user voice to the agent's input format and the agent's text output to speech.
 
 **Approach:**
 
-This is a generalization of agent delegation. The voicebot becomes a transparent voice proxy:
+This is a generalization of agent delegation. The seneschal becomes a transparent voice proxy:
 
 ```
-User voice → STT → voicebot LLM (optional) → agent API → response text → TTS
+User voice → STT → seneschal LLM (optional) → agent API → response text → TTS
 ```
 
 Two proxy modes:
 
-**Transparent proxy** (voicebot just relays, no LLM involved):
+**Transparent proxy** (seneschal just relays, no LLM involved):
 ```
 STT transcript → agent API → response → TTS
 ```
 Useful when the agent is a full conversational AI (e.g., another Claude instance, a specialized chatbot). Latency is minimized.
 
-**Mediated proxy** (voicebot LLM reformulates):
+**Mediated proxy** (seneschal LLM reformulates):
 ```
 STT transcript → local LLM reformulates/enriches → agent API → response → local LLM summarizes → TTS
 ```
@@ -780,7 +780,7 @@ communication_style: direct, technical
 
 ## Butler Vision — Six Pillars
 
-These are the features that transform the voicebot from a conversational assistant into a Jarvis-style digital butler. Each pillar is independent and can be implemented incrementally.
+These are the features that transform the seneschal from a conversational assistant into a Jarvis-style digital butler. Each pillar is independent and can be implemented incrementally.
 
 ---
 
@@ -853,7 +853,7 @@ This prompt is a starting point. It should be refined over time as Jarvis learns
 
 **The problem:** Butler is blind. It does not know what you are doing, what is on your screen, or what the system state is. Without this, it cannot anticipate anything.
 
-**Architectural note:** In the voicebot/agent split, most of Pillar B belongs to the **external agent**. The agent has the time, the tools, and the context window to reason about screen state, calendar, and system activity. The voicebot's only eye is `take_screenshot` — used on-demand when the user asks something like "¿qué hace este código?" and the voicebot needs to see the screen before speaking.
+**Architectural note:** In the seneschal/agent split, most of Pillar B belongs to the **external agent**. The agent has the time, the tools, and the context window to reason about screen state, calendar, and system activity. The seneschal's only eye is `take_screenshot` — used on-demand when the user asks something like "¿qué hace este código?" and the seneschal needs to see the screen before speaking.
 
 **Division of responsibility:**
 
@@ -869,7 +869,7 @@ This prompt is a starting point. It should be refined over time as Jarvis learns
 - `take_screenshot` tool: `screencapture -x -t png` → base64 → secondary vision provider (LM Studio)
 - `current_time` tool: LLM can request current date/time via tool call, injected into conversation context
 
-**Agent implementation (agent-side, not in voicebot):**
+**Agent implementation (agent-side, not in seneschal):**
 - Calendar queries, reminders, upcoming deadlines
 - File activity watcher
 - Periodic screen summary for proactive awareness
@@ -880,9 +880,9 @@ This prompt is a starting point. It should be refined over time as Jarvis learns
 
 **The problem:** Butler can only talk. Jarvis acts.
 
-**Architectural note:** In the voicebot/agent split, Pillar C belongs almost entirely to the **external agent**. Shell execution, file editing, calendar creation, web search — these are slow, stateful, and potentially dangerous operations. They have no business being in the voice hot path.
+**Architectural note:** In the seneschal/agent split, Pillar C belongs almost entirely to the **external agent**. Shell execution, file editing, calendar creation, web search — these are slow, stateful, and potentially dangerous operations. They have no business being in the voice hot path.
 
-The voicebot keeps only the instant, side-effect-light operations that are natural parts of a voice interaction:
+The seneschal keeps only the instant, side-effect-light operations that are natural parts of a voice interaction:
 
 **Seneschal tools (implemented, instant):**
 
@@ -907,7 +907,7 @@ The voicebot keeps only the instant, side-effect-light operations that are natur
 | `browse` | Complex multi-step web interaction |
 | `send_email` | Async by nature |
 
-**Safety:** Shell access in the agent is the agent's responsibility to sandbox. The voicebot never executes shell commands directly.
+**Safety:** Shell access in the agent is the agent's responsibility to sandbox. The seneschal never executes shell commands directly.
 
 **The delegation pattern for arms:**
 ```
@@ -916,7 +916,7 @@ Seneschal LLM: calls run_agent_async("find the compilation error and fix it")
 Seneschal speaks: "Lo delego, te aviso cuando esté listo"
                                     ↓ (seconds later)
 Agent runs shell → fixes code → returns summary
-proactive_tx → voicebot speaks: "Hecho. Cuatro errores corregidos en main.rs"
+proactive_tx → seneschal speaks: "Hecho. Cuatro errores corregidos en main.rs"
 ```
 
 ---
@@ -933,7 +933,7 @@ proactive_tx → voicebot speaks: "Hecho. Cuatro errores corregidos en main.rs"
 
 "Llevas dos horas y media sin moverte. ¿Quieres un descanso?"
 
-"He notado que el proceso voicebot consume el 94% de CPU."
+"He notado que el proceso seneschal consume el 94% de CPU."
 
 "La compilación ha terminado. Cero errores."
 ```
@@ -1008,7 +1008,7 @@ This gives Butler a searchable autobiography. The longer it runs, the richer and
 <key>KeepAlive</key><true/>
 <key>ProgramArguments</key>
 <array>
-    <string>/path/to/voicebot</string>
+    <string>/path/to/seneschal</string>
 </array>
 ```
 
@@ -1048,7 +1048,7 @@ TTFT > 2s feels sluggish in conversation. This rules out anything larger than 14
 
 ### The solution: coordinator pattern
 
-The voicebot does not need one model doing everything. It needs a **fast coordinator** and **slow specialists**:
+The seneschal does not need one model doing everything. It needs a **fast coordinator** and **slow specialists**:
 
 ```
 User speaks
@@ -1093,14 +1093,14 @@ The 7B is the voice; Claude (or any capable remote model) is the brain for hard 
 
 ### 8. Conversation Awareness
 
-**Goal:** The voicebot must ignore audio that is not directed at it — other people talking in the room, TV, radio, phone calls — and respond only when the user is genuinely speaking to it.
+**Goal:** The seneschal must ignore audio that is not directed at it — other people talking in the room, TV, radio, phone calls — and respond only when the user is genuinely speaking to it.
 
 This is one of the hardest unsolved problems in always-on voice assistants. It has two independent sub-problems:
 
 1. **Who is speaking?** (speaker identification)
 2. **Are they speaking to me?** (intent / address detection)
 
-Both must be solved for the voicebot to work reliably in a real home or office environment.
+Both must be solved for the seneschal to work reliably in a real home or office environment.
 
 ---
 
@@ -1173,7 +1173,7 @@ Wake word solves the problem completely but kills the "ambient companion" feel. 
 
 **Layer 2 — Conversation state machine (zero cost)**
 
-Track whether the voicebot is in an "active conversation":
+Track whether the seneschal is in an "active conversation":
 - After the bot speaks, it is in **active mode** for N seconds (default: 15s)
 - In active mode, respond to anything from the user's voice (speaker ID already confirmed)
 - After N seconds of user silence, drop back to **ambient mode**

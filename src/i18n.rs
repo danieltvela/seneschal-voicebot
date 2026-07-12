@@ -18,10 +18,10 @@ pub fn get_notification(key: &str, lang: &str) -> &'static str {
         }
 
         ("startup", "es") => {
-            "[Sistema: el voicebot acaba de arrancar. Son las {time_str}, del día {date_str}\n Saluda al usuario de forma natural y muy concisa.]"
+            "[Sistema: seneschal acaba de arrancar. Son las {time_str}, del día {date_str}\n Saluda al usuario de forma natural y muy concisa.]"
         }
         ("startup", "en") => {
-            "[System: the voicebot just started. It's {time_str} on {date_str}\n Greet the user naturally and briefly.]"
+            "[System: seneschal just started. It's {time_str} on {date_str}\n Greet the user naturally and briefly.]"
         }
 
         ("background_task_done", "es") => {
@@ -59,6 +59,6 @@ pub fn get_notification(key: &str, lang: &str) -> &'static str {
             "[System: I have stored a lot of information about you ({total_chars} chars, threshold: {threshold}). Would you like me to review and clean up outdated data?]"
         }
 
-        _ => "[Sistema: el voicebot acaba de arrancar.]\n Saluda al usuario.",
+        _ => "[Sistema: seneschal acaba de arrancar.]\n Saluda al usuario.",
     }
 }

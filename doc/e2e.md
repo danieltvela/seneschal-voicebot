@@ -1,6 +1,6 @@
 # End-to-End Testing
 
-This document explains how to run the voicebot end-to-end (E2E) tests, record WAV fixtures, and what each test scenario covers.
+This document explains how to run the seneschal end-to-end (E2E) tests, record WAV fixtures, and what each test scenario covers.
 
 ## Overview
 

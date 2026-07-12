@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-llm.sh — Launch an LLM server for voicebot (Apple Silicon)
+# start-llm.sh — Launch an LLM server for seneschal (Apple Silicon)
 #
 # Delegates to the appropriate backend script based on LLM_BACKEND:
 #

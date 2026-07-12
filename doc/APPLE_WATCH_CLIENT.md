@@ -1,13 +1,13 @@
-# Apple Watch Client for Voicebot
+# Apple Watch Client for Seneschal
 
-Guide for building a watchOS app that connects to the Voicebot WebSocket server, streams microphone audio, and plays back TTS responses.
+Guide for building a watchOS app that connects to the Seneschal WebSocket server, streams microphone audio, and plays back TTS responses.
 
 > **Related:** see issue #37 for the full feasibility investigation (latency matrix, NECP/TN3135 context, phased implementation plan).
 
 ## Prerequisites
 
 - Xcode 15+ with watchOS 10+ SDK
-- Voicebot running with `--features remote` and `WS_PORT` set
+- Seneschal running with `--features remote` and `WS_PORT` set
 - Apple Watch paired with iPhone (or Simulator) — **test on a real device; the simulator always allows low-level networking and may hide NECP denials**
 
 ## watchOS Constraints (read first)
@@ -71,13 +71,13 @@ If the session is not yet active when `webSocketTask(with:).resume()` is called,
 
 ### Info.plist / Capabilities
 
-- Add `NSMicrophoneUsageDescription` to Info.plist: `"Voicebot needs microphone access to hear your voice."`
+- Add `NSMicrophoneUsageDescription` to Info.plist: `"Seneschal needs microphone access to hear your voice."`
 - Enable **Background Modes** capability with **Audio, AirPlay, and Picture in Picture** checked
 - Add `UIBackgroundModes` array with `audio` — required to satisfy the TN3135 exception for WebSocket access on watchOS 9+. See [watchOS Constraints](#watchos-constraints-read-first) above.
 
 ## Wire Protocol
 
-The voicebot WebSocket server expects:
+The seneschal WebSocket server expects:
 
 | Direction | Frame type | Format |
 |-----------|-----------|--------|
@@ -110,12 +110,12 @@ Server -> Watch:
 │           Apple Watch App           │
 │                                     │
 │  ┌──────────┐    ┌───────────────┐  │
-│  │ AudioMgr │───>│ WebSocketMgr  │──────> voicebot:WS_PORT/ws
+│  │ AudioMgr │───>│ WebSocketMgr  │──────> seneschal:WS_PORT/ws
 │  │ (capture)│    │  (send audio) │  │
 │  └──────────┘    └───────────────┘  │
 │                                     │
 │  ┌──────────┐    ┌───────────────┐  │
-│  │ AudioMgr │<───│ WebSocketMgr  │<────── voicebot TTS audio
+│  │ AudioMgr │<───│ WebSocketMgr  │<────── seneschal TTS audio
 │  │ (play)   │    │ (recv audio)  │  │
 │  └──────────┘    └───────────────┘  │
 └─────────────────────────────────────┘
@@ -128,7 +128,7 @@ Three classes:
 
 ## Audio Capture
 
-Use `AVAudioEngine` to tap the microphone at 16 kHz mono Int16 -- this matches the voicebot wire format exactly, so no conversion is needed.
+Use `AVAudioEngine` to tap the microphone at 16 kHz mono Int16 -- this matches the seneschal wire format exactly, so no conversion is needed.
 
 ```swift
 import AVFAudio
@@ -137,7 +137,7 @@ class AudioManager {
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
 
-    // 16kHz mono Int16 -- matches voicebot wire protocol
+    // 16kHz mono Int16 -- matches seneschal wire protocol
     private let captureFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
         sampleRate: 16000,
@@ -333,7 +333,7 @@ extension AudioManager {
 Two options:
 
 **Option A: Server-side VAD (recommended)**
-Just keep streaming microphone audio to the server. The voicebot's VAD will detect when the user starts speaking and automatically cancel the current TTS playback. No extra work needed on the watch.
+Just keep streaming microphone audio to the server. The seneschal's VAD will detect when the user starts speaking and automatically cancel the current TTS playback. No extra work needed on the watch.
 
 **Option B: Client-side barge-in**
 If you want faster response, detect audio input locally and send an explicit barge-in signal:
@@ -394,10 +394,10 @@ session.invalidate()
 ```
 
 ### Network
-- Watch on WiFi: direct connection to voicebot server
+- Watch on WiFi: direct connection to seneschal server
 - Watch on Bluetooth only: routes through paired iPhone
 - Cellular models: can connect directly if on cellular data
-- Ensure the voicebot server is reachable from the watch's network
+- Ensure the seneschal server is reachable from the watch's network
 
 ### Audio Session
 Always configure before starting audio:
@@ -422,7 +422,7 @@ A complication makes the app discoverable from the watch face and unlocks three 
 
 | What you want | How | Notes |
 |---|---|---|
-| Tap → open the app on the talk view | `widgetURL(URL("voicebot://listen"))` | Simplest. Requires URL scheme registered in Info.plist. |
+| Tap → open the app on the talk view | `widgetURL(URL("seneschal://listen"))` | Simplest. Requires URL scheme registered in Info.plist. |
 | Tap → start listening *without* opening the app | `Button(intent: StartListeningIntent())` where `StartListeningIntent: AppIntent & AudioPlaybackIntent` | `AudioPlaybackIntent` runs in the **app's audio process** in the background — it can activate `AVAudioSession` and open the WebSocket. |
 | Show live status on the face | `TimelineEntry` with a `Status` enum; main app calls `WidgetCenter.shared.reloadAllTimelines()` whenever the state changes | Limited by the system reload budget. |
 | Show a Live Activity in the Smart Stack | `ActivityKit` `Activity<…>` started when the session begins; ends when it ends | Live Activities appear in the **Smart Stack** on watchOS 10+. |
@@ -439,7 +439,7 @@ When a button on a complication is tapped, the system normally runs the `AppInte
 | `AudioPlaybackIntent` | App process, background | **Audio apps — can activate `AVAudioSession` and stream** |
 | `ForegroundContinuableIntent` | App process, background | General background work after a foreground app is backgrounded |
 
-For voicebot, `AudioPlaybackIntent` is the perfect match. The system gives it enough background time to start an audio session, open the WebSocket, and begin streaming — without ever opening the main app UI. While the audio session is active, the TN3135 NECP exception also keeps the WebSocket alive in the background.
+For seneschal, `AudioPlaybackIntent` is the perfect match. The system gives it enough background time to start an audio session, open the WebSocket, and begin streaming — without ever opening the main app UI. While the audio session is active, the TN3135 NECP exception also keeps the WebSocket alive in the background.
 
 ### Minimal example: tap-to-listen complication
 
@@ -479,26 +479,26 @@ struct StartListeningIntent: AudioPlaybackIntent {
 }
 
 // 2. The timeline entry — reflects the current state.
-struct VoicebotEntry: TimelineEntry {
+struct SeneschalEntry: TimelineEntry {
     let date: Date
     let status: String  // "idle" | "listening" | "thinking" | "speaking"
     let lastTranscript: String?
 }
 
 // 3. The provider. Read state from a shared App Group container.
-struct VoicebotProvider: TimelineProvider {
-    func placeholder(in context: Context) -> VoicebotEntry {
-        VoicebotEntry(date: .now, status: "idle", lastTranscript: nil)
+struct SeneschalProvider: TimelineProvider {
+    func placeholder(in context: Context) -> SeneschalEntry {
+        SeneschalEntry(date: .now, status: "idle", lastTranscript: nil)
     }
     func getSnapshot(in context: Context,
-                     completion: @escaping (VoicebotEntry) -> Void) {
+                     completion: @escaping (SeneschalEntry) -> Void) {
         completion(.init(date: .now,
                          status: SharedState.currentStatus(),
                          lastTranscript: SharedState.currentTranscript()))
     }
     func getTimeline(in context: Context,
-                     completion: @escaping (Timeline<VoicebotEntry>) -> Void) {
-        let entry = VoicebotEntry(
+                     completion: @escaping (Timeline<SeneschalEntry>) -> Void) {
+        let entry = SeneschalEntry(
             date: .now,
             status: SharedState.currentStatus(),
             lastTranscript: SharedState.currentTranscript()
@@ -511,8 +511,8 @@ struct VoicebotProvider: TimelineProvider {
 }
 
 // 4. The widget view.
-struct VoicebotComplicationView: View {
-    let entry: VoicebotEntry
+struct SeneschalComplicationView: View {
+    let entry: SeneschalEntry
     var body: some View {
         VStack(spacing: 2) {
             Image(systemName: icon(for: entry.status))
@@ -522,7 +522,7 @@ struct VoicebotComplicationView: View {
                 .lineLimit(1)
         }
         // Tap on the complication body → deep link to the talk view.
-        .widgetURL(URL(string: "voicebot://listen"))
+        .widgetURL(URL(string: "seneschal://listen"))
     }
     private func icon(for status: String) -> String {
         switch status {
@@ -535,14 +535,14 @@ struct VoicebotComplicationView: View {
 }
 
 // 5. The widget definition.
-struct VoicebotWidget: Widget {
-    let kind = "VoicebotWidget"
+struct SeneschalWidget: Widget {
+    let kind = "SeneschalWidget"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind,
-                            provider: VoicebotProvider()) { entry in
-            VoicebotComplicationView(entry: entry)
+                            provider: SeneschalProvider()) { entry in
+            SeneschalComplicationView(entry: entry)
         }
-        .configurationDisplayName("Voicebot")
+        .configurationDisplayName("Seneschal")
         .description("Talk to your voice assistant.")
         .supportedFamilies([
             .accessoryCircular,
@@ -562,10 +562,10 @@ struct VoicebotWidget: Widget {
 <array>
   <dict>
     <key>CFBundleURLName</key>
-    <string>com.example.voicebot.watchkitapp</string>
+    <string>com.example.seneschal.watchkitapp</string>
     <key>CFBundleURLSchemes</key>
     <array>
-      <string>voicebot</string>
+      <string>seneschal</string>
     </array>
   </dict>
 </array>
@@ -575,12 +575,12 @@ The watch app handles the URL in its main scene:
 
 ```swift
 @main
-struct VoicebotWatchApp: App {
+struct SeneschalWatchApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .onOpenURL { url in
-                    // voicebot://listen  →  jump straight to the talk view
+                    // seneschal://listen  →  jump straight to the talk view
                     if url.host == "listen" {
                         VoiceState.shared.openTalkView()
                     }
@@ -614,9 +614,9 @@ func updateComplication(status: String, transcript: String? = nil) {
 
 ### Recommended pattern (v1)
 
-For a voicebot complication, ship the simplest path first and add complexity only if user data justifies it:
+For a seneschal complication, ship the simplest path first and add complexity only if user data justifies it:
 
-1. **Complication shows a static `mic` icon** (idle state). Tap → `widgetURL("voicebot://listen")` → app opens directly on the talk view. **No background networking.** Zero risk of NECP denial. Ships in Phase 1 alongside the main app.
+1. **Complication shows a static `mic` icon** (idle state). Tap → `widgetURL("seneschal://listen")` → app opens directly on the talk view. **No background networking.** Zero risk of NECP denial. Ships in Phase 1 alongside the main app.
 2. **Status updates** (Phase 1.5): main app calls `WidgetCenter.shared.reloadAllTimelines()` whenever the audio session state changes, so the icon shows `listening` / `thinking` / `speaking` while the user is interacting.
 3. **Interactive button** (Phase 2): add a `Button(intent: StartListeningIntent())` on the rectangular complication. With `AudioPlaybackIntent` and an active `AVAudioSession`, the user can start talking without the app ever opening. This is the "magic" use case for a voice assistant complication.
 
@@ -627,7 +627,7 @@ Live Activities on watchOS appear in the **Smart Stack**, not on the watch face.
 ```swift
 import ActivityKit
 
-struct VoicebotActivityAttributes: ActivityAttributes {
+struct SeneschalActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
         var status: String  // "listening" | "thinking" | "speaking"
         var lastTranscript: String?
@@ -635,8 +635,8 @@ struct VoicebotActivityAttributes: ActivityAttributes {
 }
 
 // Start the activity when the session begins
-let attributes = VoicebotActivityAttributes()
-let content = VoicebotActivityAttributes.ContentState(
+let attributes = SeneschalActivityAttributes()
+let content = SeneschalActivityAttributes.ContentState(
     status: "listening", lastTranscript: nil)
 let activity = try Activity.request(
     attributes: attributes,
@@ -654,7 +654,7 @@ The same `WidgetKit` extension renders both the watch face complication and the 
 
 > **Test on a real Apple Watch.** The watchOS simulator allows low-level networking unconditionally, so NECP denials will not surface there. See TN3135.
 
-1. Start the voicebot with remote support:
+1. Start the seneschal with remote support:
    ```bash
    WS_PORT=9090 cargo run --features remote --release
    ```

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# bench-mlx.sh — Benchmark mlx-lm for voicebot workloads
+# bench-mlx.sh — Benchmark mlx-lm for seneschal workloads
 #
-# Tests three realistic scenarios the voicebot encounters:
+# Tests three realistic scenarios seneschal encounters:
 #
 #   cold  (300pp, 100tg) — First turn: system prompt + short history + user turn.
 #
@@ -54,7 +54,7 @@ PREFILL_STEP="${MLX_PREFILL_STEP:-512}"   # matches start-mlx-lm.sh
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║          mlx-lm — Voicebot Benchmark                         ║"
+echo "║          mlx-lm — Seneschal Benchmark                        ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "  Model:         $MODEL"
@@ -103,7 +103,7 @@ echo "  Metrics:"
 echo "    Prompt:     prefill throughput (tokens/sec). Higher = lower TTFT."
 echo "    Generation: decode throughput  (tokens/sec). Higher = faster speech."
 echo ""
-echo "  Target for voicebot (subjective real-time feel):"
+echo "  Target for seneschal (subjective real-time feel):"
 echo "    warm prompt > 500 t/s   → TTFT under 80ms for a 40-token user turn"
 echo "    generation  >  60 t/s   → 100 tokens in < 1.7s (TTS can keep up)"
 echo ""

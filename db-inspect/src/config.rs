@@ -7,7 +7,7 @@ use std::env;
 /// Parsed configuration combining environment variables and CLI flags.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
-    /// Absolute or relative path to the Voicebot SQLite database.
+    /// Absolute or relative path to the Seneschal SQLite database.
     pub db_path: String,
     /// Port the HTTP server binds to.
     pub port: u16,
@@ -18,7 +18,7 @@ pub struct DbConfig {
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
-            db_path: "../data/voicebot.db".into(),
+            db_path: "../data/seneschal.db".into(),
             port: 3000,
             bind_addr: "0.0.0.0".into(),
         }
@@ -30,13 +30,13 @@ impl DbConfig {
     ///
     /// Precedence (highest → lowest):
     /// 1. CLI arguments (passed via `db_path` parameter)
-    /// 2. `VOICEBOT_DB_PATH` / `DB_INSPECT_PORT` environment variables
+    /// 2. `SENECHAL_DB_PATH` / `DB_INSPECT_PORT` environment variables
     /// 3. Hardcoded defaults
     pub fn from_args(db_path: Option<String>) -> Self {
         let mut config = Self::default();
 
         // Layer 1: environment variables
-        if let Ok(path) = env::var("VOICEBOT_DB_PATH") {
+        if let Ok(path) = env::var("SENECHAL_DB_PATH") {
             config.db_path = path;
         }
         if let Ok(port_str) = env::var("DB_INSPECT_PORT")

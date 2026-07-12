@@ -5,7 +5,7 @@
 ```bash
 # 1. Ensure .env exists (cp .env.example .env if not)
 # 2. Start external LLM server (mlx-lm or oMLX)
-# 3. Run voicebot
+# 3. Run seneschal
 cargo run --features tui --release
 ```
 
@@ -30,7 +30,7 @@ Log with `RUST_LOG=trace cargo run` for detailed timing.
 
 ## References
 
-- `LICENSE-VOICEBOT.md`: Trademark information
+- `LICENSE-SENESCHAL.md`: Trademark information
 - `readme.md`: User-facing documentation
 - `CONTRIBUTING.md`: Contributor guidelines
 - `secondary-agent.md`: Secondary LLM orchestration design (Spanish)

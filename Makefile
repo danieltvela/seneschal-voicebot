@@ -1,4 +1,4 @@
-# Makefile — Voicebot Quality Assurance targets.
+# Makefile — Seneschal Quality Assurance targets.
 #
 # Public surface (discoverable via `make help`):
 #   make qa         — full fast suite (default goal)
@@ -25,7 +25,7 @@ QA    := bash scripts/qa.sh
 .PHONY: help qa qa-fast qa-full fmt lint test test-ci test-e2e test-stt test-llm build audit coverage
 
 help:
-	@printf 'Voicebot QA targets:\n'
+	@printf 'Seneschal QA targets:\n'
 	@printf '  make qa         full fast suite (default goal)\n'
 	@printf '  make qa-fast    alias for qa\n'
 	@printf '  make qa-full    fast + audit + coverage\n'

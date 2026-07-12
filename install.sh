@@ -1,6 +1,6 @@
 #!/bin/bash
-# Voicebot installer — GitHub release edition
-# Usage: curl -fsSL https://raw.githubusercontent.com/danieltvela/voicebot/main/install.sh | sh
+# Seneschal Installer — GitHub release edition
+# Usage: curl -fsSL https://raw.githubusercontent.com/danielvela/seneschal/main/install.sh | sh
 #
 # Modes:
 #   Interactive (default): prompts for language, LLM, voice, etc.
@@ -8,10 +8,10 @@
 #   Non-interactive (-n): uses defaults/env vars only; never prompts.
 #
 # Environment overrides:
-#   GITHUB_REPO       — GitHub owner/repo (default: danieltvela/voicebot)
-#   VOICEBOT_HOME     — where models/data/config live (default: ~/.voicebot)
-#   BIN_DIR           — where to place the `voicebot` launcher (default: ~/.local/bin)
-#   VOICEBOT_VERSION  — pin a release tag, e.g. v1.2.0 (default: latest)
+#   GITHUB_REPO       — GitHub owner/repo (default: danielvela/seneschal)
+#   SENESCHAL_HOME    — where models/data/config live (default: ~/.seneschal)
+#   BIN_DIR           — where to place the `seneschal` launcher (default: ~/.local/bin)
+#   SENESCHAL_VERSION — pin a release tag, e.g. v1.2.0 (default: latest)
 #
 set -e
 
@@ -32,13 +32,13 @@ for _arg in "$@"; do
 done
 
 # ── Caller contract ──────────────────────────────────────────────
-GITHUB_REPO="${GITHUB_REPO:-danieltvela/voicebot}"
-VOICEBOT_VERSION="${VOICEBOT_VERSION:-latest}"
+GITHUB_REPO="${GITHUB_REPO:-danielvela/seneschal}"
+SENESCHAL_VERSION="${SENESCHAL_VERSION:-latest}"
 
-if [ "$VOICEBOT_VERSION" = "latest" ]; then
+if [ "$SENESCHAL_VERSION" = "latest" ]; then
     RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/latest/download"
 else
-    RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/download/${VOICEBOT_VERSION}"
+    RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/download/${SENESCHAL_VERSION}"
 fi
 
 case "$(uname -s)" in
@@ -51,7 +51,7 @@ case "$(uname -m)" in
     arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
     *)               ARCH_TRIPLE="aarch64" ;;
 esac
-TARBALL="voicebot-${ARCH_TRIPLE}-${PLATFORM}.tar.gz"
+TARBALL="seneschal-${ARCH_TRIPLE}-${PLATFORM}.tar.gz"
 
 # TTS defaults — overridden at runtime by select_voice_macos / select_voice_kokoro
 DEFAULT_TTS_PROVIDER="avspeech"
@@ -70,9 +70,9 @@ fi
 
 # `info`, `warn`, `error`, `step` print to stderr so $() captures stay clean.
 # `error` exits 1 — it is the only place we exit.
-info()  { printf "${_GREEN}[voicebot]${_NC} %s\n" "$1" >&2; }
-warn()  { printf "${_YELLOW}[voicebot]${_NC} %s\n" "$1" >&2; }
-error() { printf "${_RED}[voicebot] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
+info()  { printf "${_GREEN}[seneschal]${_NC} %s\n" "$1" >&2; }
+warn()  { printf "${_YELLOW}[seneschal]${_NC} %s\n" "$1" >&2; }
+error() { printf "${_RED}[seneschal] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
 step()  { printf "\n${_GREEN}▶ %s${_NC}\n" "$1" >&2; }
 
 # ── Stdin TTY check (must be after error() is defined) ────────────────────────
@@ -212,18 +212,18 @@ select_language() {
 
 # ── Defaults & derived paths ──────────────────────────────────────────────────
 _apply_defaults() {
-    VOICEBOT_HOME="${VOICEBOT_HOME:-$HOME/.voicebot}"
+    SENESCHAL_HOME="${SENESCHAL_HOME:-$HOME/.seneschal}"
     BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-    VOICEBOT_VERSION="${VOICEBOT_VERSION:-latest}"
+    SENESCHAL_VERSION="${SENESCHAL_VERSION:-latest}"
 
     WHISPER_MODEL_URL="${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin}"
     KOKORO_MODEL_URL="${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}"
     KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
     VAD_MODEL_URL="${VAD_MODEL_URL:-https://huggingface.co/ggml-org/silero-v5.1.2/resolve/main/ggml-silero-v5.1.2.bin}"
 
-    VOICEBOT_BIN_DIR="$VOICEBOT_HOME/bin"
-    VOICEBOT_MODELS_DIR="$VOICEBOT_HOME/models"
-    VOICEBOT_DATA_DIR="$VOICEBOT_HOME/data"
+    SENESCHAL_BIN_DIR="$SENESCHAL_HOME/bin"
+    SENESCHAL_MODELS_DIR="$SENESCHAL_HOME/models"
+    SENESCHAL_DATA_DIR="$SENESCHAL_HOME/data"
 }
 
 # ── Platform detection ────────────────────────────────────────────────────────
@@ -282,12 +282,12 @@ check_dependencies() {
         if [ -n "$_missing" ]; then
             warn "The following runtime dependencies are missing:$_missing"
             warn ""
-            warn "Install them before running voicebot:"
+            warn "Install them before running seneschal:"
             warn "  Debian/Ubuntu:  sudo apt-get install -y$_missing"
             warn "  Fedora/RHEL:    sudo dnf install -y$_missing"
             warn "  Arch Linux:     sudo pacman -S$_missing"
             warn ""
-            warn "Installation will continue, but voicebot may fail to start."
+            warn "Installation will continue, but seneschal may fail to start."
         else
             info "  All Linux runtime dependencies found."
         fi
@@ -299,10 +299,10 @@ check_dependencies() {
 }
 
 # ── Step 1.5: Calendar & Reminders permission prompt (macOS only) ────────────
-# Asks the user if they want to grant Voicebot access to Apple Calendar and
+# Asks the user if they want to grant Seneschal access to Apple Calendar and
 # Reminders via iCloud. If they agree, a harmless AppleScript is run to
 # trigger the macOS TCC (Transparency, Consent, and Control) permission
-# dialog, so the user can Allow access before running Voicebot for the first
+# dialog, so the user can Allow access before running Seneschal for the first
 # time.
 prompt_calendar_reminders() {
     if [ "$OS" != "Darwin" ]; then
@@ -310,11 +310,11 @@ prompt_calendar_reminders() {
     fi
 
     step "Apple Calendar & Reminders"
-    info "  Voicebot can manage your Apple Calendar and Reminders."
+    info "  Seneschal can manage your Apple Calendar and Reminders."
     USE_CALENDAR="n"
     USE_REMINDERS="n"
 
-    _grant_calendar=$(confirm "Allow Voicebot to access Apple Calendar?" "n")
+    _grant_calendar=$(confirm "Allow Seneschal to access Apple Calendar?" "n")
     if [ "$_grant_calendar" = "y" ]; then
         USE_CALENDAR="y"
         info "  Requesting Calendar access..."
@@ -324,7 +324,7 @@ prompt_calendar_reminders() {
         sleep 0.5
     fi
 
-    _grant_reminders=$(confirm "Allow Voicebot to access Apple Reminders?" "n")
+    _grant_reminders=$(confirm "Allow Seneschal to access Apple Reminders?" "n")
     if [ "$_grant_reminders" = "y" ]; then
         USE_REMINDERS="y"
         info "  Requesting Reminders access..."
@@ -335,10 +335,10 @@ prompt_calendar_reminders() {
     fi
 
     if [ "$USE_CALENDAR" = "y" ] || [ "$USE_REMINDERS" = "y" ]; then
-        info "  Access granted. Voicebot will use Apple Events for"
+        info "  Access granted. Seneschal will use Apple Events for"
         info "  calendar and reminders management."
     else
-        info "  Skipped. Voicebot will default to enabled (Apple Events)"
+        info "  Skipped. Seneschal will default to enabled (Apple Events)"
         info "  and ask for permissions when first used."
     fi
 }
@@ -346,31 +346,31 @@ prompt_calendar_reminders() {
 # ── Step 2: Create directory layout ──────────────────────────────────────────
 setup_directories() {
     step "Setting up directories"
-    mkdir -p "$VOICEBOT_BIN_DIR"
-    mkdir -p "$VOICEBOT_MODELS_DIR"
-    mkdir -p "$VOICEBOT_DATA_DIR"
+    mkdir -p "$SENESCHAL_BIN_DIR"
+    mkdir -p "$SENESCHAL_MODELS_DIR"
+    mkdir -p "$SENESCHAL_DATA_DIR"
     mkdir -p "$BIN_DIR"
-    info "  Install home : $VOICEBOT_HOME"
+    info "  Install home : $SENESCHAL_HOME"
     info "  Launcher dir : $BIN_DIR"
 }
 
 # ── Step 3: Download and install the pre-compiled binary ──────────────────────
 install_binary() {
-    step "Downloading voicebot binary ($TARGET)"
+    step "Downloading seneschal binary ($TARGET)"
     _tmp_dir="$(mktemp -d)"
     # shellcheck disable=SC2064
     trap "rm -rf '$_tmp_dir'" EXIT
-    download "$BINARY_URL" "$_tmp_dir/$TARBALL" "voicebot ($TARGET)"
+    download "$BINARY_URL" "$_tmp_dir/$TARBALL" "seneschal ($TARGET)"
     info "  Extracting binary..."
     tar -xzf "$_tmp_dir/$TARBALL" -C "$_tmp_dir"
-    if [ ! -f "$_tmp_dir/voicebot" ]; then
-        error "Binary not found inside tarball. Expected: voicebot"
+    if [ ! -f "$_tmp_dir/seneschal" ]; then
+        error "Binary not found inside tarball. Expected: seneschal"
     fi
-    mv "$_tmp_dir/voicebot" "$VOICEBOT_BIN_DIR/voicebot"
-    chmod +x "$VOICEBOT_BIN_DIR/voicebot"
+    mv "$_tmp_dir/seneschal" "$SENESCHAL_BIN_DIR/seneschal"
+    chmod +x "$SENESCHAL_BIN_DIR/seneschal"
     rm -rf "$_tmp_dir"
     trap - EXIT
-    info "  Binary installed: $VOICEBOT_BIN_DIR/voicebot"
+    info "  Binary installed: $SENESCHAL_BIN_DIR/seneschal"
 }
 
 # ── Step 4: Download Whisper STT model (with size picker) ────────────────────
@@ -473,7 +473,7 @@ install_whisper_model() {
             *) error "WHISPER_MODEL_URL does not look like a Whisper model: $_fname" ;;
         esac
         WHISPER_MODEL_FILE="$_fname"
-        _dest="$VOICEBOT_MODELS_DIR/$_fname"
+        _dest="$SENESCHAL_MODELS_DIR/$_fname"
         if [ -f "$_dest" ]; then
             info "  Already present ($_fname) — skipping (delete to re-download)."
             return
@@ -506,7 +506,7 @@ install_whisper_model() {
         error "Unknown Whisper model id: $_chosen_id"
     fi
     WHISPER_MODEL_FILE="$_fname"
-    _dest="$VOICEBOT_MODELS_DIR/$_fname"
+    _dest="$SENESCHAL_MODELS_DIR/$_fname"
     if [ -f "$_dest" ]; then
         info "  Already present ($_fname) — skipping (delete to re-download)."
         return
@@ -519,7 +519,7 @@ install_whisper_model() {
 # ── Step 4.5: Download Silero VAD model ──────────────────────────────────────
 install_vad_model() {
     step "Installing Silero VAD model"
-    _dest="$VOICEBOT_MODELS_DIR/ggml-silero-vad.bin"
+    _dest="$SENESCHAL_MODELS_DIR/ggml-silero-vad.bin"
     if [ -f "$_dest" ]; then
         info "  Already present — skipping (delete to re-download)."
         return
@@ -614,7 +614,7 @@ configure_llm_provider() {
                 info "  Found 1 model on server: $_LLM_MODEL"
             elif [ "$_model_count" -gt 1 ]; then
                 # Multiple models — show selection menu
-                warn "  ⚠ Gemma-4 models are recommended for voicebot (≥50 tok/s)."
+                warn "  ⚠ Gemma-4 models are recommended for seneschal (≥50 tok/s)."
                 warn "  Other models may be slower or produce poor results."
                 printf "\n" >&2
 
@@ -643,7 +643,7 @@ EOF
             else
                 # No models found or server unreachable — ask manually
                 warn "  Could not auto-discover models from $_LLM_URL/v1/models"
-                warn "  ⚠ Gemma-4 models are recommended for voicebot (≥50 tok/s)."
+                warn "  ⚠ Gemma-4 models are recommended for seneschal (≥50 tok/s)."
                 warn "  Recommended: mlx-community/gemma-4-26b-a4b-it-4bit"
                 _LLM_MODEL=$(ask "LLM model name" "mlx-community/gemma-4-26b-a4b-it-4bit")
             fi
@@ -680,7 +680,7 @@ EOF
             # Strategy 2: isolated virtual environment (works everywhere)
             if [ "$_mlx_ok" != "1" ]; then
                 info "  Trying isolated virtual environment..."
-                _mlx_venv="$VOICEBOT_HOME/venv"
+                _mlx_venv="$SENESCHAL_HOME/venv"
                 _python_cmd=""
                 command -v python3 >/dev/null 2>&1 && _python_cmd="python3" || _python_cmd="python"
                 if "$_python_cmd" -m venv "$_mlx_venv" 2>/dev/null && \
@@ -705,8 +705,8 @@ EOF
 # ── Step 5: Download Kokoro TTS models (Linux only) ──────────────────────────
 install_kokoro_models() {
     step "Installing Kokoro TTS models (Linux)"
-    _kokoro_model="$VOICEBOT_MODELS_DIR/kokoro-v1.0.onnx"
-    _kokoro_voices="$VOICEBOT_MODELS_DIR/voices-v1.0.bin"
+    _kokoro_model="$SENESCHAL_MODELS_DIR/kokoro-v1.0.onnx"
+    _kokoro_voices="$SENESCHAL_MODELS_DIR/voices-v1.0.bin"
     if [ -f "$_kokoro_model" ]; then
         info "  kokoro-v1.0.onnx already present — skipping."
     else
@@ -929,24 +929,24 @@ test_voice_macos() {
         info "  Voice test played."
     else
         warn "  'say' test failed — voice may not be installed."
-        warn "  Voicebot will use this name anyway, but TTS may fail at runtime."
+        warn "  Seneschal will use this name anyway, but TTS may fail at runtime."
     fi
 }
 
 # ── Voice selection: Linux Kokoro ────────────────────────────────────────────
 select_voice_kokoro() {
     step "Selecting Kokoro TTS voice"
-    _voice_bin="$VOICEBOT_BIN_DIR/voicebot"
+    _voice_bin="$SENESCHAL_BIN_DIR/seneschal"
     if [ ! -x "$_voice_bin" ]; then
-        warn "  voicebot binary not yet installed — cannot enumerate Kokoro voices."
+        warn "  seneschal binary not yet installed — cannot enumerate Kokoro voices."
         warn "  Using default: $DEFAULT_KOKORO_VOICE"
         SELECTED_KOKORO_VOICE="$DEFAULT_KOKORO_VOICE"
         SELECTED_KOKORO_LANG="$DEFAULT_KOKORO_LANG"
         return
     fi
     # Capture voice list
-    _list_out=$(KOKORO_MODEL="$VOICEBOT_MODELS_DIR/kokoro-v1.0.onnx" \
-                KOKORO_VOICES="$VOICEBOT_MODELS_DIR/voices-v1.0.bin" \
+    _list_out=$(KOKORO_MODEL="$SENESCHAL_MODELS_DIR/kokoro-v1.0.onnx" \
+                KOKORO_VOICES="$SENESCHAL_MODELS_DIR/voices-v1.0.bin" \
                 TTS_PROVIDER=kokoro \
                 "$_voice_bin" --list-voices 2>&1) || _list_out=""
     if [ -z "$_list_out" ]; then
@@ -1014,7 +1014,7 @@ select_voice_kokoro() {
 # ── External agent configuration ─────────────────────────────────────────
 # Asks the user whether they want to integrate external agents (Hermes,
 # OpenCode, or a custom agent). Configuration is written as [[agents]]
-# sections in $VOICEBOT_HOME/voicebot.pro.toml.
+# sections in $SENESCHAL_HOME/seneschal.pro.toml.
 #
 # TOML agent format:
 #   [[agents]]
@@ -1055,7 +1055,7 @@ _configure_hermes() {
     step "Configure Hermes agent"
     info "  Hermes is an external AI agent that handles complex tasks:"
     info "  code generation, deep research, calendar management, and"
-    info "  multi-step workflows that Voicebot cannot do on its own."
+    info "  multi-step workflows that Seneschal cannot do on its own."
     info ""
     info "  Installation:  pip install 'hermes-agent[acp]'"
     info "  More info:     https://github.com/NousResearch/hermes-agent"
@@ -1103,7 +1103,7 @@ _configure_hermes() {
             ;;
     esac
 
-    _hermes_warmup=$(confirm "Warm up Hermes at Voicebot startup? (reduces first-call latency)" "y")
+    _hermes_warmup=$(confirm "Warm up Hermes at Seneschal startup? (reduces first-call latency)" "y")
     if [ "$_hermes_warmup" = "y" ]; then
         _hermes_warmup_val="1"
     else
@@ -1112,11 +1112,11 @@ _configure_hermes() {
 
     # Default when_to_use and instructions based on language
     if [ "${_LANGUAGE:-en}" = "es" ]; then
-        _hermes_when="Único agente externo disponible. Punto de contacto para lo que Voicebot no puede resolver con sus propias herramientas: programación y código, investigación profunda, gestión de calendario, flujos de múltiples pasos, y cualquier tarea que requiera razonamiento extendido o herramientas del sistema."
-        _hermes_instr="Eres Hermes, el gateway de agentes externos. Puedes redirigir internamente a especialistas (programadores, investigadores, etc.). Recibe la consulta de Voicebot, coordina los recursos necesarios y devuelves una respuesta clara y ejecutable."
+        _hermes_when="Único agente externo disponible. Punto de contacto para lo que Seneschal no puede resolver con sus propias herramientas: programación y código, investigación profunda, gestión de calendario, flujos de múltiples pasos, y cualquier tarea que requiera razonamiento extendido o herramientas del sistema."
+        _hermes_instr="Eres Hermes, el gateway de agentes externos. Puedes redirigir internamente a especialistas (programadores, investigadores, etc.). Recibe la consulta de Seneschal, coordina los recursos necesarios y devuelves una respuesta clara y ejecutable."
     else
-        _hermes_when="Primary external agent. Handle tasks Voicebot cannot resolve with its own tools: code generation, deep research, calendar management, multi-step workflows, and any task requiring extended reasoning or system tools."
-        _hermes_instr="You are Hermes, the external agent gateway. You can internally redirect to specialists (programmers, researchers, etc.). Receive the query from Voicebot, coordinate the necessary resources, and return a clear, actionable response."
+        _hermes_when="Primary external agent. Handle tasks Seneschal cannot resolve with its own tools: code generation, deep research, calendar management, multi-step workflows, and any task requiring extended reasoning or system tools."
+        _hermes_instr="You are Hermes, the external agent gateway. You can internally redirect to specialists (programmers, researchers, etc.). Receive the query from Seneschal, coordinate the necessary resources, and return a clear, actionable response."
     fi
 
     _hermes_when=$(ask "When to use Hermes (press Enter for default)" "$_hermes_when")
@@ -1130,7 +1130,7 @@ _configure_hermes() {
 # Configure OpenCode agent.
 _configure_opencode() {
     step "Configure OpenCode agent"
-    info "  OpenCode can be used as an external coding agent for Voicebot."
+    info "  OpenCode can be used as an external coding agent for Seneschal."
     info "  It handles code generation, refactoring, and file operations."
     info ""
     info "  Installation:  npm install -g opencode  (or use your package manager)"
@@ -1161,10 +1161,9 @@ _configure_opencode() {
 
     if [ "${_LANGUAGE:-en}" = "es" ]; then
         _opencode_when="Tareas de programación en Rust, refactorización, búsqueda en código base, y edición de archivos. Úsalo para cambios de código complejos."
-        _opencode_instr="Eres OpenCode, un agente de programación autónomo. Recibe tareas de código de Voicebot y ejecútalas: generar código, refactorizar, buscar patrones, y editar archivos. Devuelve un resumen claro de lo que hiciste."
+        _opencode_instr="Eres OpenCode, un agente de programación autónomo. Recibe tareas de código de Seneschal y ejecútalas: generar código, refactorizar, buscar patrones, y editar archivos. Devuelve un resumen claro de lo que hiciste."
     else
-        _opencode_when="Rust programming tasks, refactoring, codebase search, and file editing. Use for complex code changes."
-        _opencode_instr="You are OpenCode, an autonomous programming agent. Receive code tasks from Voicebot and execute them: generate code, refactor, search patterns, and edit files. Return a clear summary of what you did."
+        _opencode_instr="You are OpenCode, an autonomous programming agent. Receive code tasks from Seneschal and execute them: generate code, refactor, search patterns, and edit files. Return a clear summary of what you did."
     fi
 
     _opencode_when=$(ask "When to use OpenCode (press Enter for default)" "$_opencode_when")
@@ -1205,7 +1204,7 @@ _configure_custom_agent() {
     esac
 
     if [ "$_custom_mode_val" = "acp" ]; then
-        _custom_warmup=$(confirm "Warm up $_custom_name at Voicebot startup?" "n")
+        _custom_warmup=$(confirm "Warm up $_custom_name at Seneschal startup?" "n")
         if [ "$_custom_warmup" = "y" ]; then
             _custom_warmup_val="1"
         else
@@ -1217,10 +1216,9 @@ _configure_custom_agent() {
 
     if [ "${_LANGUAGE:-en}" = "es" ]; then
         _custom_when="Agente personalizado $_custom_name. Úsalo para tareas específicas que requiere el usuario."
-        _custom_instr="Eres $_custom_name, un agente externo. Recibe tareas de Voicebot y ejecútalas. Devuelve un resumen claro."
+        _custom_instr="Eres $_custom_name, un agente externo. Recibe tareas de Seneschal y ejecútalas. Devuelve un resumen claro."
     else
-        _custom_when="Custom agent $_custom_name. Use for specific tasks requested by the user."
-        _custom_instr="You are $_custom_name, an external agent. Receive tasks from Voicebot and execute them. Return a clear summary."
+        _custom_instr="You are $_custom_name, an external agent. Receive tasks from Seneschal and execute them. Return a clear summary."
     fi
 
     _custom_when=$(ask "When to use $_custom_name (press Enter for default)" "$_custom_when")
@@ -1234,7 +1232,7 @@ _configure_custom_agent() {
 # Main entry point for external agent configuration.
 configure_external_agents() {
     step "External agent integration"
-    info "  Voicebot can delegate complex tasks to external AI agents."
+    info "  Seneschal can delegate complex tasks to external AI agents."
     info "  Agents handle: code generation, research, file operations,"
     info "  calendar management, and multi-step workflows."
     info ""
@@ -1365,7 +1363,7 @@ searxng_secret = \"$_SEARXNG_SECRET\""
 }
 create_env() {
     step "Writing default configuration"
-    _config_file="$VOICEBOT_HOME/voicebot.pro.toml"
+    _config_file="$SENESCHAL_HOME/seneschal.pro.toml"
     # LLM block depends on provider choice from configure_llm_provider()
     case "${_LLM_CHOICE:-own}" in
         "own")
@@ -1452,8 +1450,8 @@ avspeech_voice = \"${SELECTED_VOICE}\""
         _tts_config="tts_provider = \"kokoro\"
 kokoro_voice = \"${SELECTED_KOKORO_VOICE:-es_xb}\"
 kokoro_language = \"${SELECTED_KOKORO_LANG:-es}\"
-kokoro_model = \"${VOICEBOT_MODELS_DIR}/kokoro-v1.0.onnx\"
-kokoro_voices = \"${VOICEBOT_MODELS_DIR}/voices-v1.0.bin\""
+kokoro_model = \"${SENESCHAL_MODELS_DIR}/kokoro-v1.0.onnx\"
+kokoro_voices = \"${SENESCHAL_MODELS_DIR}/voices-v1.0.bin\""
     fi
 
     # Bot name / wake word
@@ -1461,7 +1459,7 @@ kokoro_voices = \"${VOICEBOT_MODELS_DIR}/voices-v1.0.bin\""
         _WAKE_WORD="seneschal"
     else
         echo ""
-        step "Choose your voicebot's name"
+        step "Choose your seneschal's name"
         echo "  Examples: Jarvis, Alfred, Butler, Narya, Ada, Iris"
         printf '  Enter a name (or press Enter for "seneschal"): '
         read -r _WAKE_WORD || _WAKE_WORD=""
@@ -1481,7 +1479,7 @@ kokoro_voices = \"${VOICEBOT_MODELS_DIR}/voices-v1.0.bin\""
     WHISPER_MODEL_FILE="${WHISPER_MODEL_FILE:-ggml-large-v3-turbo.bin}"
 
     cat > "$_config_file" << CONFIGEOF
-# Voicebot configuration — generated by install.sh
+# Seneschal configuration — generated by install.sh
 # Edit this file to customize your setup.
 # Environment variables override values defined here.
 
@@ -1490,8 +1488,8 @@ wake_word = "${_WAKE_WORD}"
 
 # STT
 stt_provider = "${_STT_PROVIDER}"
-whisper_model = "${VOICEBOT_MODELS_DIR}/${WHISPER_MODEL_FILE}"
-vad_model = "${VOICEBOT_MODELS_DIR}/ggml-silero-vad.bin"
+whisper_model = "${SENESCHAL_MODELS_DIR}/${WHISPER_MODEL_FILE}"
+vad_model = "${SENESCHAL_MODELS_DIR}/ggml-silero-vad.bin"
 
 # Device monitor — polls for the configured input device and greets when it connects
 device_monitor_enabled = true
@@ -1562,7 +1560,7 @@ CONFIGEOF
 # ── Step 7: Install the launcher wrapper script ──────────────────────────────
 install_launcher() {
     step "Installing launcher script"
-    _launcher="$BIN_DIR/voicebot"
+    _launcher="$BIN_DIR/seneschal"
     if [ "$OS" = "Darwin" ]; then
         _default_tts="avspeech"
     else
@@ -1570,19 +1568,19 @@ install_launcher() {
     fi
     cat > "$_launcher" << LAUNCHEOF
 #!/bin/sh
-# voicebot launcher — generated by install.sh
-# Edit \$VOICEBOT_HOME/voicebot.pro.toml to configure your setup.
-VOICEBOT_HOME="\${VOICEBOT_HOME:-$VOICEBOT_HOME}"
+# seneschal launcher — generated by install.sh
+# Edit \$SENESCHAL_HOME/seneschal.pro.toml to configure your setup.
+SENESCHAL_HOME="\${SENESCHAL_HOME:-$SENESCHAL_HOME}"
 
 # Point to installed config file
-export VOICEBOT_CONFIG_FILE="\$VOICEBOT_HOME/voicebot.pro.toml"
+export SENESCHAL_CONFIG_FILE="\$SENESCHAL_HOME/seneschal.pro.toml"
 
-# --- Defaults are read from voicebot.pro.toml ---
+# --- Defaults are read from seneschal.pro.toml ---
 # Environment variables are optional and only used to override values
 # defined in the configuration file. Do not hard-code defaults here.
 
-cd "\$VOICEBOT_HOME" || exit 1
-exec "\$VOICEBOT_HOME/bin/voicebot" "\$@" 2>/dev/null
+cd "\$SENESCHAL_HOME" || exit 1
+exec "\$SENESCHAL_HOME/bin/seneschal" "\$@" 2>/dev/null
 LAUNCHEOF
     chmod +x "$_launcher"
     info "  Launcher installed: $_launcher"
@@ -1605,7 +1603,7 @@ check_path() {
 }
 
 # ── LLM server detection ────────────────────────────────────────────────────
-# Probe LLM_URL/v1/models with a short timeout. Sets VOICEBOT_LLM_UP=1|0.
+# Probe LLM_URL/v1/models with a short timeout. Sets SENESCHAL_LLM_UP=1|0.
 detect_llm_server() {
     step "Probing LLM server"
     _llm_url="${_LLM_URL:-http://127.0.0.1:8000}"
@@ -1614,23 +1612,23 @@ detect_llm_server() {
     info "  Checking $_probe_url ..."
     if command -v curl >/dev/null 2>&1; then
         if curl -fsS --max-time 3 -o /dev/null "$_probe_url" 2>/dev/null; then
-            VOICEBOT_LLM_UP=1
+            SENESCHAL_LLM_UP=1
             info "  LLM server reachable."
             return
         fi
     elif command -v wget >/dev/null 2>&1; then
         if wget -q --timeout=3 -O /dev/null "$_probe_url" 2>/dev/null; then
-            VOICEBOT_LLM_UP=1
+            SENESCHAL_LLM_UP=1
             info "  LLM server reachable."
             return
         fi
     fi
-    VOICEBOT_LLM_UP=0
+    SENESCHAL_LLM_UP=0
     warn "  LLM server not reachable at $_probe_url"
-    warn "  Before running voicebot, start one of:"
+    warn "  Before running seneschal, start one of:"
     warn "    mlx-lm:  mlx_lm.server --model mlx-community/gemma-4-26b-a4b-it-4bit --port 8000"
     warn "    omlx:    omlx serve --model-dir ~/models --port 8001"
-    warn "  Or set LLM_URL in your voicebot.pro.toml to point at a remote server."
+    warn "  Or set LLM_URL in your seneschal.pro.toml to point at a remote server."
 }
 
 # ── End-of-install TTS smoke test ────────────────────────────────────────────
@@ -1638,9 +1636,9 @@ detect_llm_server() {
 # Non-TTY: just synthesizes silently and reports success/failure.
 smoke_test() {
     step "Running TTS smoke test"
-    _voice_bin="$VOICEBOT_BIN_DIR/voicebot"
+    _voice_bin="$SENESCHAL_BIN_DIR/seneschal"
     if [ ! -x "$_voice_bin" ]; then
-        warn "  voicebot binary not found at $_voice_bin — skipping smoke test."
+        warn "  seneschal binary not found at $_voice_bin — skipping smoke test."
         return
     fi
     if [ "$OS" = "Darwin" ] && [ -n "${SELECTED_VOICE:-}" ]; then
@@ -1652,13 +1650,13 @@ smoke_test() {
         fi
     elif [ "$OS" = "Linux" ] && [ -n "${SELECTED_KOKORO_VOICE:-}" ]; then
         # Use the binary's --list-voices as a no-op health check.
-        if KOKORO_MODEL="$VOICEBOT_MODELS_DIR/kokoro-v1.0.onnx" \
-           KOKORO_VOICES="$VOICEBOT_MODELS_DIR/voices-v1.0.bin" \
+        if KOKORO_MODEL="$SENESCHAL_MODELS_DIR/kokoro-v1.0.onnx" \
+           KOKORO_VOICES="$SENESCHAL_MODELS_DIR/voices-v1.0.bin" \
            TTS_PROVIDER=kokoro KOKORO_VOICE="$SELECTED_KOKORO_VOICE" \
            "$_voice_bin" --list-voices >/dev/null 2>&1; then
             info "  Smoke test passed (Kokoro voices loaded)."
         else
-            warn "  Smoke test inconclusive — voicebot could not load Kokoro."
+            warn "  Smoke test inconclusive — seneschal could not load Kokoro."
         fi
     fi
 }
@@ -1670,20 +1668,20 @@ print_completion() {
     info "  Installation complete!"
     info "══════════════════════════════════════════════════"
     printf "\n" >&2
-    if [ "${VOICEBOT_LLM_UP:-0}" = "1" ]; then
-        info "LLM server is up. You can launch voicebot now."
+    if [ "${SENESCHAL_LLM_UP:-0}" = "1" ]; then
+        info "LLM server is up. You can launch seneschal now."
     else
-        info "Before starting voicebot, start your LLM server. Then edit config if needed:"
-        info "  \$EDITOR \$VOICEBOT_CONFIG_FILE"
+        info "Before starting seneschal, start your LLM server. Then edit config if needed:"
+        info "  \$EDITOR \$SENESCHAL_CONFIG_FILE"
     fi
     printf "\n" >&2
     info "Then start:"
-    info "  voicebot"
+    info "  seneschal"
     printf "\n" >&2
     info "List audio devices:"
-    info "  voicebot --list-devices"
+    info "  seneschal --list-devices"
     info "List TTS voices:"
-    info "  voicebot --list-voices"
+    info "  seneschal --list-voices"
     printf "\n" >&2
 }
 
@@ -1694,12 +1692,12 @@ main() {
 
     printf "\n" >&2
     info "╔══════════════════════════════════════════════╗"
-    info "║          Voicebot Installer                  ║"
+    info "║          Seneschal Installer                 ║"
     info "╚══════════════════════════════════════════════╝"
     printf "\n" >&2
     info "Platform : $OS_NAME ($TARGET)"
-    info "Home     : $VOICEBOT_HOME"
-    info "Launcher : $BIN_DIR/voicebot"
+    info "Home     : $SENESCHAL_HOME"
+    info "Launcher : $BIN_DIR/seneschal"
     printf "\n" >&2
 
     select_language

@@ -1,4 +1,4 @@
-/// Rust structs mirroring Voicebot's SQLite schema.
+/// Rust structs mirroring Seneschal's SQLite schema.
 ///
 /// These map 1:1 to the tables created in `src/db/database.rs` migrations.
 use serde::Serialize;

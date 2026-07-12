@@ -1,4 +1,4 @@
-//! End-to-end integration tests for the voicebot pipeline.
+//! End-to-end integration tests for the seneschal pipeline.
 //!
 //! These tests exercise the full STT → LLM → TTS → DB pipeline using:
 //! - Direct transcript injection (no Whisper needed for most tests)

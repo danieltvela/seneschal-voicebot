@@ -34,7 +34,7 @@ pub enum TuiEvent {
     SystemNotification { text: String },
     /// A pipeline error occurred that the user should see.
     Error(String),
-    /// Show the VOICEBOT splash screen on first render.
+    /// Show the SENECHAL splash screen on first render.
     Splash,
 }
 

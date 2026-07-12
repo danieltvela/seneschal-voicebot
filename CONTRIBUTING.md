@@ -45,8 +45,8 @@ Seneschal follows a simple code of conduct:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone the repository
-git clone https://github.com/madcato/voicebot.git
-cd voicebot
+git clone https://github.com/danielvela/seneschal.git
+cd seneschal
 
 # Set up your environment variables
 cp .env.example .env
@@ -84,8 +84,8 @@ Click the "Fork" button on GitHub to create your own copy of the repository.
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/voicebot.git
-cd voicebot
+git clone https://github.com/YOUR_USERNAME/seneschal.git
+cd seneschal
 
 # Create and switch to a new branch
 git checkout -b feature/amazing-feature-name
@@ -157,7 +157,7 @@ Then open a Pull Request on GitHub with:
 ## Project Structure
 
 ```
-voicebot/
+seneschal/
 ├── src/
 │   ├── main.rs              # Entry point, VAD loop, conversation pipeline
 │   ├── config.rs            # Environment-based configuration
@@ -449,12 +449,12 @@ Include:
 - **Steps to reproduce**: Precise steps leading to the bug
 - **Expected behavior**: What should happen
 - **Actual behavior**: What actually happens (with logs)
-- **Logs**: Run with `RUST_LOG=voicebot=debug` and attach output
+- **Logs**: Run with `RUST_LOG=seneschal=debug` and attach output
 
 Example:
 ```bash
 # Capture debug logs
-RUST_LOG=voicebot=debug,vad=debug cargo run 2>&1 | tee bug.log
+RUST_LOG=seneschal=debug,vad=debug cargo run 2>&1 | tee bug.log
 ```
 
 ### How to Request a Feature

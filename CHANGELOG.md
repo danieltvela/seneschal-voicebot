@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Seneschal Voicebot will be documented in this file.
+All notable changes to Seneschal will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **[#122](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/122)**: External agent integration (Hermes, OpenCode, custom) in install script
 
 ### Bug Fixes
-- **[#124](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/124)**: Voicebot can create reminders but cannot read existing ones
+- **[#124](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/124)**: Seneschal can create reminders but cannot read existing ones
 - **[#125](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/125)**: Welcome message not sent to LLM on app launch
 
 ---
@@ -48,7 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Features
 - **[#99](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/99)**: App starts even when no audio device is found
 - **[#100](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/100)**: Project renamed from Voicebot to Seneschal
-- Configurable voicebot name via `VOICEBOT_NAME` env var
+- Configurable seneschal name via `SENECHAL_NAME` env var
 - Brave Search web search provider integration
 - Apple Events tools for macOS automation
 - First startup welcome message
@@ -77,7 +77,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## v0.1.0-alpha.2 (2026-06-27)
 
 ### Features
-- **[#77](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/77)**: `voicebot.toml` config file with env override
+- **[#77](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/77)**: `seneschal.toml` config file with env override
 - **[#78](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/78)**: PRO and DEV environment separation
 - **[#80](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/80)**: Apple Watch companion app scaffolding
 - **[#81](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/81)**: Plugin system foundation
@@ -138,7 +138,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Other
 - **[#47](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/47)**: STT→LLM latency improvement research
-- **[#49](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/49)**: Voicebot R&D exploration
+- **[#49](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/49)**: Seneschal R&D exploration
 - **[#51](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/51)**: Niche use case analysis
 - **[#52](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/52)**: Multi-user speech detection research
 - **[#56](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/56)**: Evaluation test cases

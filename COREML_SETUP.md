@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Your voicebot installation has:
+Your seneschal installation has:
 - ✅ **Metal GPU acceleration** (enabled via Cargo.toml features)
 - ⚠️ **CoreML encoder model files present** (`ggml-large-v3-turbo-encoder.mlmodelc`)  
 - ❌ **CoreML NOT enabled by default** (causes build errors if auto-enabled)
@@ -26,7 +26,7 @@ ls -lh models/*-encoder.mlmodelc
 ### Enable CoreML Build
 
 ```bash
-cd /Users/danielvela/projects/ai/voicebot
+cd /Users/danielvela/projects/ai/seneschal
 
 # Clean everything
 cargo clean

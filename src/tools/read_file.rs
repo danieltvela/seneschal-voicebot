@@ -142,7 +142,7 @@ mod tests {
     #[tokio::test]
     async fn returns_error_for_missing_file() {
         let result = ReadFileTool
-            .run(r#"{"path": "/tmp/nonexistent_voicebot_test_file.txt"}"#)
+            .run(r#"{"path": "/tmp/nonexistent_seneschal_test_file.txt"}"#)
             .await;
         assert!(
             result.to_lowercase().contains("cannot read")
