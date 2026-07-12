@@ -223,6 +223,12 @@ pub struct Config {
     /// Maximum backoff cap in seconds (AGENT_ACP_RESTART_MAX_BACKOFF_SECS, default 60).
     pub agent_acp_restart_max_backoff_secs: u64,
 
+    // ── Agent delegation (TOML array) ────────────────────────────────────────
+    /// External agents defined in `[[agents]]` TOML array.
+    /// Loaded by `AgentRegistry::from_config_and_env()` when no env vars are set.
+    #[serde(default)]
+    pub agents: Vec<crate::agents::config::AgentTomlConfig>,
+
     // ── Inference daemon ──────────────────────────────────────────────────────
     /// Enable the background "is there anything worth saying?" loop.
     pub daemon_enabled: bool,

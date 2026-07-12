@@ -297,7 +297,7 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Agent delegation (multi-agent registry) ───────────────────────────────
-    let agent_registry = AgentRegistry::from_env();
+    let agent_registry = AgentRegistry::from_config_and_env(config.agents.clone());
     let agent_section = agent_registry.system_prompt_section();
     let session_manager = Arc::new(AcpSessionManager::new());
 

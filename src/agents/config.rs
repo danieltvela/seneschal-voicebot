@@ -1,5 +1,43 @@
 use std::env;
 
+/// Single external agent definition loaded from TOML config (`[[agents]]` array).
+///
+/// This is the TOML-deserializable form. Convert to `AgentConfig` via `From`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AgentTomlConfig {
+    /// Unique name (e.g. "hermes").
+    pub name: String,
+    /// Communication mode: "cli" or "acp".
+    pub mode: String,
+    /// CLI command. Used only when mode = "cli".
+    #[serde(default)]
+    pub command: Option<String>,
+    /// ACP command. Used only when mode = "acp".
+    #[serde(default)]
+    pub acp_command: Option<String>,
+    /// Send warmup prompt at startup.
+    #[serde(default)]
+    pub acp_warmup: bool,
+    /// LLM-facing text: when to delegate to this agent.
+    pub when_to_use: String,
+    /// Agent-facing instructions.
+    pub instructions: String,
+}
+
+impl From<AgentTomlConfig> for AgentConfig {
+    fn from(src: AgentTomlConfig) -> Self {
+        Self {
+            name: src.name,
+            mode: src.mode,
+            command: src.command,
+            acp_command: src.acp_command.unwrap_or_default(),
+            acp_warmup: src.acp_warmup,
+            when_to_use: src.when_to_use,
+            instructions: src.instructions,
+        }
+    }
+}
+
 /// Single external agent definition loaded from environment variables.
 ///
 /// Each agent gets its own tool (`run_{name}`), its own system prompt
@@ -70,6 +108,54 @@ impl AgentRegistry {
         }
 
         // ── No agents configured ────────────────────────────────────────
+        Self { agents: Vec::new() }
+    }
+
+    /// Load agents with TOML config as fallback when no env vars are set.
+    ///
+    /// Priority:
+    /// 1. `AGENTS` env var → multi-agent from `AGENT_<NAME>_*` vars (existing)
+    /// 2. Legacy `AGENT_COMMAND` / `AGENT_MODE` env vars → single "hermes" agent (existing)
+    /// 3. TOML `[[agents]]` array from config file → new path
+    /// 4. Empty registry
+    pub fn from_config_and_env(toml_agents: Vec<AgentTomlConfig>) -> Self {
+        // ── New multi-agent env format ──────────────────────────────────────
+        if let Ok(raw) = env::var("AGENTS") {
+            let names: Vec<&str> = raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if !names.is_empty() {
+                let agents: Vec<_> = names.into_iter().filter_map(load_agent_from_env).collect();
+                tracing::info!(target: "voicebot", "Loaded {} agent(s) from AGENTS env var", agents.len());
+                return Self { agents };
+            }
+        }
+
+        // ── Legacy single-agent env format ──────────────────────────────────
+        let has_command = env::var("AGENT_COMMAND").is_ok();
+        let has_mode = env::var("AGENT_MODE").is_ok();
+        let has_acp = env::var("AGENT_ACP_COMMAND").is_ok();
+
+        if (has_command || has_mode || has_acp)
+            && let Some(agent) = load_legacy_agent()
+        {
+            tracing::info!(target: "voicebot", "Loaded legacy agent from env vars");
+            return Self {
+                agents: vec![agent],
+            };
+        }
+
+        // ── TOML [[agents]] fallback ────────────────────────────────────────
+        if !toml_agents.is_empty() {
+            let agents: Vec<AgentConfig> = toml_agents.into_iter().map(AgentConfig::from).collect();
+            tracing::info!(target: "voicebot", "Loaded {} agent(s) from TOML config", agents.len());
+            return Self { agents };
+        }
+
+        // ── No agents configured ────────────────────────────────────────────
         Self { agents: Vec::new() }
     }
 
@@ -318,5 +404,78 @@ mod tests {
         assert_eq!(capitalize("hermes"), "Hermes");
         assert_eq!(capitalize("my_agent"), "My_agent");
         assert_eq!(capitalize(""), "");
+    }
+
+    mod toml_tests {
+        use super::*;
+
+        #[test]
+        fn toml_agents_loaded_when_no_env() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let toml_agents = vec![AgentTomlConfig {
+                    name: "hermes".to_string(),
+                    mode: "acp".to_string(),
+                    command: None,
+                    acp_command: Some("hermes acp".to_string()),
+                    acp_warmup: true,
+                    when_to_use: "Para todo".to_string(),
+                    instructions: "Eres Hermes".to_string(),
+                }];
+
+                let reg = AgentRegistry::from_config_and_env(toml_agents);
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].name, "hermes");
+                assert_eq!(reg.agents[0].mode, "acp");
+                assert_eq!(reg.agents[0].acp_command, "hermes acp");
+                assert!(reg.agents[0].acp_warmup);
+            });
+        }
+
+        #[test]
+        fn toml_acp_command_optional() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let toml_agents = vec![AgentTomlConfig {
+                    name: "test-agent".to_string(),
+                    mode: "cli".to_string(),
+                    command: Some("test-agent run".to_string()),
+                    acp_command: None,
+                    acp_warmup: false,
+                    when_to_use: "Para pruebas".to_string(),
+                    instructions: "Test agent".to_string(),
+                }];
+
+                let reg = AgentRegistry::from_config_and_env(toml_agents);
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].acp_command, ""); // default empty string
+            });
+        }
+
+        #[test]
+        fn empty_toml_agents_gives_empty_registry() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let reg = AgentRegistry::from_config_and_env(vec![]);
+                assert!(reg.agents.is_empty());
+            });
+        }
+
+        #[test]
+        fn from_impl_converts_toml_to_agent_config() {
+            let toml = AgentTomlConfig {
+                name: "hermes".to_string(),
+                mode: "acp".to_string(),
+                command: None,
+                acp_command: Some("hermes acp".to_string()),
+                acp_warmup: true,
+                when_to_use: "Para todo".to_string(),
+                instructions: "Eres Hermes".to_string(),
+            };
+
+            let agent: AgentConfig = toml.into();
+            assert_eq!(agent.name, "hermes");
+            assert_eq!(agent.mode, "acp");
+            assert_eq!(agent.command, None);
+            assert_eq!(agent.acp_command, "hermes acp");
+            assert!(agent.acp_warmup);
+        }
     }
 }

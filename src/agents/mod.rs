@@ -2,6 +2,8 @@ pub mod config;
 pub mod session_events;
 pub mod session_manager;
 
+#[allow(unused_imports)]
+pub use config::AgentTomlConfig;
 pub use config::{AgentConfig, AgentRegistry};
 #[allow(unused_imports)]
 pub use session_events::{AcpSessionEvent, create_event_channel, parse_session_update};
