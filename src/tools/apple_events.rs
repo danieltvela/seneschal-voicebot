@@ -23,7 +23,7 @@ const USAGE: &str = "Valid operations:\n\
     delete_event   calendar, title         — delete event by title\n\
   Reminders:\n\
     list_reminder_lists                    — list all reminder list names\n\
-    list_reminders  [, list]               — list reminders (optionally by list)\n\
+    list_reminders  [, list]               — list reminders (optionally by list; smart folders: Today, Scheduled, Flagged, All)\n\
     create_reminder title [, list, due_date, notes]\n\
     complete_reminder title [, list]       — mark a reminder as completed\n\
     delete_reminder title [, list]\n\
@@ -66,6 +66,23 @@ fn as_date_script(var: &str, iso: &str) -> String {
          set minutes of {var} to {mi}\n\
          set seconds of {var} to 0\n"
     )
+}
+
+/// Detect if a list name refers to a Reminders smart folder.
+/// Returns the canonical English name if matched, None otherwise.
+/// Supports English and Spanish smart folder names.
+fn is_smart_folder(name: &str) -> Option<&'static str> {
+    match name {
+        n if n.eq_ignore_ascii_case("Today") => Some("Today"),
+        n if n.eq_ignore_ascii_case("Scheduled") => Some("Scheduled"),
+        n if n.eq_ignore_ascii_case("Flagged") => Some("Flagged"),
+        n if n.eq_ignore_ascii_case("All") => Some("All"),
+        n if n.eq_ignore_ascii_case("Hoy") => Some("Today"),
+        n if n.eq_ignore_ascii_case("Programado") => Some("Scheduled"),
+        n if n.eq_ignore_ascii_case("Marcado") => Some("Flagged"),
+        n if n.eq_ignore_ascii_case("Todos") => Some("All"),
+        _ => None,
+    }
 }
 
 async fn osascript(script: &str) -> String {
@@ -124,6 +141,35 @@ impl AppleEventsTool {
             .map(|c| format!("first calendar whose name is \"{c}\""))
             .unwrap_or_else(|| "first calendar".to_string());
 
+        let from_iso = params["from"].as_str().filter(|s| !s.is_empty());
+        let to_iso = params["to"].as_str().filter(|s| !s.is_empty());
+
+        let date_script = match (from_iso, to_iso) {
+            (Some(f), Some(t)) => as_date_script("fromDate", f) + &as_date_script("toDate", t),
+            (Some(f), None) => {
+                // from specified, to defaults to from + 14 days
+                as_date_script("fromDate", f) + "set toDate to fromDate + 14 * days\n"
+            }
+            (None, Some(t)) => {
+                // to specified, from defaults to beginning of today
+                "set fromDate to current date\n\
+                         set hours of fromDate to 0\n\
+                         set minutes of fromDate to 0\n\
+                         set seconds of fromDate to 0\n"
+                    .to_string()
+                    + &as_date_script("toDate", t)
+            }
+            (None, None) => {
+                // Default: today -> today+14 days
+                "set fromDate to current date\n\
+                 set hours of fromDate to 0\n\
+                 set minutes of fromDate to 0\n\
+                 set seconds of fromDate to 0\n\
+                 set toDate to fromDate + 14 * days\n"
+                    .to_string()
+            }
+        };
+
         // Calendar AppleScript is fundamentally slow for batch property access on
         // large calendars (5000+ events). Each `property of (events 1 thru N of cal)`
         // call resolves N Apple Event references, and the cost scales with both N
@@ -137,21 +183,24 @@ impl AppleEventsTool {
         let script = format!(
             "tell application \"Calendar\"\n\
              set cal to {calendar}\n\
-             set totalCount to count of events of cal\n\
+             {date_script}\
+             set matchingEvents to (every event of cal whose start date ≥ fromDate \
+             and start date ≤ toDate)\n\
+             set matchCount to count of matchingEvents\n\
              set maxCount to {MAX_EVENTS}\n\
-             if totalCount < maxCount then set maxCount to totalCount\n\
+             if matchCount < maxCount then set maxCount to matchCount\n\
              set AppleScript's text item delimiters to linefeed\n\
-             set allSummaries to summary of (events 1 thru maxCount of cal)\n\
-             set allStarts to start date of (events 1 thru maxCount of cal)\n\
+             set allSummaries to summary of (items 1 thru maxCount of matchingEvents)\n\
+             set allStarts to start date of (items 1 thru maxCount of matchingEvents)\n\
              set output to \"\"\n\
              repeat with i from 1 to maxCount\n\
              set output to output & (item i of allSummaries) & \" | \" & \
              ((item i of allStarts) as string) & \"\n\"\n\
              end repeat\n\
              if output is \"\" then\n\
-             set output to \"No events found.\"\n\
-             else if totalCount > maxCount then\n\
-             set output to output & \"(Showing first \" & maxCount & \" of \" & totalCount & \" events)\"\n\
+             set output to \"No events found in date range.\"\n\
+             else if matchCount > maxCount then\n\
+             set output to output & \"(Showing first \" & maxCount & \" of \" & matchCount & \" events)\"\n\
              end if\n\
              return output\n\
              end tell"
@@ -227,20 +276,109 @@ impl AppleEventsTool {
     }
 
     async fn list_reminder_lists(&self) -> String {
-        osascript(
+        let result = osascript(
             "tell application \"Reminders\"\n\
              set names to name of every list\n\
              set AppleScript's text item delimiters to \"\n\"\n\
              return names as string\n\
              end tell",
         )
-        .await
+        .await;
+
+        // Append smart folder names so the LLM knows they are available.
+        if result.starts_with("Error:")
+            || result.starts_with("Access denied")
+            || result.starts_with("Failed")
+            || result.starts_with("Operation")
+        {
+            result
+        } else {
+            format!(
+                "{}\nToday (smart)\nScheduled (smart)\nFlagged (smart)\nAll (smart)",
+                result.trim()
+            )
+        }
+    }
+
+    /// Generate AppleScript for a Reminders smart folder query.
+    /// Smart folders are not real lists; they query across all lists by criteria.
+    async fn list_reminders_smart_folder(&self, folder: &str) -> String {
+        let filter_clause = match folder {
+            "Today" => {
+                "completed is false and due date is not missing value \
+                 and due date < endOfToday"
+            }
+            "Scheduled" => "completed is false and due date is not missing value",
+            "Flagged" => "flagged is true and completed is false",
+            "All" => "completed is false",
+            _ => unreachable!(),
+        };
+
+        let preamble = if folder == "Today" {
+            "set endOfToday to (current date) + 1 * days\n\
+             set time of endOfToday to 0\n"
+        } else {
+            ""
+        };
+
+        let no_reminders_msg = match folder {
+            "Today" => "No reminders found for today.",
+            "Scheduled" => "No scheduled reminders found.",
+            "Flagged" => "No flagged reminders found.",
+            "All" => "No reminders found.",
+            _ => unreachable!(),
+        };
+
+        let script = format!(
+            "tell application \"Reminders\"\n\
+             {preamble}\
+             set allReminders to every reminder of every list whose {filter_clause}\n\
+             set flattened to {{}}\n\
+             repeat with subList in allReminders\n\
+             repeat with r in subList\n\
+             set end of flattened to r\n\
+             end repeat\n\
+             end repeat\n\
+             set totalCount to count of flattened\n\
+             set maxCount to {MAX_REMINDERS}\n\
+             if totalCount < maxCount then set maxCount to totalCount\n\
+             set AppleScript's text item delimiters to linefeed\n\
+             set allNames to name of (items 1 thru maxCount of flattened)\n\
+             set allDue to due date of (items 1 thru maxCount of flattened)\n\
+             set output to \"\"\n\
+             set shown to 0\n\
+             repeat with i from 1 to maxCount\n\
+             set rName to item i of allNames\n\
+             set dueStr to \"\"\n\
+             set d to item i of allDue\n\
+             if d is not missing value then\n\
+             set dueStr to \" [due: \" & (d as string) & \"]\"\n\
+             end if\n\
+             set output to output & rName & dueStr & \"\n\"\n\
+             set shown to shown + 1\n\
+             end repeat\n\
+             if output is \"\" then\n\
+             set output to \"{no_reminders_msg}\"\n\
+             else if totalCount > maxCount then\n\
+             set output to output & \"(Showing \" & shown & \" of \" & totalCount & \" reminders)\"\n\
+             end if\n\
+             return output\n\
+             end tell"
+        );
+        osascript(&script).await
     }
 
     async fn list_reminders(&self, params: &serde_json::Value) -> String {
-        let list = params["list"]
-            .as_str()
-            .filter(|l| !l.is_empty())
+        let list = params["list"].as_str().filter(|l| !l.is_empty());
+
+        // Check for smart folders first
+        if let Some(list_name) = list
+            && let Some(smart_folder) = is_smart_folder(list_name)
+        {
+            return self.list_reminders_smart_folder(smart_folder).await;
+        }
+
+        let list_filter = list
             .map(|l| format!("whose name is \"{l}\""))
             .unwrap_or_default();
 
@@ -254,7 +392,7 @@ impl AppleEventsTool {
         // factor that hangs on 3000+ reminder lists, so we filter in the loop instead.
         let script = format!(
             "tell application \"Reminders\"\n\
-             set targetList to first list {list}\n\
+             set targetList to first list {list_filter}\n\
              set totalCount to count of reminders of targetList\n\
              set maxCount to {MAX_REMINDERS}\n\
              if totalCount < maxCount then set maxCount to totalCount\n\
@@ -435,7 +573,7 @@ impl Tool for AppleEventsTool {
                 },
                 "list": {
                     "type": "string",
-                    "description": "Reminders list name (optional)"
+                    "description": "Reminders list name (e.g. 'Work', 'Shopping') or smart folder: 'Today', 'Scheduled', 'Flagged', 'All'"
                 },
                 "from": {
                     "type": "string",
