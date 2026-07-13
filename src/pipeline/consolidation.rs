@@ -14,6 +14,7 @@ use crate::llm::{LlmProvider, LlmSession};
 use crate::memory::{build_memory_context, extract_memories};
 use crate::plugins::PluginPromptSections;
 use crate::profile::{ProfileFact, build_profile_context, extract_facts};
+use crate::tools::PromptBuildState;
 
 /// Character threshold for L1 saturation detection.
 ///
@@ -117,6 +118,7 @@ pub async fn run_consolidation_cycle(
     db: &Database,
     session_id: uuid::Uuid,
     llm_session: &Arc<Mutex<LlmSession>>,
+    prompt_build_state: &Arc<Mutex<PromptBuildState>>,
     keep_turns: usize,
     base_prompt: &str,
     wake_word: &str,
@@ -256,6 +258,25 @@ pub async fn run_consolidation_cycle(
             s.apply_summary(summary_text, keep_turns);
         }
         s.set_system_prompt(new_system_prompt);
+        // Re-inject prompt-build developer message if mode is still active after consolidation.
+        let pb_state = prompt_build_state.lock().unwrap();
+        if pb_state.is_active() {
+            let has_dev_msg = s.messages.iter().any(|m| {
+                m.get("content")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c.contains("[PROMPT-BUILD MODE ACTIVE]"))
+                    .unwrap_or(false)
+            });
+            if !has_dev_msg {
+                s.add_developer_turn(
+                    "[PROMPT-BUILD MODE ACTIVE] You are in prompt-build mode. \
+                     User messages are instructions to modify the prompt. \
+                     After changes, call set_prompt_build(action: \"update\"). \
+                     After saving/copying/sending the prompt, call set_prompt_build(action: \"cancel\"). \
+                     The current prompt text is in your tool call history."
+                );
+            }
+        }
     }
 
     info!(
@@ -274,6 +295,7 @@ pub async fn consolidation_task(
     mut pipeline_state_rx: watch::Receiver<PipelineState>,
     transcript_tx: mpsc::Sender<PipelineFrame>,
     llm_session: Arc<Mutex<LlmSession>>,
+    prompt_build_state: Arc<Mutex<PromptBuildState>>,
     background_client: Arc<dyn LlmProvider>,
     db: Database,
     session_id: uuid::Uuid,
@@ -386,6 +408,7 @@ pub async fn consolidation_task(
             &db,
             session_id,
             &llm_session,
+            &prompt_build_state,
             keep_turns,
             &base_prompt,
             &wake_word,

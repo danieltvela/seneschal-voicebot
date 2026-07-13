@@ -1035,7 +1035,6 @@ async fn async_main() -> Result<()> {
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
         let filler_controller_c = Arc::clone(&filler_controller);
-        let prompt_build_c = Arc::clone(&prompt_build_state);
         #[cfg(feature = "tui")]
         let tui_tx_c = tui_tx.clone();
         #[cfg(feature = "control")]
@@ -1058,7 +1057,6 @@ async fn async_main() -> Result<()> {
                 turn_commit_c,
                 proactive_tx_c,
                 filler_controller_c,
-                prompt_build_c,
                 #[cfg(feature = "tui")]
                 tui_tx_c,
                 #[cfg(feature = "control")]
@@ -1138,6 +1136,7 @@ async fn async_main() -> Result<()> {
         let language_c = config.language.clone();
         let proactive_tx_c = proactive_tx.clone();
         let already_notified_c = Arc::clone(&l1_saturation_notified);
+        let prompt_build_c = Arc::clone(&prompt_build_state);
         tokio::spawn(async move {
             consolidation_task(
                 events_c,
@@ -1145,6 +1144,7 @@ async fn async_main() -> Result<()> {
                 pipeline_state_rx_c,
                 transcript_tx_c,
                 llm_session_c,
+                prompt_build_c,
                 background_c,
                 db_c,
                 session_id,
@@ -1243,6 +1243,7 @@ async fn async_main() -> Result<()> {
                 &db,
                 session_id,
                 &llm_session,
+                &prompt_build_state,
                 config.llm_summary_keep_turns,
                 &config.llm_system_prompt,
                 &config.wake_word,

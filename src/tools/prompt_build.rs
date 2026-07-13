@@ -96,7 +96,9 @@ impl Tool for SetPromptBuildTool {
                 *state = PromptBuildState::Active {
                     prompt: String::new(),
                 };
-                "Prompt-build mode activated. The user can now give instructions to build a prompt."
+                "Prompt-build mode activated. Current prompt: (empty). \
+                 The user can now give instructions to build a prompt. \
+                 Remember: after saving/copying/sending the prompt, call set_prompt_build(action: \"cancel\") to deactivate."
                     .to_string()
             }
             "update" => {
@@ -115,8 +117,11 @@ impl Tool for SetPromptBuildTool {
                 }
                 match *state {
                     PromptBuildState::Active { ref mut prompt } => {
-                        *prompt = new_prompt;
-                        "Prompt updated successfully.".to_string()
+                        *prompt = new_prompt.clone();
+                        format!(
+                            "Prompt updated successfully. Current prompt:\n---\n{}\n---",
+                            new_prompt
+                        )
                     }
                     _ => {
                         *state = PromptBuildState::Active { prompt: new_prompt };
