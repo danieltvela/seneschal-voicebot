@@ -7,6 +7,7 @@ pub mod mcp_tool;
 pub mod noop;
 pub mod open_app;
 pub mod open_terminal;
+pub mod prompt_build;
 pub mod quick_search;
 pub mod read_file;
 pub mod recover_historical_context;
@@ -33,6 +34,7 @@ pub use noop::NoopTool;
 pub use open_app::OpenAppTool;
 #[cfg(target_os = "macos")]
 pub use open_terminal::OpenTerminalTool;
+pub use prompt_build::{PromptBuildState, SetPromptBuildTool};
 pub use quick_search::QuickSearchTool;
 pub use read_file::ReadFileTool;
 #[allow(unused_imports)]
@@ -194,6 +196,16 @@ impl ToolRegistry {
                  DEBES llamar a la herramienta current_time EN CADA OCASIÓN, \
                  sin importar cuán recientemente la hayas usado. \
                  Nunca respondas de memoria ni inventes la fecha.",
+            );
+        }
+        if self.tools.contains_key("set_prompt_build") {
+            section.push_str(
+                "\n\nREGLA ESPECÍFICA PARA prompt-build mode: \
+                 Cuando el modo prompt-build está activo, TODOS los mensajes del usuario son \
+                 instrucciones para modificar el prompt en construcción — no son conversación normal. \
+                 Después de cada cambio, llama a set_prompt_build(action: \"update\"). \
+                 Cuando el usuario pida guardar, copiar, enviar o usar el prompt, hazlo con la \
+                 herramienta apropiada y luego INMEDIATAMENTE llama a set_prompt_build(action: \"cancel\").",
             );
         }
         section

@@ -24,14 +24,31 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         input_display_lines(&app.input, width).clamp(1, MAX_INPUT_ROWS as usize) as u16;
     let status_height = 1u16;
 
+    // Prompt-build display height: show only when active.
+    let prompt_active = app.prompt_build_state.lock().unwrap().is_active();
+    let prompt_height = if prompt_active {
+        let prompt_text = app
+            .prompt_build_state
+            .lock()
+            .unwrap()
+            .prompt_text()
+            .unwrap_or("")
+            .to_string();
+        compute_prompt_display_height(&prompt_text, width).min(6) as u16
+    } else {
+        0
+    };
+
+    let used = prompt_height + input_height + status_height;
     let streaming_height = if app.streaming_buffer.is_empty() {
         0
     } else {
-        total.height.saturating_sub(input_height + status_height)
+        total.height.saturating_sub(used)
     };
 
-    let [streaming_area, input_area, status_area] = Layout::vertical([
+    let [streaming_area, prompt_area, input_area, status_area] = Layout::vertical([
         Constraint::Length(streaming_height),
+        Constraint::Length(prompt_height),
         Constraint::Length(input_height),
         Constraint::Length(status_height),
     ])
@@ -39,6 +56,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     if streaming_height > 0 {
         render_streaming(frame, app, streaming_area);
+    }
+    if prompt_height > 0 {
+        render_prompt_display(frame, app, prompt_area);
     }
     render_input(frame, app, input_area);
     render_status(frame, app, status_area);
@@ -315,6 +335,73 @@ fn render_streaming(frame: &mut Frame, app: &App, area: Rect) {
     let skip = all_lines.len().saturating_sub(area.height as usize);
     let display = Text::from(all_lines[skip..].to_vec());
     frame.render_widget(Paragraph::new(display), area);
+}
+
+/// Render the prompt-build display (read-only).
+fn render_prompt_display(frame: &mut Frame, app: &App, area: Rect) {
+    let width = area.width as usize;
+    let prompt_text = app
+        .prompt_build_state
+        .lock()
+        .unwrap()
+        .prompt_text()
+        .unwrap_or("")
+        .to_string();
+
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::raw("┌ "),
+        Span::styled(
+            "PROMPT BUILD",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])];
+
+    if prompt_text.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(Color::Rgb(100, 100, 100))),
+            Span::styled(
+                "(awaiting instructions...)",
+                Style::default().fg(Color::Rgb(100, 100, 100)).italic(),
+            ),
+        ]));
+    } else {
+        for content_line in prompt_text.lines() {
+            let wrapped = word_wrap_plain(&format!("│ {content_line}"), width);
+            for row in wrapped {
+                lines.push(Line::from(vec![Span::styled(
+                    row,
+                    Style::default().fg(Color::Yellow),
+                )]));
+            }
+        }
+    }
+
+    lines.push(Line::from(vec![
+        Span::raw("└"),
+        Span::raw("─".repeat(width.saturating_sub(2))),
+        Span::raw("┘"),
+    ]));
+
+    // Clip to area height
+    let skip = lines.len().saturating_sub(area.height as usize);
+    let display = Text::from(lines[skip..].to_vec());
+    frame.render_widget(Paragraph::new(display), area);
+}
+
+/// Compute the display height needed for the prompt-build content.
+fn compute_prompt_display_height(prompt_text: &str, width: usize) -> usize {
+    if prompt_text.is_empty() {
+        // Title line + "(awaiting...)" line + bottom border = 3
+        return 3;
+    }
+    let mut total = 2; // title line + bottom border
+    for line in prompt_text.lines() {
+        let wrapped = word_wrap_plain(&format!("│ {line}"), width);
+        total += wrapped.len();
+    }
+    total
 }
 
 /// Render the text input — no border, full width.

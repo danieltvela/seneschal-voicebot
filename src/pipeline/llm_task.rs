@@ -10,6 +10,7 @@ use super::state::PipelineEvents;
 use crate::agents::ProactiveEvent;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, StreamToken};
+use crate::tools::PromptBuildState;
 use crate::tools::ToolRegistry;
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
@@ -37,6 +38,7 @@ pub async fn llm_task(
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     filler_controller: Arc<crate::audio::filler::FillerController>,
+    prompt_build_state: Arc<Mutex<PromptBuildState>>,
     #[cfg(feature = "tui")] tui_tx: crate::tui::events::TuiEventTx,
     #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
 ) {
@@ -193,6 +195,26 @@ pub async fn llm_task(
                 .collect::<Vec<_>>()
         );
         let mut messages = llm_session.lock().unwrap().all_messages_api();
+        // Inject prompt-build developer message (ephemeral — local copy only, not persisted).
+        if let Some(prompt) = prompt_build_state.lock().unwrap().prompt_text() {
+            messages.push(serde_json::json!({
+                "role": "developer",
+                "content": format!(
+                    "[PROMPT-BUILD MODE ACTIVE]\n\
+                     You are currently in prompt-build mode. The user's messages are INSTRUCTIONS \
+                     for modifying or improving the prompt below — do NOT treat them as regular conversation.\n\n\
+                     Current prompt:\n---\n{}\n---\n\n\
+                     Your responsibilities:\n\
+                     1. Interpret every user message as an instruction to refine, rewrite, or extend the prompt above. \
+                     After applying changes, call set_prompt_build(action: \"update\", prompt: \"<new text>\").\n\
+                     2. If the user asks to save, copy, send, or use the prompt, do so using the appropriate tool \
+                     (e.g. set_clipboard to copy, run_shell to save to a file, run_agent to send to an agent).\n\
+                     3. IMMEDIATELY after dispatching the prompt (save/copy/send/use), call \
+                     set_prompt_build(action: \"cancel\") to deactivate prompt-build mode.",
+                    prompt
+                )
+            }));
+        }
         let base_msg_len = messages.len();
         let mut final_response = String::new();
         let mut committed = false;

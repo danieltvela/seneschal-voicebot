@@ -71,9 +71,10 @@ use crate::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
 use crate::tools::OpenTerminalTool;
 use crate::tools::{
     ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy,
-    NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool, ReadClipboardTool,
-    ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool, SetClipboardTool,
-    SetConversationModeTool, SwitchPluginTool, TakeScreenshotTool, ToolRegistry, WebSearchTool,
+    NoopTool, OpenAppTool, PendingInteractionEntry, PromptBuildState, QuickSearchTool,
+    ReadClipboardTool, ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool,
+    SetClipboardTool, SetConversationModeTool, SetPromptBuildTool, SwitchPluginTool,
+    TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
 use crate::tts::AvSpeechTts;
@@ -266,6 +267,10 @@ async fn async_main() -> Result<()> {
     tool_registry.register(SetClipboardTool);
     tool_registry.register(OpenAppTool);
     tool_registry.register(SetConversationModeTool::new(Arc::clone(&conv_mode)));
+
+    let prompt_build_state: Arc<Mutex<PromptBuildState>> =
+        Arc::new(Mutex::new(PromptBuildState::Inactive));
+    tool_registry.register(SetPromptBuildTool::new(Arc::clone(&prompt_build_state)));
 
     if config.apple_events_enabled {
         tool_registry.register(AppleEventsTool);
@@ -1030,6 +1035,7 @@ async fn async_main() -> Result<()> {
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
         let filler_controller_c = Arc::clone(&filler_controller);
+        let prompt_build_c = Arc::clone(&prompt_build_state);
         #[cfg(feature = "tui")]
         let tui_tx_c = tui_tx.clone();
         #[cfg(feature = "control")]
@@ -1052,6 +1058,7 @@ async fn async_main() -> Result<()> {
                 turn_commit_c,
                 proactive_tx_c,
                 filler_controller_c,
+                prompt_build_c,
                 #[cfg(feature = "tui")]
                 tui_tx_c,
                 #[cfg(feature = "control")]
@@ -1166,8 +1173,17 @@ async fn async_main() -> Result<()> {
         let transcript_tx_c = transcript_tx.clone();
         let tts_muted_c = Arc::clone(&tts_muted);
         let conv_mode_c = Arc::clone(&conv_mode);
+        let prompt_build_c = Arc::clone(&prompt_build_state);
         tokio::spawn(async move {
-            if let Err(e) = tui::run(tui_rx, transcript_tx_c, tts_muted_c, conv_mode_c).await {
+            if let Err(e) = tui::run(
+                tui_rx,
+                transcript_tx_c,
+                tts_muted_c,
+                conv_mode_c,
+                prompt_build_c,
+            )
+            .await
+            {
                 tracing::error!("TUI error: {e}");
             }
             std::process::exit(0);

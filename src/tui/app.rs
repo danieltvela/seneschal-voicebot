@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use super::events::{InputSource, PipelineState, TuiEvent};
 use crate::tools::ConversationMode;
+use crate::tools::PromptBuildState;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 /// Action returned by key event handling.
@@ -48,12 +49,17 @@ pub struct App {
     pub should_quit: bool,
     /// Shared conversation mode — read each render tick directly from the pipeline.
     pub conv_mode: Arc<Mutex<ConversationMode>>,
+    /// Shared prompt-build state — read each render tick directly from the pipeline.
+    pub prompt_build_state: Arc<Mutex<PromptBuildState>>,
     /// Index of the last message already printed into terminal scrollback.
     pub last_printed_index: usize,
 }
 
 impl App {
-    pub fn new(conv_mode: Arc<Mutex<ConversationMode>>) -> Self {
+    pub fn new(
+        conv_mode: Arc<Mutex<ConversationMode>>,
+        prompt_build_state: Arc<Mutex<PromptBuildState>>,
+    ) -> Self {
         Self {
             input: String::new(),
             cursor: 0,
@@ -62,6 +68,7 @@ impl App {
             state: PipelineState::Idle,
             tts_enabled: true,
             conv_mode,
+            prompt_build_state,
             should_quit: false,
             last_printed_index: 0,
         }
@@ -125,6 +132,24 @@ impl App {
                     content: String::new(),
                     timestamp: chrono::Local::now(),
                 });
+            }
+            TuiEvent::PromptBuildUpdate { prompt: new_text } => {
+                let mut state = self.prompt_build_state.lock().unwrap();
+                if let PromptBuildState::Active { ref mut prompt, .. } = *state {
+                    *prompt = new_text;
+                }
+            }
+            TuiEvent::PromptBuildStateChange { active } => {
+                let mut state = self.prompt_build_state.lock().unwrap();
+                if active {
+                    if !state.is_active() {
+                        *state = PromptBuildState::Active {
+                            prompt: String::new(),
+                        };
+                    }
+                } else {
+                    *state = PromptBuildState::Inactive;
+                }
             }
         }
     }

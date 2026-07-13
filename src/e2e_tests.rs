@@ -34,7 +34,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
-use crate::tools::ToolRegistry;
+use crate::tools::{PromptBuildState, ToolRegistry};
 use crate::tts::{TtsEngine, mock_tts::MockTts};
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -209,6 +209,8 @@ impl E2eHarness {
                 Arc::clone(&self.audio_output),
                 sample_rate,
             ));
+            let prompt_build_state: Arc<Mutex<PromptBuildState>> =
+                Arc::new(Mutex::new(PromptBuildState::Inactive));
             #[cfg(feature = "tui")]
             let tui_tx_c = tokio::sync::mpsc::unbounded_channel::<crate::tui::events::TuiEvent>().0;
             #[cfg(feature = "control")]
@@ -231,6 +233,7 @@ impl E2eHarness {
                     turn_c,
                     proactive_tx,
                     filler_c,
+                    prompt_build_state,
                     #[cfg(feature = "tui")]
                     tui_tx_c,
                     #[cfg(feature = "control")]

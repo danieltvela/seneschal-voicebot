@@ -36,6 +36,10 @@ pub enum TuiEvent {
     Error(String),
     /// Show the SENECHAL splash screen on first render.
     Splash,
+    /// Prompt-build mode: the prompt text was updated.
+    PromptBuildUpdate { prompt: String },
+    /// Prompt-build mode: activation state changed.
+    PromptBuildStateChange { active: bool },
 }
 
 pub type TuiEventTx = mpsc::UnboundedSender<TuiEvent>;

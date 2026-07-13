@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 
 use crate::pipeline::PipelineFrame;
 use crate::tools::ConversationMode;
+use crate::tools::PromptBuildState;
 use app::{Action, App};
 use events::{TuiEvent, TuiEventRx};
 use input::KeyReader;
@@ -27,7 +28,7 @@ const TICK_MS: u64 = 33; // ~30fps
 /// Height of the inline viewport at the bottom of the terminal.
 /// One row is reserved for the status bar, up to four rows for the input
 /// area, and the remaining rows are used for the streaming preview.
-const VIEWPORT_HEIGHT: u16 = 6;
+const VIEWPORT_HEIGHT: u16 = 10;
 
 /// Run the TUI event loop. Blocks until the user quits.
 pub async fn run(
@@ -35,6 +36,7 @@ pub async fn run(
     transcript_tx: mpsc::Sender<PipelineFrame>,
     tts_muted: Arc<AtomicBool>,
     conv_mode: Arc<Mutex<ConversationMode>>,
+    prompt_build_state: Arc<Mutex<PromptBuildState>>,
 ) -> Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), crossterm::cursor::Hide)?;
@@ -46,7 +48,7 @@ pub async fn run(
         },
     )?;
 
-    let mut app = App::new(conv_mode);
+    let mut app = App::new(conv_mode, prompt_build_state);
     let mut keys = KeyReader::new();
     let tick = tokio::time::Duration::from_millis(TICK_MS);
 
