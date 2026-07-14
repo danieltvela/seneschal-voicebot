@@ -412,7 +412,22 @@ async fn async_main() -> Result<()> {
     let mcp_registry = mcp::McpRegistry::from_env();
     for server in &mcp_registry.servers {
         info!(target: "mcp", "Spawning MCP server '{}': {}", server.name, server.command);
-        match mcp::McpClient::spawn_and_init(&server.command, server.tool_timeout_secs).await {
+
+        // Tag incoming notifications with the server name so the main loop can
+        // route them per-server (see Gap 1 in doc/ARCHITECTURE-MCP-LAYER.md).
+        let handler: std::sync::Arc<dyn mcp::McpNotificationHandler> =
+            std::sync::Arc::new(mcp::ForwardingNotificationHandler {
+                server_name: server.name.clone(),
+            });
+
+        match mcp::McpClient::spawn_and_init_with_handler(
+            &server.command,
+            server.tool_timeout_secs,
+            Some(handler),
+            Some(proactive_tx.clone()),
+        )
+        .await
+        {
             Ok((client, tool_defs)) => {
                 let client = std::sync::Arc::new(client);
                 let mut count = 0;
@@ -1453,6 +1468,20 @@ async fn async_main() -> Result<()> {
                                     } else {
                                         debug!(target: "pipeline", "AgentMilestone skipped (pipeline busy): {milestone}");
                                     }
+                                }
+                                ProactiveEvent::McpNotification { server_name, method, params } => {
+                                    info!(
+                                        target: "mcp",
+                                        "Notification from MCP server '{server_name}': {method} {params}"
+                                    );
+                                    #[cfg(feature = "control")]
+                                    control_broadcast.send(
+                                        crate::control::broadcast::ControlEvent::McpNotification {
+                                            server_name: server_name.clone(),
+                                            method: method.clone(),
+                                            params: params.clone(),
+                                        },
+                                    );
                                 }
                             }
                             continue;

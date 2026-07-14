@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::mcp::McpClient;
+use crate::agents::ProactiveEvent;
+use crate::mcp::{ForwardingNotificationHandler, McpClient, McpNotificationHandler};
 use crate::plugins::manifest::McpServerConfig;
 use crate::tools::ToolRegistry;
 use crate::tools::mcp_tool::McpToolProxy;
@@ -22,11 +24,26 @@ impl SpawnedMcpServers {
     /// Tool names use the `{server_name}_mcp__{tool_name}` convention.
     /// Spawn failures are logged and skipped — the function continues with
     /// the remaining servers.
+    ///
+    /// Notifications are silently ignored (legacy behavior). Use
+    /// [`Self::spawn_and_register_with_handler`] to forward them.
     pub async fn spawn_and_register(
         servers: &[McpServerConfig],
         tool_registry: &mut ToolRegistry,
     ) -> Self {
-        let (clients, tool_proxies, tool_names) = Self::spawn_clients(servers).await;
+        Self::spawn_and_register_with_handler(servers, tool_registry, None, None).await
+    }
+
+    /// Like [`Self::spawn_and_register`] but wires a notification handler +
+    /// proactive event channel into each spawned MCP client.
+    pub async fn spawn_and_register_with_handler(
+        servers: &[McpServerConfig],
+        tool_registry: &mut ToolRegistry,
+        notification_handler: Option<Arc<dyn McpNotificationHandler>>,
+        proactive_tx: Option<mpsc::Sender<ProactiveEvent>>,
+    ) -> Self {
+        let (clients, tool_proxies, tool_names) =
+            Self::spawn_clients_with_handler(servers, notification_handler, proactive_tx).await;
 
         for (name, proxy) in tool_proxies {
             info!(
@@ -52,8 +69,29 @@ impl SpawnedMcpServers {
 
     /// Spawn MCP client processes and prepare tool proxies without registering.
     /// Returns clients, tool proxies with names, and tool names for cleanup tracking.
+    ///
+    /// Notifications are silently ignored (legacy behavior).
     pub async fn spawn_clients(
         servers: &[McpServerConfig],
+    ) -> (
+        Vec<Arc<McpClient>>,
+        Vec<(String, McpToolProxy)>,
+        Vec<String>,
+    ) {
+        Self::spawn_clients_with_handler(servers, None, None).await
+    }
+
+    /// Like [`Self::spawn_clients`] but wires an optional notification handler +
+    /// proactive event channel into each spawned MCP client.
+    ///
+    /// When both `notification_handler` and `proactive_tx` are `Some`, every
+    /// server→client notification is forwarded to the proactive channel as a
+    /// `ProactiveEvent::McpNotification` (the handler decides whether to
+    /// produce an event for a given method/params).
+    pub async fn spawn_clients_with_handler(
+        servers: &[McpServerConfig],
+        notification_handler: Option<Arc<dyn McpNotificationHandler>>,
+        proactive_tx: Option<mpsc::Sender<ProactiveEvent>>,
     ) -> (
         Vec<Arc<McpClient>>,
         Vec<(String, McpToolProxy)>,
@@ -71,7 +109,24 @@ impl SpawnedMcpServers {
                 "Spawning plugin MCP server"
             );
 
-            let result = McpClient::spawn_and_init(&server.command, server.tool_timeout_secs).await;
+            // Per-server handler: tag notifications with the server name so
+            // the main loop knows which MCP server produced them. We only
+            // install a handler if the caller supplied one (otherwise the
+            // legacy no-op path is used).
+            let per_server_handler: Option<Arc<dyn McpNotificationHandler>> =
+                notification_handler.as_ref().map(|_| {
+                    Arc::new(ForwardingNotificationHandler {
+                        server_name: server.name.clone(),
+                    }) as Arc<dyn McpNotificationHandler>
+                });
+
+            let result = McpClient::spawn_and_init_with_handler(
+                &server.command,
+                server.tool_timeout_secs,
+                per_server_handler,
+                proactive_tx.clone(),
+            )
+            .await;
 
             match result {
                 Ok((client, tool_defs)) => {

@@ -36,6 +36,13 @@ pub enum ControlEvent {
     SystemNotification {
         text: String,
     },
+    /// Spontaneous notification received from an MCP server (server→client).
+    /// Forwarded to Control API subscribers for visibility in dashboards.
+    McpNotification {
+        server_name: String,
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 #[allow(dead_code)]

@@ -76,6 +76,17 @@ pub enum ProactiveEvent {
         milestone: String,
         correlation_id: String,
     },
+    /// A spontaneous notification from an MCP server (server→client direction).
+    ///
+    /// Routed by the MCP reader task when an inbound JSON-RPC message has a
+    /// `method` but no `id` (it is a notification, not a response). The main
+    /// loop decides how to react — typically by injecting the payload as
+    /// context for the next LLM turn or by narrating it via TTS.
+    McpNotification {
+        server_name: String,
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 impl std::fmt::Debug for ProactiveEvent {
@@ -117,6 +128,16 @@ impl std::fmt::Debug for ProactiveEvent {
                 write!(
                     f,
                     "AgentMilestone(agent={agent_name}, milestone={milestone:?}, correlation_id={correlation_id})"
+                )
+            }
+            Self::McpNotification {
+                server_name,
+                method,
+                params,
+            } => {
+                write!(
+                    f,
+                    "McpNotification(server={server_name}, method={method:?}, params={params})"
                 )
             }
         }
@@ -162,5 +183,47 @@ mod tests {
         assert!(debug_str.contains("L1Saturated"));
         assert!(debug_str.contains("25000"));
         assert!(debug_str.contains("20000"));
+    }
+
+    #[test]
+    fn test_mcp_notification_debug_format() {
+        let event = ProactiveEvent::McpNotification {
+            server_name: "editor".to_string(),
+            method: "notifications/document_changed".to_string(),
+            params: serde_json::json!({"doc_id": "abc"}),
+        };
+        let debug_str = format!("{event:?}");
+        assert!(debug_str.contains("McpNotification"));
+        assert!(debug_str.contains("editor"));
+        assert!(debug_str.contains("notifications/document_changed"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_notification_roundtrip_channel() {
+        // End-to-end: sending McpNotification through an mpsc channel should
+        // preserve the payload fields that the main loop reads.
+        let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
+
+        let event = ProactiveEvent::McpNotification {
+            server_name: "browser".to_string(),
+            method: "notifications/page_loaded".to_string(),
+            params: serde_json::json!({"url": "https://example.com"}),
+        };
+
+        tx.send(event).await.unwrap();
+
+        let received = rx.recv().await.unwrap();
+        match received {
+            ProactiveEvent::McpNotification {
+                server_name,
+                method,
+                params,
+            } => {
+                assert_eq!(server_name, "browser");
+                assert_eq!(method, "notifications/page_loaded");
+                assert_eq!(params["url"], "https://example.com");
+            }
+            other => panic!("Expected McpNotification, got {other:?}"),
+        }
     }
 }
