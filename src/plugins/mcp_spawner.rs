@@ -120,13 +120,23 @@ impl SpawnedMcpServers {
                     }) as Arc<dyn McpNotificationHandler>
                 });
 
-            let result = McpClient::spawn_and_init_with_handler(
-                &server.command,
-                server.tool_timeout_secs,
-                per_server_handler,
-                proactive_tx.clone(),
-            )
-            .await;
+            let result = if let Some(url) = &server.url {
+                McpClient::connect_http(
+                    url,
+                    server.tool_timeout_secs,
+                    per_server_handler,
+                    proactive_tx.clone(),
+                )
+                .await
+            } else {
+                McpClient::spawn_and_init_with_handler(
+                    &server.command,
+                    server.tool_timeout_secs,
+                    per_server_handler,
+                    proactive_tx.clone(),
+                )
+                .await
+            };
 
             match result {
                 Ok((client, tool_defs)) => {

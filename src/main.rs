@@ -409,7 +409,7 @@ async fn async_main() -> Result<()> {
     }
 
     // ── MCP tools (multi-server) ──────────────────────────────────────────────
-    let mcp_registry = mcp::McpRegistry::from_env();
+    let mcp_registry = mcp::McpRegistry::from_config_and_env(config.mcp_servers.clone());
     for server in &mcp_registry.servers {
         info!(target: "mcp", "Spawning MCP server '{}': {}", server.name, server.command);
 
@@ -420,14 +420,28 @@ async fn async_main() -> Result<()> {
                 server_name: server.name.clone(),
             });
 
-        match mcp::McpClient::spawn_and_init_with_handler(
-            &server.command,
-            server.tool_timeout_secs,
-            Some(handler),
-            Some(proactive_tx.clone()),
-        )
-        .await
-        {
+        let result = match &server.transport {
+            mcp::McpTransportKind::Stdio { command } => {
+                mcp::McpClient::spawn_and_init_with_handler(
+                    command,
+                    server.tool_timeout_secs,
+                    Some(handler),
+                    Some(proactive_tx.clone()),
+                )
+                .await
+            }
+            mcp::McpTransportKind::Http { url } => {
+                mcp::McpClient::connect_http(
+                    url,
+                    server.tool_timeout_secs,
+                    Some(handler),
+                    Some(proactive_tx.clone()),
+                )
+                .await
+            }
+        };
+
+        match result {
             Ok((client, tool_defs)) => {
                 let client = std::sync::Arc::new(client);
                 let mut count = 0;

@@ -1,36 +1,39 @@
-//! MCP (Model Context Protocol) client — JSON-RPC 2.0 over stdio.
+//! MCP (Model Context Protocol) client — JSON-RPC 2.0 over stdio (or, in
+//! future, HTTP).
 //!
-//! Spawns an MCP server subprocess, performs the initialize handshake,
-//! discovers available tools via `tools/list`, and calls them via `tools/call`.
-//!
-//! Compatible with any stdio-transport MCP server (e.g. `bunx apple-mcp@latest`,
-//! `macOS-local-mcp-server`, etc.).
+//! Transport is abstracted behind the [`McpTransport`] trait, allowing the
+//! same protocol code to work over stdio subprocesses, HTTP SSE connections,
+//! or any future transport.
 //!
 //! Concurrent `call_tool()` calls are safe: each request registers a oneshot
-//! channel keyed on its JSON-RPC request id; the reader task routes responses
+//! channel keyed on its JSON-RPC request id; the router task routes responses
 //! to the correct waiter.
 //!
 //! Since Gap 1 (architecture redesign, see `doc/ARCHITECTURE-MCP-LAYER.md`),
-//! the reader task also routes **server→client notifications** (JSON-RPC
+//! the router task also routes **server→client notifications** (JSON-RPC
 //! messages with a `method` but no `id`) to an optional `McpNotificationHandler`.
 //! When the handler returns a `ProactiveEvent`, the client forwards it to the
 //! main loop via the `proactive_tx` channel. Without a handler, the behavior is
 //! the legacy one: notifications are silently ignored.
 
 use std::collections::HashMap;
-use std::env;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::agents::ProactiveEvent;
-use crate::config::Config;
+
+pub mod config;
+pub mod transport;
+
+#[allow(unused_imports)]
+pub use config::{McpConfig, McpRegistry, McpServerTomlConfig, McpTransportKind};
+pub use transport::McpTransport;
 
 // ── Notification handler trait ───────────────────────────────────────────────
 
@@ -161,142 +164,18 @@ pub struct McpToolDef {
     pub input_schema: Value,
 }
 
-// ── MCP Server Configuration ─────────────────────────────────────────────────
-
-/// Single MCP server configuration loaded from environment variables.
-///
-/// Each server gets its own subprocess and its own set of tools.
-#[derive(Debug, Clone)]
-pub struct McpConfig {
-    /// Unique name used for tool prefixing: `{name}_mcp__{tool_name}`.
-    pub name: String,
-    /// Command to spawn the MCP server subprocess.
-    pub command: String,
-    /// Hard timeout in seconds for each tool call (default 30).
-    pub tool_timeout_secs: u64,
-}
-
-/// Registry of all configured MCP servers.
-///
-/// Created once at startup from environment variables. Supports both the
-/// new multi-MCP format (`MCPS=apple,filesystem`) and the legacy
-/// single-MCP format (`MCP_COMMAND`).
-#[derive(Debug, Clone)]
-pub struct McpRegistry {
-    pub servers: Vec<McpConfig>,
-}
-
-impl McpRegistry {
-    /// Load MCP servers from environment variables.
-    ///
-    /// Priority:
-    /// 1. If `MCPS` is set → parse comma-separated names, load each via `MCP_<NAME>_COMMAND`.
-    /// 2. If `MCP_COMMAND` is set → create single `"default"` server (backward compatibility).
-    /// 3. Otherwise → empty registry (no MCP tools).
-    pub fn from_env() -> Self {
-        // ── New multi-MCP format ──────────────────────────────────────
-        if let Ok(raw) = env::var("MCPS") {
-            let names: Vec<&str> = raw
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            if !names.is_empty() {
-                let servers = names.into_iter().filter_map(load_mcp_from_env).collect();
-                return Self { servers };
-            }
-        }
-
-        // ── Legacy single-MCP format (backward compatibility) ────────
-        if let Ok(command) = env::var("MCP_COMMAND") {
-            let timeout: u64 = env::var("MCP_TOOL_TIMEOUT_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(30);
-
-            return Self {
-                servers: vec![McpConfig {
-                    name: "default".to_string(),
-                    command,
-                    tool_timeout_secs: timeout,
-                }],
-            };
-        }
-
-        // ── No MCP servers configured ─────────────────────────────────
-        Self {
-            servers: Vec::new(),
-        }
-    }
-}
-
-/// Load a single MCP server config from env vars using the `MCP_<NAME>_*` convention.
-///
-/// Returns `None` if the server has no valid command configured.
-fn load_mcp_from_env(name: &str) -> Option<McpConfig> {
-    let upper = name.to_uppercase().replace('-', "_");
-
-    let command = env::var(format!("MCP_{}_COMMAND", upper)).ok()?;
-
-    let tool_timeout_secs: u64 = env::var(format!("MCP_{}_TIMEOUT_SECS", upper))
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30);
-
-    Some(McpConfig {
-        name: name.to_string(),
-        command,
-        tool_timeout_secs,
-    })
-}
-
-// ── Internal writer ──────────────────────────────────────────────────────────
-
-struct McpWriter {
-    stdin: ChildStdin,
-    child: Child,
-    next_id: u64,
-}
-
-impl McpWriter {
-    async fn send_raw(&mut self, msg: &Value) -> Result<()> {
-        let json = serde_json::to_string(msg)?;
-        debug!(target: "mcp", "→ {json}");
-        self.stdin.write_all(json.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
-        Ok(())
-    }
-
-    async fn send_request(&mut self, method: &str, params: Value) -> Result<u64> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-        self.send_raw(&msg).await?;
-        Ok(id)
-    }
-
-    async fn send_notification(&mut self, method: &str, params: Value) -> Result<()> {
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
-        self.send_raw(&msg).await
-    }
-}
-
 // ── McpClient ────────────────────────────────────────────────────────────────
 
-/// Persistent MCP server subprocess client.
+/// Persistent MCP server client (transport-agnostic).
+///
+/// Uses a [`Box<dyn McpTransport>`] for I/O, allowing the same protocol logic
+/// to work over stdio subprocesses, HTTP SSE connections, or any future
+/// transport.
 pub struct McpClient {
-    writer: Mutex<McpWriter>,
+    /// The underlying transport (stdio, HTTP, etc.).
+    transport: Box<dyn McpTransport>,
+    /// Monotonically increasing JSON-RPC request id.
+    next_id: AtomicU64,
     /// In-flight request map: id → response channel.
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<RpcResponse>>>>,
     /// Hard timeout for each tool call (seconds).
@@ -304,11 +183,11 @@ pub struct McpClient {
     /// Optional handler for server→client notifications. When `None`,
     /// inbound notifications are silently ignored (legacy behavior).
     /// Stored on the client for future introspection / reconnection logic;
-    /// the reader task keeps its own `Arc` clone for routing.
+    /// the router task keeps its own `Arc` clone for routing.
     #[allow(dead_code)]
     notification_handler: Option<Arc<dyn McpNotificationHandler>>,
     /// Optional proactive event channel where notification-derived events
-    /// are forwarded by the reader task.
+    /// are forwarded by the router task.
     #[allow(dead_code)]
     proactive_tx: Option<mpsc::Sender<ProactiveEvent>>,
 }
@@ -329,7 +208,7 @@ impl McpClient {
 
     /// Spawn the MCP server process and wire optional notification handling.
     ///
-    /// When `notification_handler` is `Some`, the reader task classifies each
+    /// When `notification_handler` is `Some`, the router task classifies each
     /// inbound JSON-RPC message:
     /// - **Response** (id + no method): routed to the oneshot waiter as before.
     /// - **Notification** (method + no id): passed to the handler; if the
@@ -343,38 +222,49 @@ impl McpClient {
         notification_handler: Option<Arc<dyn McpNotificationHandler>>,
         proactive_tx: Option<mpsc::Sender<ProactiveEvent>>,
     ) -> Result<(Self, Vec<McpToolDef>)> {
-        let parts: Vec<&str> = command.split_whitespace().collect();
-        let program = parts
-            .first()
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("MCP_COMMAND is empty"))?;
-        let args = &parts[1..];
+        let transport = transport::StdioTransport::spawn(command).await?;
+        Self::init_from_transport(
+            Box::new(transport),
+            tool_timeout_secs,
+            notification_handler,
+            proactive_tx,
+        )
+        .await
+    }
 
-        // Redirect server stderr to seneschal.log so it doesn't clutter TUI output.
-        let log_path = Config::log_file_path();
-        let stderr_sink = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .map(std::process::Stdio::from)
-            .unwrap_or_else(|_| std::process::Stdio::null());
+    /// Connect to an MCP server over HTTP (MCP Streamable HTTP transport).
+    ///
+    /// Performs the same initialize handshake and `tools/list` query as the
+    /// stdio variant, but communicates over HTTP POST + SSE instead of a
+    /// subprocess.
+    pub async fn connect_http(
+        url: &str,
+        tool_timeout_secs: u64,
+        notification_handler: Option<Arc<dyn McpNotificationHandler>>,
+        proactive_tx: Option<mpsc::Sender<ProactiveEvent>>,
+    ) -> Result<(Self, Vec<McpToolDef>)> {
+        let transport = transport::HttpTransport::new(url)?;
+        Self::init_from_transport(
+            Box::new(transport),
+            tool_timeout_secs,
+            notification_handler,
+            proactive_tx,
+        )
+        .await
+    }
 
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(stderr_sink)
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("MCP: failed to spawn '{}': {}", command, e))?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("MCP: no stdin handle"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("MCP: no stdout handle"))?;
+    /// Shared initialisation logic for any transport.
+    ///
+    /// Subscribes to the transport's message stream, spawns the router task,
+    /// runs the MCP initialize handshake, and queries `tools/list`.
+    async fn init_from_transport(
+        transport: Box<dyn McpTransport>,
+        tool_timeout_secs: u64,
+        notification_handler: Option<Arc<dyn McpNotificationHandler>>,
+        proactive_tx: Option<mpsc::Sender<ProactiveEvent>>,
+    ) -> Result<(Self, Vec<McpToolDef>)> {
+        // Start reading messages from the transport.
+        let mut rx = transport.subscribe().await?;
 
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<RpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -383,88 +273,75 @@ impl McpClient {
         let handler_clone = notification_handler.clone();
         let proactive_tx_clone = proactive_tx.clone();
 
-        // Reader task: parse newline-delimited JSON-RPC, route responses and
-        // (when configured) forward notifications to the proactive channel.
+        // Router task: consume parsed JSON values from the transport, classify
+        // inbound messages, and route responses / notifications accordingly.
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
-                debug!(target: "mcp", "← {line}");
-                match serde_json::from_str::<Value>(&line) {
-                    Ok(v) => {
-                        match classify_inbound(&v) {
-                            Some(Inbound::Response(id, resp)) => {
-                                let tx = pending_reader.lock().await.remove(&id);
-                                if let Some(tx) = tx {
-                                    let _ = tx.send(resp);
-                                } else {
-                                    warn!(target: "mcp", "Unexpected response for id={id}");
-                                }
-                            }
-                            Some(Inbound::Notification(notif)) => {
-                                if let (Some(handler), Some(tx)) =
-                                    (handler_clone.as_ref(), proactive_tx_clone.as_ref())
-                                {
-                                    if let Some(event) = handler.handle(&notif.method, notif.params)
-                                    {
-                                        // Non-blocking: if the channel is full
-                                        // (slow consumer) we drop the event
-                                        // and log, rather than blocking the
-                                        // reader task and stalling responses.
-                                        match tx.try_send(event) {
-                                            Ok(()) => {}
-                                            Err(mpsc::error::TrySendError::Full(ev)) => {
-                                                warn!(
-                                                    target: "mcp",
-                                                    "Proactive channel full — dropped MCP notification: {ev:?}"
-                                                );
-                                            }
-                                            Err(mpsc::error::TrySendError::Closed(ev)) => {
-                                                warn!(
-                                                    target: "mcp",
-                                                    "Proactive channel closed — dropping MCP notification: {ev:?}"
-                                                );
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Legacy path: handler not configured.
-                                    // `notifications/initialized` among others
-                                    // falls through silently here.
-                                    debug!(
-                                        target: "mcp",
-                                        "Ignoring server notification: {}",
-                                        notif.method
-                                    );
-                                }
-                            }
-                            Some(Inbound::ServerRequest) => {
-                                debug!(
-                                    target: "mcp",
-                                    "Ignoring server-initiated request \
-                                     (seneschal is not an MCP server)"
-                                );
-                            }
-                            None => {
-                                warn!(target: "mcp", "Unrecognizable JSON-RPC message: {line:?}");
-                            }
+            use tokio::sync::mpsc;
+
+            while let Some(v) = rx.recv().await {
+                match classify_inbound(&v) {
+                    Some(Inbound::Response(id, resp)) => {
+                        let tx = pending_reader.lock().await.remove(&id);
+                        if let Some(tx) = tx {
+                            let _ = tx.send(resp);
+                        } else {
+                            warn!(target: "mcp", "Unexpected response for id={id}");
                         }
                     }
-                    Err(e) => warn!(target: "mcp", "Unparseable line: {e} — raw: {line:?}"),
+                    Some(Inbound::Notification(notif)) => {
+                        if let (Some(handler), Some(tx)) =
+                            (handler_clone.as_ref(), proactive_tx_clone.as_ref())
+                        {
+                            if let Some(event) = handler.handle(&notif.method, notif.params) {
+                                // Non-blocking: if the channel is full
+                                // (slow consumer) we drop the event
+                                // and log, rather than blocking the
+                                // router task and stalling responses.
+                                match tx.try_send(event) {
+                                    Ok(()) => {}
+                                    Err(mpsc::error::TrySendError::Full(ev)) => {
+                                        warn!(
+                                            target: "mcp",
+                                            "Proactive channel full — dropped MCP notification: {ev:?}"
+                                        );
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(ev)) => {
+                                        warn!(
+                                            target: "mcp",
+                                            "Proactive channel closed — dropping MCP notification: {ev:?}"
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            // Legacy path: handler not configured.
+                            // `notifications/initialized` among others
+                            // falls through silently here.
+                            debug!(
+                                target: "mcp",
+                                "Ignoring server notification: {}",
+                                notif.method
+                            );
+                        }
+                    }
+                    Some(Inbound::ServerRequest) => {
+                        debug!(
+                            target: "mcp",
+                            "Ignoring server-initiated request \
+                             (seneschal is not an MCP server)"
+                        );
+                    }
+                    None => {
+                        warn!(target: "mcp", "Unrecognizable JSON-RPC message");
+                    }
                 }
             }
-            debug!(target: "mcp", "MCP reader task ended (server exited?)");
+            debug!(target: "mcp", "MCP router task ended (transport closed?)");
         });
 
         let client = Self {
-            writer: Mutex::new(McpWriter {
-                stdin,
-                child,
-                next_id: 0,
-            }),
+            transport,
+            next_id: AtomicU64::new(0),
             pending,
             tool_timeout_secs,
             notification_handler,
@@ -485,15 +362,37 @@ impl McpClient {
         Ok((client, tools))
     }
 
+    // ── Transport helpers ─────────────────────────────────────────────────────
+
+    /// Build a JSON-RPC request with a fresh id and send it via the transport.
+    async fn send_request(&self, method: &str, params: Value) -> Result<u64> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        self.transport.send(msg).await?;
+        Ok(id)
+    }
+
+    /// Build a JSON-RPC notification (no id) and send it via the transport.
+    async fn send_notification(&self, method: &str, params: Value) -> Result<()> {
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+        self.transport.send(msg).await
+    }
+
     // ── Protocol methods ─────────────────────────────────────────────────────
 
     /// Send `initialize` and `notifications/initialized`.
     async fn initialize(&self) -> Result<()> {
         // Send initialize request.
         let init_id = self
-            .writer
-            .lock()
-            .await
             .send_request(
                 "initialize",
                 serde_json::json!({
@@ -512,10 +411,7 @@ impl McpClient {
         debug!(target: "mcp", "initialize OK");
 
         // Send initialized notification (no response expected).
-        self.writer
-            .lock()
-            .await
-            .send_notification("notifications/initialized", serde_json::json!({}))
+        self.send_notification("notifications/initialized", serde_json::json!({}))
             .await?;
 
         Ok(())
@@ -524,9 +420,6 @@ impl McpClient {
     /// Call `tools/list` and return the tool definitions.
     async fn list_tools(&self) -> Result<Vec<McpToolDef>> {
         let id = self
-            .writer
-            .lock()
-            .await
             .send_request("tools/list", serde_json::json!({}))
             .await?;
 
@@ -563,9 +456,6 @@ impl McpClient {
     /// Call `tools/call` and return the text content of the response.
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<String> {
         let id = self
-            .writer
-            .lock()
-            .await
             .send_request(
                 "tools/call",
                 serde_json::json!({
@@ -598,24 +488,8 @@ impl McpClient {
 
     /// Send exit notification, close stdin, and wait for child to exit.
     pub async fn disconnect(self) {
-        let mut writer = self.writer.lock().await;
-        let _ = writer
-            .send_notification("exit", serde_json::json!({}))
-            .await;
-        drop(writer);
-
+        self.transport.close().await;
         self.pending.lock().await.clear();
-
-        let McpWriter { mut child, .. } = self.writer.into_inner();
-
-        match child.wait().await {
-            Ok(status) => {
-                debug!(target: "mcp", "MCP server exited with status: {}", status);
-            }
-            Err(e) => {
-                warn!(target: "mcp", "MCP server wait error: {e}");
-            }
-        }
     }
 
     // ── Internal ─────────────────────────────────────────────────────────────

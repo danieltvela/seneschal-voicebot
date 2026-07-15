@@ -151,7 +151,13 @@ ambient_buffer_minutes = 3
 ambient_buffer_max_entries = 30
 
 # ── MCP ───────────────────────────────────────────────────────────────────────
-mcp_tool_timeout_secs = 30
+# MCP servers can be defined via the [[mcp_servers]] TOML array, the MCPS env
+# var, or the legacy MCP_COMMAND env var.  Env vars take precedence over TOML.
+#
+# [[mcp_servers]]
+# name = "apple"
+# command = "bunx apple-mcp@latest"
+# tool_timeout_secs = 30
 
 # ── Self-managed LLM process ──────────────────────────────────────────────────
 llm_self_managed = false

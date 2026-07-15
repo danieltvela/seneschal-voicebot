@@ -158,9 +158,6 @@ speaker_max_profiles = 5
 ambient_buffer_minutes = 3
 ambient_buffer_max_entries = 30
 
-# ── MCP ───────────────────────────────────────────────────────────────────────
-mcp_tool_timeout_secs = 30
-
 # ── Self-managed LLM process ──────────────────────────────────────────────────
 llm_self_managed = false
 
@@ -184,3 +181,16 @@ ws_port = 9090
 # ── Plugins ───────────────────────────────────────────────────────────────────
 plugins = []
 active_plugin = ""
+
+# ── MCP servers ───────────────────────────────────────────────────────────────
+# WARNING: [[mcp_servers]] MUST be the last section in this file. The toml 0.8
+# crate drops all keys that appear after an array-of-tables at root level.
+#
+# [[mcp_servers]]
+# name = "apple"
+# command = "bunx apple-mcp@latest"
+# tool_timeout_secs = 30
+
+[[mcp_servers]]
+name = "vscode"
+url = "http://127.0.0.1:3000"

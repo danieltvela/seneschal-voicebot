@@ -28,3 +28,30 @@ Read from `.env` (dotenvy loads automatically):
 | `S_DREAM_SCHEDULED_HOUR` | `3` | Scheduled daily hour (0-23); set empty to disable |
 | `S_DREAM_L2_MIN_MESSAGES` | `50` | Min L2 messages before consolidation triggers |
 | `S_DREAM_JSONL_DIR` | `data/{env}/archives` | Directory for archived JSONL consolidation files (default: data/{env}/archives) |
+| `MCPS` | — | Comma-separated list of MCP server names. Each name is resolved via `MCP_<NAME>_COMMAND` or `MCP_<NAME>_URL`. Example: `MCPS=apple,filesystem` |
+| `MCP_<NAME>_URL` | — | **HTTP transport**: base URL for an MCP Streamable HTTP server. Takes priority over `MCP_<NAME>_COMMAND` when both are set (a warning is logged). Example: `MCP_MY_TOOL_URL=http://localhost:8080/mcp` |
+| `MCP_<NAME>_COMMAND` | — | **Stdio transport**: shell command to spawn the MCP server subprocess. Example: `MCP_APPLE_COMMAND=bunx apple-mcp@latest` |
+| `MCP_<NAME>_TIMEOUT_SECS` | `30` | Hard timeout in seconds for each tool call. Works for both HTTP and stdio transports. Example: `MCP_APPLE_TIMEOUT_SECS=120` |
+
+**Mixed stdio + HTTP example**: `MCPS=local,remote` with `MCP_LOCAL_COMMAND=bunx my-local-mcp` and `MCP_REMOTE_URL=http://remote:8080/mcp` spawns a local subprocess for `local` and connects via HTTP for `remote`.
+
+**Precedence**: If both `MCP_<NAME>_URL` and `MCP_<NAME>_COMMAND` are set for the same server, the URL variant is used and a warning is emitted. The `MCP_<NAME>_TIMEOUT_SECS` value applies regardless of transport type.
+
+## TOML Config (preferred)
+
+MCP servers can also be defined via the `[[mcp_servers]]` TOML array in your config
+file (`seneschal.{pro,dev}.toml`). This is the preferred configuration method for
+most use cases — no need for env vars beyond `SENECHAL_ENV`.
+
+```toml
+[[mcp_servers]]
+name = "apple"
+command = "bunx apple-mcp@latest"
+tool_timeout_secs = 30
+```
+
+**Precedence** (first match wins):
+1. `MCPS` env var → multi-MCP format (each server resolved via `MCP_<NAME>_*`)
+2. `MCP_COMMAND` env var → legacy single-server format
+3. `[[mcp_servers]]` TOML array
+4. No MCP servers configured (empty registry)

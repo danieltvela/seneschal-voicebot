@@ -26,7 +26,13 @@ pub struct PluginPromptConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerConfig {
     pub name: String,
+    /// Command to spawn the subprocess (for stdio transport).
+    /// One of `command` or `url` must be set, but not both.
     pub command: String,
+    /// HTTP URL (for HTTP transport).
+    /// One of `command` or `url` must be set, but not both.
+    #[serde(default)]
+    pub url: Option<String>,
     #[serde(default = "default_tool_timeout_secs")]
     pub tool_timeout_secs: u64,
 }

@@ -231,6 +231,12 @@ pub struct Config {
     #[serde(default)]
     pub agents: Vec<crate::agents::config::AgentTomlConfig>,
 
+    // ── MCP servers (TOML array) ─────────────────────────────────────────────
+    /// MCP servers defined in `[[mcp_servers]]` TOML array.
+    /// Loaded by `McpRegistry::from_config_and_env()` when no env vars are set.
+    #[serde(default)]
+    pub mcp_servers: Vec<crate::mcp::config::McpServerTomlConfig>,
+
     // ── Inference daemon ──────────────────────────────────────────────────────
     /// Enable the background "is there anything worth saying?" loop.
     pub daemon_enabled: bool,
@@ -328,14 +334,6 @@ pub struct Config {
     /// (AMBIENT_BUFFER_MAX_ENTRIES, default 30).
     pub ambient_buffer_max_entries: usize,
 
-    // ── MCP (Model Context Protocol) ─────────────────────────────────────────
-    /// Command to spawn the MCP server subprocess (MCP_COMMAND).
-    /// None = MCP disabled. Example: `bunx apple-mcp@latest`.
-    /// The server must speak stdio-transport MCP (JSON-RPC 2.0 over stdin/stdout).
-    pub mcp_command: Option<String>,
-    /// Hard timeout in seconds for each MCP tool call (MCP_TOOL_TIMEOUT_SECS, default 30).
-    pub mcp_tool_timeout_secs: u64,
-
     // ── Remote device (WebSocket) ──────────────────────────────────────────────
     /// WebSocket server port. None = disabled (WS_PORT).
     pub ws_port: Option<u16>,
@@ -348,6 +346,7 @@ pub struct Config {
     // ── Self-managed LLM process ──────────────────────────────────────────────
     /// When true, seneschal launches and supervises the LLM server process.
     /// Requires LLM_COMMAND to be set. (LLM_SELF_MANAGED, default false)
+    #[serde(default)]
     pub llm_self_managed: bool,
     /// Full shell command to launch the LLM server (LLM_COMMAND).
     /// Required when LLM_SELF_MANAGED=1.
@@ -785,14 +784,6 @@ impl Config {
         if let Ok(v) = env::var("AMBIENT_BUFFER_MAX_ENTRIES") {
             self.ambient_buffer_max_entries =
                 v.parse().context("Invalid AMBIENT_BUFFER_MAX_ENTRIES")?;
-        }
-
-        // MCP
-        if let Ok(v) = env::var("MCP_COMMAND") {
-            self.mcp_command = Some(v);
-        }
-        if let Ok(v) = env::var("MCP_TOOL_TIMEOUT_SECS") {
-            self.mcp_tool_timeout_secs = v.parse().context("Invalid MCP_TOOL_TIMEOUT_SECS")?;
         }
 
         // Remote device (WebSocket)
