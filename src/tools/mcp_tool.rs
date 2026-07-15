@@ -62,10 +62,6 @@ impl Tool for McpToolProxy {
         true
     }
 
-    fn preamble(&self) -> Option<&'static str> {
-        Some("Procesando en segundo plano.")
-    }
-
     async fn run(&self, args: &str) -> String {
         let arguments: Value =
             serde_json::from_str(args).unwrap_or(Value::Object(Default::default()));

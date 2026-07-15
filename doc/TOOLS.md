@@ -34,7 +34,6 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn parameters(&self) -> serde_json::Value;  // JSON Schema
     fn is_background(&self) -> bool;            // default: false
-    fn preamble(&self) -> Option<&'static str>; // spoken preamble for background tools
     fn is_silent(&self) -> bool;                // default: false (NoopTool only)
     fn should_force_for(&self, query: &str) -> bool; // default: false
     async fn run(&self, args: &str) -> String;
@@ -49,7 +48,6 @@ pub trait Tool: Send + Sync {
 | `description()` | Natural-language description shown to the LLM |
 | `parameters()` | JSON Schema defining expected arguments |
 | `is_background()` | If `true`, tool runs asynchronously and result arrives later |
-| `preamble()` | Text spoken aloud while a background tool runs |
 | `is_silent()` | If `true`, pipeline stops entirely and produces no audio |
 | `should_force_for()` | If `true` for a query, the tool is force-invoked bypassing LLM choice |
 | `run()` | Core execution — receives JSON args as a string, returns result text |
@@ -109,7 +107,7 @@ LLM generates response ──► emits "tool_name: {args}" in text stream
      │              │                      │
      │              ▼                      ▼
      │     tokio::spawn(tool.run())    tool.run() (sync)
-     │     speak preamble              block LLM turn
+     │     speak fallback ack              block LLM turn
      │     return immediately          inject result into LLM context
      │              │                      │
      │              ▼                      ▼
@@ -470,11 +468,11 @@ Tools are registered conditionally at startup based on configuration. The order 
 
 ### Background tools (async)
 
-| Tool | Preamble | Typical execution |
-|---|---|---|
-| `web_search` | `"Buscando en internet."` | ~2–10 s |
-| `run_shell` | `"Ejecutando el comando."` | Configurable timeout (default 30 s) |
-| `deep_research` | `"Investigando en profundidad."` | 30 s – several minutes |
-| `mcp_tool` | `"Procesando en segundo plano."` | Unpredictable (depends on MCP server) |
+| Tool | Typical execution |
+|---|---|
+| `web_search` | ~2–10 s |
+| `run_shell` | Configurable timeout (default 30 s) |
+| `deep_research` | 30 s – several minutes |
+| `mcp_tool` | Unpredictable (depends on MCP server) |
 
-Background tools are spawned via `tokio::spawn`. The pipeline immediately speaks the preamble and returns control to the user. Results arrive later through `ProactiveEvent::AgentResult`, which injects them into the conversation history. The `SubtaskTracker` keeps a running record of all background tasks so the LLM can query their status at any time via `list_tasks`.
+Background tools are spawned via `tokio::spawn`. The pipeline immediately speaks a generic acknowledgment and returns control to the user. Results arrive later through `ProactiveEvent::AgentResult`, which injects them into the conversation history. The `SubtaskTracker` keeps a running record of all background tasks so the LLM can query their status at any time via `list_tasks`.

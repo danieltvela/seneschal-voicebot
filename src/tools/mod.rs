@@ -64,12 +64,6 @@ pub trait Tool: Send + Sync {
     fn is_background(&self) -> bool {
         false
     }
-    /// Returns a short spoken preamble for background tools. The pipeline speaks
-    /// this immediately when the tool starts, before the tool finishes. If `None`,
-    /// a generic fallback is used.
-    fn preamble(&self) -> Option<&'static str> {
-        None
-    }
     /// If true, the tool's result suppresses any LLM response — the pipeline
     /// stops without sending output to the user. Used for the NOOP tool.
     fn is_silent(&self) -> bool {

@@ -329,17 +329,10 @@ pub async fn llm_task(
                 match tool_call {
                     Some((name, args)) => {
                         if tools.lock().unwrap().is_background(&name) {
-                            let tool_for_preamble = tools.lock().unwrap().get_tool_arc(&name);
-                            // Use model's own text if present, otherwise fallback to synthetic preamble
                             let ack_text = if !llm_text.trim().is_empty() {
                                 llm_text.clone()
                             } else {
-                                tool_for_preamble
-                                    .and_then(|t| t.preamble().map(String::from))
-                                    .unwrap_or_else(|| {
-                                        "Procesando en segundo plano, le aviso al terminar."
-                                            .to_string()
-                                    })
+                                "Procesando en segundo plano, le aviso al terminar.".to_string()
                             };
                             let _ = llm_tx
                                 .send(super::frames::PipelineFrame::LLMToken {

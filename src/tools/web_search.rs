@@ -120,10 +120,6 @@ impl Tool for WebSearchTool {
         true
     }
 
-    fn preamble(&self) -> Option<&'static str> {
-        Some("Buscando en internet.")
-    }
-
     fn should_force_for(&self, query: &str) -> bool {
         is_explicit_search_request(query)
     }
