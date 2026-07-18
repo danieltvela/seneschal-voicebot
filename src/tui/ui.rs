@@ -12,9 +12,52 @@ use crate::tools::ConversationMode;
 
 const MAX_INPUT_ROWS: u16 = 4;
 
-/// Render the inline viewport pinned at the bottom of the terminal.
-/// Finalized messages live in the terminal scrollback above the viewport
-/// and are printed by `src/tui/mod.rs`.
+/// Compute layout heights for the five regions.
+///
+/// Returns `(history, streaming, prompt, input, status)`.
+/// All values sum to `total_h`, and `status` is always `1` (pinned to the last row).
+fn compute_layout_heights(
+    total_h: u16,
+    input_h: u16,
+    prompt_h: u16,
+    streaming_nonempty: bool,
+) -> (u16, u16, u16, u16, u16) {
+    let status_h = 1u16;
+    let after_status = total_h.saturating_sub(status_h);
+
+    // Clamp input to available space
+    let input_clamped = input_h.min(after_status);
+    let after_input = after_status.saturating_sub(input_clamped);
+
+    // Clamp prompt to remaining space
+    let prompt_clamped = prompt_h.min(after_input);
+    let remaining = after_input.saturating_sub(prompt_clamped);
+
+    // Split remaining between streaming and history
+    let (streaming_h, history_h) = if !streaming_nonempty || remaining < 3 {
+        (0, remaining)
+    } else {
+        let sh = (remaining / 3).max(3).min(remaining);
+        (sh, remaining.saturating_sub(sh))
+    };
+
+    (
+        history_h,
+        streaming_h,
+        prompt_clamped,
+        input_clamped,
+        status_h,
+    )
+}
+
+/// Render the fullscreen TUI.
+///
+/// The layout (top → bottom) is:
+///   1. Message history (scrollable, auto-scroll to bottom)
+///   2. Streaming preview (when assistant is speaking)
+///   3. Prompt-build display (when active)
+///   4. Text input
+///   5. Status bar (always the last row)
 pub fn render(frame: &mut Frame, app: &mut App) {
     let total = frame.area();
     let width = total.width as usize;
@@ -22,7 +65,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Input height: wraps at terminal width (no border so full width available).
     let input_height =
         input_display_lines(&app.input, width).clamp(1, MAX_INPUT_ROWS as usize) as u16;
-    let status_height = 1u16;
 
     // Prompt-build display height: show only when active.
     let prompt_active = app.prompt_build_state.lock().unwrap().is_active();
@@ -39,21 +81,31 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         0
     };
 
-    let used = prompt_height + input_height + status_height;
-    let streaming_height = if app.streaming_buffer.is_empty() {
-        0
-    } else {
-        total.height.saturating_sub(used)
-    };
+    let (history_height, streaming_height, prompt_h, input_h, status_h) = compute_layout_heights(
+        total.height,
+        input_height,
+        prompt_height,
+        !app.streaming_buffer.is_empty(),
+    );
 
-    let [streaming_area, prompt_area, input_area, status_area] = Layout::vertical([
+    let areas = Layout::vertical([
+        Constraint::Length(history_height),
         Constraint::Length(streaming_height),
-        Constraint::Length(prompt_height),
-        Constraint::Length(input_height),
-        Constraint::Length(status_height),
+        Constraint::Length(prompt_h),
+        Constraint::Length(input_h),
+        Constraint::Length(status_h),
     ])
-    .areas(total);
+    .split(total);
 
+    let history_area = areas[0];
+    let streaming_area = areas[1];
+    let prompt_area = areas[2];
+    let input_area = areas[3];
+    let status_area = areas[4];
+
+    if history_height > 0 {
+        render_history(frame, app, history_area);
+    }
     if streaming_height > 0 {
         render_streaming(frame, app, streaming_area);
     }
@@ -62,6 +114,25 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     render_input(frame, app, input_area);
     render_status(frame, app, status_area);
+}
+
+/// Render the message history, auto-scrolled to the bottom.
+fn render_history(frame: &mut Frame, app: &App, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
+
+    for msg in &app.messages {
+        let mut lines = message_lines(msg, area.width);
+        lines.push(Line::raw(""));
+        all_lines.extend(lines);
+    }
+
+    // Auto-scroll to bottom: show the last `area.height` rows.
+    let skip = all_lines.len().saturating_sub(area.height as usize);
+    let display = Text::from(all_lines[skip..].to_vec());
+    frame.render_widget(Paragraph::new(display), area);
 }
 
 /// Render the SENECHAL splash screen (blue, centered).
@@ -131,8 +202,8 @@ fn render_streaming_lines(buffer: &str, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-/// Build display lines for a finalized message (used by mod.rs for insert_before).
-pub fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
+/// Build display lines for a finalized message.
+fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
     let w = width as usize;
     let mut lines: Vec<Line<'static>> = vec![];
 
@@ -299,7 +370,6 @@ pub fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
 }
 
 /// Show the live streaming assistant text, auto-scrolled to the bottom of the area.
-#[allow(dead_code)]
 fn render_streaming(frame: &mut Frame, app: &App, area: Rect) {
     if app.streaming_buffer.is_empty() && area.height == 0 {
         return;
@@ -637,5 +707,70 @@ mod tests {
     #[test]
     fn zero_width_returns_original() {
         assert_eq!(word_wrap_plain("hello world", 0), vec!["hello world"]);
+    }
+
+    // Layout height tests
+
+    #[test]
+    fn layout_fills_total_height_idle() {
+        // total 24, input 1, prompt 0, no streaming
+        let (h, s, p, i, st) = compute_layout_heights(24, 1, 0, false);
+        assert_eq!(st, 1);
+        assert_eq!(i, 1);
+        assert_eq!(p, 0);
+        assert_eq!(s, 0);
+        assert_eq!(h, 22);
+        assert_eq!(h + s + p + i + st, 24);
+    }
+
+    #[test]
+    fn layout_status_always_one() {
+        let (_, _, _, _, st) = compute_layout_heights(30, 2, 3, true);
+        assert_eq!(st, 1);
+    }
+
+    #[test]
+    fn layout_tiny_terminal() {
+        // total 3, input 1, prompt 0, no streaming
+        let (h, s, p, i, st) = compute_layout_heights(3, 1, 0, false);
+        assert_eq!(st, 1);
+        assert_eq!(i, 1);
+        assert_eq!(p, 0);
+        assert_eq!(s, 0);
+        assert_eq!(h, 1);
+        assert_eq!(h + s + p + i + st, 3);
+    }
+
+    #[test]
+    fn layout_with_streaming_splits_remaining() {
+        // total 30, input 2, prompt 0, streaming true
+        let (h, s, p, i, st) = compute_layout_heights(30, 2, 0, true);
+        assert_eq!(st, 1);
+        assert_eq!(i, 2);
+        assert_eq!(p, 0);
+        assert!(s > 0, "streaming height should be > 0");
+        assert!(h > 0, "history height should be > 0");
+        assert_eq!(h + s + p + i + st, 30);
+    }
+
+    #[test]
+    fn layout_sum_always_equals_total() {
+        for total in 3..=60u16 {
+            for input_h in 1..=4u16 {
+                for prompt_h in 0..=6u16 {
+                    for streaming in [false, true] {
+                        let (h, s, p, i, st) =
+                            compute_layout_heights(total, input_h, prompt_h, streaming);
+                        let sum = h + s + p + i + st;
+                        assert_eq!(
+                            sum, total,
+                            "total={}, input={}, prompt={}, streaming={}",
+                            total, input_h, prompt_h, streaming
+                        );
+                        assert_eq!(st, 1);
+                    }
+                }
+            }
+        }
     }
 }

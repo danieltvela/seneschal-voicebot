@@ -829,7 +829,7 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 512, 0.3);
 
         // Build a session with enough history to trigger summarization
-        let mut session = super::super::session::LlmSession::new("Eres seneschal.", "user");
+        let mut session = super::super::session::LlmSession::new("Eres seneschal.");
         for i in 0..5 {
             session.add_user_turn(&format!("Pregunta {i} del usuario"));
             session.add_assistant_turn(&format!("Respuesta {i} del asistente"));

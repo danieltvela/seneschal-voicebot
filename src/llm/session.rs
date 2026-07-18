@@ -56,8 +56,6 @@ pub struct LlmSession {
     /// pushed as a new turn.
     pub is_user_message_pending: bool,
     cached_formatted_history: Option<String>,
-    /// Role used when `add_internal_notification()` injects a system message.
-    injection_role: String,
 }
 
 impl LlmSession {
@@ -83,14 +81,13 @@ impl LlmSession {
 
     /// Create a fresh session.
     #[allow(dead_code)]
-    pub fn new(system_prompt: &str, injection_role: &str) -> Self {
+    pub fn new(system_prompt: &str) -> Self {
         Self {
             original_system_prompt: system_prompt.to_string(),
             summary: None,
             messages: Vec::new(),
             is_user_message_pending: false,
             cached_formatted_history: None,
-            injection_role: injection_role.to_string(),
         }
     }
 
@@ -102,9 +99,8 @@ impl LlmSession {
         system_prompt: &str,
         summary: Option<&str>,
         history: &[(String, String)],
-        injection_role: &str,
     ) -> Self {
-        let mut session = Self::new(system_prompt, injection_role);
+        let mut session = Self::new(system_prompt);
         session.summary = summary.map(String::from);
         for (role, content) in history {
             match role.as_str() {
@@ -170,26 +166,9 @@ impl LlmSession {
         self.cached_formatted_history = None;
     }
 
-    /// Append an in-conversation developer turn.
-    ///
-    /// Same semantics as `add_system_turn` but with the `developer` role,
-    /// preferred by newer OpenAI APIs and supported by Gemma-4.
-    pub fn add_developer_turn(&mut self, text: &str) {
-        self.messages
-            .push(serde_json::json!({"role": "developer", "content": text}));
-        self.cached_formatted_history = None;
-    }
-
-    /// Inject an internal notification using the configured injection role.
-    ///
-    /// Dispatches to `add_user_turn`, `add_system_turn`, or `add_developer_turn`
-    /// based on `self.injection_role`. The pending flag is only set for "user".
+    /// Inject an internal notification as a system turn.
     pub fn add_internal_notification(&mut self, text: &str) {
-        match self.injection_role.as_str() {
-            "system" => self.add_system_turn(text),
-            "developer" => self.add_developer_turn(text),
-            _ => self.add_user_turn(text),
-        }
+        self.add_system_turn(text);
     }
 
     /// Append the assistant's final response for this turn.
@@ -265,7 +244,7 @@ impl LlmSession {
                 match role {
                     "user" => Some(format!("[User]: {content}")),
                     "assistant" => Some(format!("[seneschal]: {content}")),
-                    "developer" => Some(format!("[Developer]: {content}")),
+                    "system" => Some(format!("[System]: {content}")),
                     _ => None,
                 }
             })
@@ -362,11 +341,6 @@ impl LlmSession {
         self.original_system_prompt = new_prompt;
     }
 
-    /// Replace the injection role at runtime.
-    pub fn set_injection_role(&mut self, role: String) {
-        self.injection_role = role;
-    }
-
     // ── Private helpers ────────────────────────────────────────────────────────
 
     fn system_content(&self) -> String {
@@ -386,7 +360,7 @@ mod tests {
 
     /// Build a session with `n` user+assistant turn pairs.
     fn session_with_turns(n: usize) -> LlmSession {
-        let mut s = LlmSession::new("System prompt.", "user");
+        let mut s = LlmSession::new("System prompt.");
         for i in 0..n {
             s.add_user_turn(&format!("User message {i}"));
             s.add_assistant_turn(&format!("Assistant response {i}"));
@@ -399,7 +373,7 @@ mod tests {
     #[test]
     fn needs_summarization_false_when_too_few_messages() {
         // Fewer than 4 messages always returns false regardless of size.
-        let mut s = LlmSession::new("System.", "user");
+        let mut s = LlmSession::new("System.");
         s.add_user_turn("Hello");
         s.add_assistant_turn("Hi");
         assert!(!s.needs_summarization(1)); // tiny limit, still false
@@ -417,7 +391,7 @@ mod tests {
         // → total_chars > context_tokens * 2.625
         // With context=100: need > 262 chars. Each turn pair ≈ 40 chars × 6 pairs = 240+.
         let long = "x".repeat(50);
-        let mut s = LlmSession::new("sys", "user");
+        let mut s = LlmSession::new("sys");
         for _ in 0..6 {
             s.add_user_turn(&long);
             s.add_assistant_turn(&long);
@@ -490,7 +464,7 @@ mod tests {
 
     #[test]
     fn all_messages_no_summary_returns_plain_system() {
-        let mut s = LlmSession::new("Base prompt.", "user");
+        let mut s = LlmSession::new("Base prompt.");
         s.add_user_turn("Hello");
         let msgs = s.all_messages();
         assert_eq!(msgs[0].role, "system");
@@ -500,7 +474,7 @@ mod tests {
 
     #[test]
     fn all_messages_injects_summary_into_system_message() {
-        let mut s = LlmSession::new("Base prompt.", "user");
+        let mut s = LlmSession::new("Base prompt.");
         s.add_user_turn("Hello");
         s.add_assistant_turn("Hi");
         s.apply_summary("User greeted the assistant.", 2);
@@ -527,7 +501,7 @@ mod tests {
 
     #[test]
     fn all_messages_api_includes_tool_exchanges() {
-        let mut s = LlmSession::new("System.", "user");
+        let mut s = LlmSession::new("System.");
         s.add_user_turn("Activa el modo ambiente");
         s.add_tool_exchange(vec![
             serde_json::json!({
@@ -560,7 +534,7 @@ mod tests {
             ("User".to_string(), "Hello".to_string()),
             ("Assistant".to_string(), "Hi".to_string()),
         ];
-        let s = LlmSession::from_history("System.", None, &history, "user");
+        let s = LlmSession::from_history("System.", None, &history);
         assert_eq!(s.messages.len(), 2);
         let msgs = s.all_messages();
         assert_eq!(msgs[0].content, "System.");
@@ -572,12 +546,7 @@ mod tests {
             ("User".to_string(), "Latest question".to_string()),
             ("Assistant".to_string(), "Latest answer".to_string()),
         ];
-        let s = LlmSession::from_history(
-            "System.",
-            Some("Old conversation summary."),
-            &history,
-            "user",
-        );
+        let s = LlmSession::from_history("System.", Some("Old conversation summary."), &history);
         assert_eq!(s.messages.len(), 2);
         let msgs = s.all_messages();
         assert!(msgs[0].content.contains("[CONVERSATION SUMMARY]"));
@@ -592,7 +561,7 @@ mod tests {
             ("Unknown".to_string(), "Ignored".to_string()),
             ("Assistant".to_string(), "Hi".to_string()),
         ];
-        let s = LlmSession::from_history("System.", None, &history, "user");
+        let s = LlmSession::from_history("System.", None, &history);
         assert_eq!(s.messages.len(), 2); // Unknown role skipped
     }
 
@@ -635,7 +604,7 @@ mod tests {
     #[test]
     fn needs_consolidation_respects_threshold_percentage() {
         let long = "x".repeat(50);
-        let mut s = LlmSession::new("sys", "user");
+        let mut s = LlmSession::new("sys");
         for _ in 0..6 {
             s.add_user_turn(&long);
             s.add_assistant_turn(&long);
@@ -648,7 +617,7 @@ mod tests {
 
     #[test]
     fn needs_consolidation_false_when_few_messages() {
-        let mut s = LlmSession::new("System.", "user");
+        let mut s = LlmSession::new("System.");
         s.add_user_turn("Hello");
         s.add_assistant_turn("Hi");
         assert!(!s.needs_consolidation(1, 50));
@@ -658,7 +627,7 @@ mod tests {
 
     #[test]
     fn set_system_prompt_replaces_original() {
-        let mut s = LlmSession::new("Old prompt.", "user");
+        let mut s = LlmSession::new("Old prompt.");
         s.add_user_turn("Hello");
         s.set_system_prompt("New prompt with [MEMORIES].".to_string());
 
@@ -669,7 +638,7 @@ mod tests {
 
     #[test]
     fn set_system_prompt_preserves_summary() {
-        let mut s = LlmSession::new("Base.", "user");
+        let mut s = LlmSession::new("Base.");
         s.add_user_turn("Hello");
         s.add_assistant_turn("Hi");
         s.apply_summary("Summary text.", 2);
@@ -685,7 +654,7 @@ mod tests {
 
     #[test]
     fn update_last_user_turn_appends_when_pending() {
-        let mut s = LlmSession::new("sys", "user");
+        let mut s = LlmSession::new("sys");
         s.add_user_turn("foo");
         assert!(s.update_last_user_turn(" bar"));
         assert_eq!(s.messages.len(), 1);
@@ -695,7 +664,7 @@ mod tests {
 
     #[test]
     fn update_last_user_turn_returns_false_after_assistant() {
-        let mut s = LlmSession::new("sys", "user");
+        let mut s = LlmSession::new("sys");
         s.add_user_turn("foo");
         s.add_assistant_turn("ok");
         assert!(!s.is_user_message_pending);

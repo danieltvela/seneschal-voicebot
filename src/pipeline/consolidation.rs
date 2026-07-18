@@ -258,17 +258,17 @@ pub async fn run_consolidation_cycle(
             s.apply_summary(summary_text, keep_turns);
         }
         s.set_system_prompt(new_system_prompt);
-        // Re-inject prompt-build developer message if mode is still active after consolidation.
+        // Re-inject prompt-build system message if mode is still active after consolidation.
         let pb_state = prompt_build_state.lock().unwrap();
         if pb_state.is_active() {
-            let has_dev_msg = s.messages.iter().any(|m| {
+            let has_pb_msg = s.messages.iter().any(|m| {
                 m.get("content")
                     .and_then(|c| c.as_str())
                     .map(|c| c.contains("[PROMPT-BUILD MODE ACTIVE]"))
                     .unwrap_or(false)
             });
-            if !has_dev_msg {
-                s.add_developer_turn(
+            if !has_pb_msg {
+                s.add_system_turn(
                     "[PROMPT-BUILD MODE ACTIVE] You are in prompt-build mode. \
                      User messages are instructions to modify the prompt. \
                      After changes, call set_prompt_build(action: \"update\"). \

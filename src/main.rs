@@ -714,7 +714,6 @@ async fn async_main() -> Result<()> {
         &system_prompt,
         summary.as_deref(),
         &history,
-        &config.llm_injection_role,
     )));
 
     // ── Self-managed LLM process ──────────────────────────────────────────────
@@ -1946,7 +1945,7 @@ mod tests {
         );
 
         let system_prompt = "You are a helpful assistant.";
-        let mut session = crate::llm::LlmSession::new(system_prompt, "user");
+        let mut session = crate::llm::LlmSession::new(system_prompt);
 
         let turns = vec![
             (
@@ -2055,7 +2054,7 @@ mod tests {
         let session_id = db.get_or_create_session().await.unwrap();
 
         let system_prompt = "You are a helpful assistant. Answer briefly.";
-        let mut session = crate::llm::LlmSession::new(system_prompt, "user");
+        let mut session = crate::llm::LlmSession::new(system_prompt);
 
         println!("\n✓ kv_cache test setup complete (extend as needed)");
     }

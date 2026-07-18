@@ -155,9 +155,6 @@ pub struct Config {
     /// When true, `chat_template_kwargs: {"enable_thinking": true}` is sent and
     /// `<think>…</think>` blocks are stripped from the output.
     pub llm_thinking: bool,
-    /// Role for internal message injection into the LLM conversation.
-    /// Must be "user", "system", or "developer". Default: "developer". (LLM_INJECTION_ROLE)
-    pub llm_injection_role: String,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
     /// TTS backend: "avspeech" (default, native AVSpeechSynthesizer, --features avspeech)
@@ -690,9 +687,6 @@ impl Config {
         if let Ok(v) = env::var("LLM_THINKING") {
             self.llm_thinking = v == "1" || v.to_lowercase() == "true";
         }
-        if let Ok(v) = env::var("LLM_INJECTION_ROLE") {
-            self.llm_injection_role = v.to_lowercase();
-        }
 
         // Secondary LLM
         if let Ok(v) = env::var("SECONDARY_LLM_URL") {
@@ -882,16 +876,6 @@ impl Config {
             anyhow::bail!("Invalid S_DREAM_SCHEDULED_HOUR: {hour}. Must be between 0 and 23.");
         }
 
-        if !matches!(
-            self.llm_injection_role.as_str(),
-            "user" | "system" | "developer"
-        ) {
-            anyhow::bail!(
-                "Invalid LLM_INJECTION_ROLE '{}'. Supported values: user, system, developer",
-                self.llm_injection_role
-            );
-        }
-
         Ok(())
     }
 
@@ -949,7 +933,7 @@ mod tests {
         let prompt = "Eres seneschal, el asistente personal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
-            let session = LlmSession::new(&config.llm_system_prompt, "user");
+            let session = LlmSession::new(&config.llm_system_prompt);
             let msgs = session.all_messages();
 
             assert_eq!(msgs[0].role, "system");
@@ -962,7 +946,7 @@ mod tests {
         let prompt = "Eres seneschal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
-            let mut session = LlmSession::new(&config.llm_system_prompt, "user");
+            let mut session = LlmSession::new(&config.llm_system_prompt);
             session.add_user_turn("Hola");
             session.add_assistant_turn("Hola, señor.");
             session.add_user_turn("¿Qué hora es?");
@@ -991,7 +975,7 @@ mod tests {
             let system_prompt = config.llm_system_prompt.clone();
 
             // Step 3: create session (mirrors main.rs line 95-100)
-            let mut session = LlmSession::new(&system_prompt, "user");
+            let mut session = LlmSession::new(&system_prompt);
             session.add_user_turn("¿Qué hora es?");
 
             // Step 4: verify the payload that would be sent to the LLM
@@ -1011,7 +995,7 @@ mod tests {
         let prompt = "Eres seneschal.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
-            let mut session = LlmSession::new(&config.llm_system_prompt, "user");
+            let mut session = LlmSession::new(&config.llm_system_prompt);
 
             for i in 0..5 {
                 session.add_user_turn(&format!("Mensaje {i}"));
@@ -1031,7 +1015,7 @@ mod tests {
         let prompt = "Eres seneschal, el asistente.";
         temp_env::with_var("LLM_SYSTEM_PROMPT", Some(prompt), || {
             let config = Config::from_env().unwrap();
-            let mut session = LlmSession::new(&config.llm_system_prompt, "user");
+            let mut session = LlmSession::new(&config.llm_system_prompt);
 
             for i in 0..5 {
                 session.add_user_turn(&format!("Pregunta {i}"));

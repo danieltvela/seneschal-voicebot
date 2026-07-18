@@ -77,11 +77,6 @@ REGLAS
 llm_temperature = 0.3
 llm_thinking = false
 
-# ── Message injection ────────────────────────────────────────────────────────
-# Role for internal messages injected into the LLM conversation.
-# "user" = max compatibility, "system" = Gemma-4, "developer" = OpenAI preferred.
-llm_injection_role = "user"
-
 # ── TTS ───────────────────────────────────────────────────────────────────────
 tts_provider = "kokoro"
 avspeech_voice = ""

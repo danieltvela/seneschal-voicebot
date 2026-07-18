@@ -449,12 +449,12 @@ pub async fn llm_task(
                         };
                         info!(target: "pipeline", "Tool[{}] `{}` → {}", iter, name, result);
 
-                        // Inject prompt-build developer message exactly once, when "start" action is called.
+                        // Inject prompt-build system message exactly once, when "start" action is called.
                         if name == "set_prompt_build"
                             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&args)
                             && parsed["action"].as_str() == Some("start")
                         {
-                            llm_session.lock().unwrap().add_developer_turn(
+                            llm_session.lock().unwrap().add_system_turn(
                                 "[PROMPT-BUILD MODE ACTIVE] You are in prompt-build mode. \
                                  User messages are instructions to modify the prompt. \
                                  After changes, call set_prompt_build(action: \"update\"). \

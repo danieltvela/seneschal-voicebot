@@ -548,7 +548,7 @@ mod tests {
 
         let profile_ctx = build_profile_context(&facts);
         let system_prompt = format!("{base_prompt}{profile_ctx}");
-        let session = LlmSession::new(&system_prompt, "user");
+        let session = LlmSession::new(&system_prompt);
 
         let msgs = session.all_messages();
         assert_eq!(msgs[0].role, "system");
@@ -568,7 +568,7 @@ mod tests {
         ];
 
         let system_prompt = format!("{base_prompt}{}", build_profile_context(&facts));
-        let session = LlmSession::new(&system_prompt, "user");
+        let session = LlmSession::new(&system_prompt);
 
         let msgs = session.all_messages();
         assert!(msgs[0].content.contains("name: Daniel"));
@@ -580,7 +580,7 @@ mod tests {
         let base_prompt = "Eres seneschal.";
         let profile_ctx = build_profile_context(&[]);
         let system_prompt = format!("{base_prompt}{profile_ctx}");
-        let session = LlmSession::new(&system_prompt, "user");
+        let session = LlmSession::new(&system_prompt);
 
         let msgs = session.all_messages();
         assert_eq!(msgs[0].content, base_prompt);
@@ -643,7 +643,7 @@ mod tests {
 
         // Step 3: inject into the next session's system prompt
         let base = "Eres seneschal, el asistente de Daniel.";
-        let session = LlmSession::new(&format!("{base}{profile_ctx}"), "user");
+        let session = LlmSession::new(&format!("{base}{profile_ctx}"));
         let msgs = session.all_messages();
 
         assert_eq!(msgs[0].role, "system");

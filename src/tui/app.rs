@@ -51,8 +51,6 @@ pub struct App {
     pub conv_mode: Arc<Mutex<ConversationMode>>,
     /// Shared prompt-build state — read each render tick directly from the pipeline.
     pub prompt_build_state: Arc<Mutex<PromptBuildState>>,
-    /// Index of the last message already printed into terminal scrollback.
-    pub last_printed_index: usize,
 }
 
 impl App {
@@ -70,7 +68,6 @@ impl App {
             conv_mode,
             prompt_build_state,
             should_quit: false,
-            last_printed_index: 0,
         }
     }
 

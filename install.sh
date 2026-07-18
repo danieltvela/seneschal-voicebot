@@ -1498,10 +1498,6 @@ device_monitor_poll_secs = 5
 # LLM
 $_llm_config
 
-# Message injection role: "developer" (preferred), "system", or "user"
-# "user" is implemented by most of providers, the rest requires validaton (vLLM is OK, LM Studio is not).
-llm_injection_role = "user"
-
 # Web Search (quick_search tool)
 ${_SEARCH_CONFIG:-brave_public_search_enabled = true}
 

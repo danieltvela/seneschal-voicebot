@@ -120,11 +120,10 @@ data: [DONE]
 
 | Role | Uso |
 |------|-----|
-| `system` | System prompt ensamblado (~4-8 KB) |
-| `user` | Transcripcion del usuario + notificaciones internas (default `LLM_INJECTION_ROLE`) |
+| `system` | System prompt ensamblado (~4-8 KB) + notificaciones internas |
+| `user` | Transcripcion del usuario |
 | `assistant` | Respuestas previas (con `tool_calls` opcional) |
 | `tool` | Resultado de herramienta (con `tool_call_id`) |
-| `developer` | Notificaciones internas (alternativa configurable) |
 
 ### 3.5 Multimodal
 
@@ -386,7 +385,6 @@ Daemon en background:
 | `llm_max_tokens` | `LLM_MAX_TOKENS` | 400 | Max tokens por respuesta |
 | `llm_temperature` | `LLM_TEMPERATURE` | 0.3 | Sampling temp |
 | `llm_thinking` | `LLM_THINKING` | false | Qwen3 thinking mode |
-| `llm_injection_role` | `LLM_INJECTION_ROLE` | `"user"` | Role para mensajes internos |
 | `llm_context_tokens` | `LLM_CONTEXT_TOKENS` | 8192 | Tamano de contexto |
 | `llm_summary_keep_turns` | `LLM_SUMMARY_KEEP_TURNS` | 6 | Turnos a conservar tras consolidacion |
 | `llm_consolidation_threshold_pct` | `LLM_CONSOLIDATION_THRESHOLD_PCT` | 80 | % umbral consolidacion |
@@ -449,7 +447,7 @@ El base prompt, tool section y agent section son en **espanol**. El LLM debe:
 |---|-----------|---------|
 | 1 | API OpenAI-compatible | `/v1/chat/completions` POST, streaming SSE, `/v1/models` GET |
 | 2 | Function calling nativo | `tool_calls` en delta SSE + `finish_reason: "tool_calls"` |
-| 3 | Roles de mensaje | `system`, `user`, `assistant`, `tool`, `developer` |
+| 3 | Roles de mensaje | `system`, `user`, `assistant`, `tool` |
 | 4 | Multimodal | `image_url` + texto (vision) |
 | 5 | Contexto >= 8192 | Configurable hasta 32K+ |
 | 6 | Streaming + non-streaming | Conversacion stream, resumen/extraccion non-stream |
