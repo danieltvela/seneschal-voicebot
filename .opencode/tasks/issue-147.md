@@ -74,6 +74,6 @@
 
 ## Phase 4: Manual verification notes
 
-- [ ] Step 4.1: Document manual check on the PR/issue
+- [x] Step 4.1: Document manual check on the PR/issue
   - File(s): none
   - Acceptance criteria: checklist confirmed when closing #147.
