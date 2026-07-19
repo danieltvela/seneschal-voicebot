@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 160" role="img" width="660" height="160">
+  <title>Seneschal logo — banner icon and wordmark</title>
+  <desc>Horizontal lockup: the white banner of the Steward of Gondor to the left of the "Seneschal" wordmark. Uses currentColor so it adapts to light/dark backgrounds; set the SVG `color` to #FFFFFF on dark fields, or #0B1220 on light fields.</desc>
+
+  <style>
+    .wm {
+      font-family: "Inter", "Work Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-weight: 600;
+      font-size: 78px;
+      letter-spacing: 1px;
+      fill: currentColor;
+    }
+  </style>
+
+  <!-- Icon: plain white standard on a hanging bar (swallowtail, no emblem) -->
+  <g fill="currentColor" transform="translate(24,32)">
+    <rect x="30" y="0" width="68" height="4" rx="2"/>
+    <path d="M34 6 H94 V74 L64 62 L34 74 Z"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text class="wm" x="150" y="104">Seneschal</text>
+</svg>

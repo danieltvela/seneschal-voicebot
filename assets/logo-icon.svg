@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" width="512" height="512" fill="none">
+  <title>Seneschal icon — the white banner of the Steward of Gondor</title>
+  <desc>A plain white standard on a hanging bar, swallowtail lower edge, no house emblem — the sigil of the Steward of Gondor. Designed for an AI voice assistant that serves the user as its king.</desc>
+
+  <!--
+    Icon only. The banner is drawn as `currentColor` so it adapts to any
+    background (light or dark). For a faithful "white banner" on dark UIs,
+    set the SVG `color` to #FFFFFF. For dark-on-light, set it to #0B1220.
+  -->
+  <g fill="currentColor">
+    <!-- Banner hanging bar -->
+    <rect x="30" y="30" width="68" height="4" rx="2"/>
+    <!-- Plain white standard with swallowtail (no shield / no emblem) -->
+    <path d="M34 36 H94 V104 L64 92 L34 104 Z"/>
+  </g>
+</svg>
