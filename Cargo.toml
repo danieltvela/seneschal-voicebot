@@ -2,9 +2,9 @@
 name = "seneschal"
 version = "0.1.0"
 edition = "2024"
-repository = "https://github.com/danielvela/seneschal"
-homepage = "https://github.com/danielvela/seneschal"
-documentation = "https://github.com/danielvela/seneschal"
+repository = "https://github.com/danieltvela/seneschal-voicebot"
+homepage = "https://seneschal.veladan.org/"
+documentation = "https://github.com/danieltvela/seneschal-voicebot"
 
 [dependencies]
 # Async runtime

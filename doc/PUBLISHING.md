@@ -4,7 +4,7 @@ This document explains how to build and publish a new seneschal release so that
 users can install it with:
 
 ```sh
-curl -fsSL https://github.com/danielvela/seneschal/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/danieltvela/seneschal-voicebot/releases/latest/download/install.sh | sh
 ```
 
 ---
@@ -77,7 +77,7 @@ parallel using native GitHub runners (no cross-compilation, no Docker).
    progress.  Four jobs run in parallel (~10–15 min on GitHub's free runners).
 
 6. Once all jobs succeed, a GitHub Release is created automatically at
-   `https://github.com/danielvela/seneschal/releases/tag/v1.2.0`.
+   `https://github.com/danieltvela/seneschal-voicebot/releases/tag/v1.2.0`.
 
 ### Pre-releases
 
@@ -87,7 +87,7 @@ automatically marked as **pre-release** on GitHub and are **not** served by the
 
 ```sh
 SENECHAL_VERSION=v1.2.0-beta.1 \
-curl -fsSL https://github.com/danielvela/seneschal/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/danieltvela/seneschal-voicebot/releases/latest/download/install.sh | sh
 ```
 
 ---

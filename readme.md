@@ -31,7 +31,7 @@ The installer downloads all required models and sets up a working configuration.
 #### 1. Clone the repository
 
 ```bash
-git clone https://github.com/danielvela/seneschal.git
+git clone https://github.com/danieltvela/seneschal-voicebot.git
 cd seneschal
 ```
 

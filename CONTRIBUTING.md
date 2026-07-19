@@ -45,7 +45,7 @@ Seneschal follows a simple code of conduct:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone the repository
-git clone https://github.com/danielvela/seneschal.git
+git clone https://github.com/danieltvela/seneschal-voicebot.git
 cd seneschal
 
 # Set up your environment variables
