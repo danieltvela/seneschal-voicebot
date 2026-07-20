@@ -127,8 +127,8 @@ impl AvSpeechTts {
 
             println!("Available voices for TTS provider: avspeech");
             println!(
-                "{:<30} {:<10} {:<10} {:<12} {}",
-                "Name", "Language", "Quality", "Gender", "Identifier"
+                "{:<30} {:<10} {:<10} {:<12} Identifier",
+                "Name", "Language", "Quality", "Gender"
             );
             println!("{}", "-".repeat(100));
             for (name, lang, quality, gender, identifier) in &entries {

@@ -1646,6 +1646,11 @@ async fn async_main() -> Result<()> {
                                 // NoSpeechGate: reject non-speech transcriptions
                                 if no_speech_gate.should_reject(&quality) {
                                     debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
+                                    t_speech_start = None;
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(tui::events::TuiEvent::StateChange(
+                                        tui::events::PipelineState::Idle,
+                                    )).ok();
                                     continue;
                                 }
 
@@ -1655,6 +1660,11 @@ async fn async_main() -> Result<()> {
 
                                 if segment_duration_ms < MIN_SPEECH_DURATION_MS {
                                     debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
+                                    t_speech_start = None;
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(tui::events::TuiEvent::StateChange(
+                                        tui::events::PipelineState::Idle,
+                                    )).ok();
                                     continue;
                                 }
 

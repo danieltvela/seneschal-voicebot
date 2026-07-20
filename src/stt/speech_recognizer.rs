@@ -268,8 +268,8 @@ impl SpeechRecognizerSttProvider {
 
                 // Short-utterance fallback: ≥1 speech probe already seen (we're in
                 // accumulating), then a full silence window → finalize without confirm.
-                let short_silence_probes = (self.silence_samples_threshold + VAD_PROBE_SAMPLES - 1)
-                    / VAD_PROBE_SAMPLES;
+                let short_silence_probes =
+                    self.silence_samples_threshold.div_ceil(VAD_PROBE_SAMPLES);
                 if self.accum_silence_probes >= short_silence_probes.max(1) {
                     let buf = std::mem::take(&mut self.accum_buf);
                     self.accumulating = false;

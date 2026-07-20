@@ -73,7 +73,7 @@
 
 ## Phase 2: main.rs robustness (unstick LISTENING on rejected/empty final)
 
-- [ ] Step 2.1: Send TUI Idle when a `SpeechEnd` is rejected or too short
+- [x] Step 2.1: Send TUI Idle when a `SpeechEnd` is rejected or too short
   - File(s): `src/main.rs`
   - Change: In the `SpeechEvent::SpeechEnd(quality)` arm, there are two early `continue` paths:
     - `if no_speech_gate.should_reject(&quality) { ... continue; }`
@@ -81,7 +81,7 @@
     Before each `continue`, send `tui_tx.send(tui::events::TuiEvent::StateChange(tui::events::PipelineState::Idle)).ok();` so the TUI status bar returns to IDLE instead of being stuck on LISTENING. (This benefits all providers, not just speech — today a rejected `SpeechEnd` can leave LISTENING stuck.)
   - Acceptance criteria: When a transcription is rejected by `NoSpeechGate` or is too short (e.g. the empty `SpeechEnd` from Step 1.6, or a cough), the TUI status returns to `● IDLE`. `cargo clippy --features speech,tui,control,remote -- -D warnings` passes.
 
-- [ ] Step 2.2: Build + lint full feature set
+- [x] Step 2.2: Build + lint full feature set
   - File(s): none
   - Change: Run `cargo build --features control,speech,avspeech,tui,parakeet,remote` and `cargo clippy --features control,speech,avspeech,tui,parakeet,remote --all-targets -- -D warnings`.
   - Acceptance criteria: both green (this is the exact feature set the user runs via `mac-seneschal.sh`).
