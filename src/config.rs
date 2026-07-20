@@ -227,6 +227,13 @@ pub struct Config {
     /// Maximum backoff cap in seconds (AGENT_ACP_RESTART_MAX_BACKOFF_SECS, default 60).
     pub agent_acp_restart_max_backoff_secs: u64,
 
+    // ── Visible agent sessions (PTY) ──────────────────────────────────────────
+    /// Directory for visible session log files (SENECHAL_SESSION_DIR, default "/tmp/seneschal_sessions").
+    pub session_dir: String,
+    /// Enable visible agent mode (VISIBLE_AGENT_ENABLED, default false).
+    /// When true, agents with mode="visible" are accepted.
+    pub visible_agent_enabled: bool,
+
     // ── Agent delegation (TOML array) ────────────────────────────────────────
     /// External agents defined in `[[agents]]` TOML array.
     /// Loaded by `AgentRegistry::from_config_and_env()` when no env vars are set.
@@ -673,6 +680,14 @@ impl Config {
             self.agent_acp_restart_max_backoff_secs = v
                 .parse()
                 .context("Invalid AGENT_ACP_RESTART_MAX_BACKOFF_SECS")?;
+        }
+
+        // Visible agent sessions
+        if let Ok(v) = env::var("SENECHAL_SESSION_DIR") {
+            self.session_dir = v;
+        }
+        if let Ok(v) = env::var("VISIBLE_AGENT_ENABLED") {
+            self.visible_agent_enabled = v == "1" || v.to_lowercase() == "true";
         }
 
         // Inference daemon
