@@ -91,6 +91,8 @@ pub struct Config {
     // ── VAD ───────────────────────────────────────────────────────────────────
     /// Milliseconds of continuous silence before SpeechEnd fires.
     /// Lower = faster response; higher = fewer false cuts mid-sentence.
+    /// With STT_PROVIDER=speech this also controls the short-utterance silence window:
+    /// unconfirmed speech followed by this much silence is still fed to STT.
     pub vad_silence_ms: u32,
     /// Speech probability threshold to start a segment (silence -> speech).
     pub vad_start_threshold: f32,
@@ -98,9 +100,12 @@ pub struct Config {
     pub vad_end_threshold: f32,
     /// Path to Silero VAD model file (.bin) used by whisper-cpp-plus
     pub vad_model: String,
-    /// Minimum consecutive speech probes (200ms each) required before VAD commits to STT.
-    /// Prevents brief sounds (coughs, throat-clearing) from triggering transcription.
-    /// Default: 2 (400ms of sustained speech-like signal). Set to 1 to disable.
+    /// Minimum consecutive speech probes required before VAD *commits* to full STT.
+    /// With STT_PROVIDER=speech, probes are 100ms each; SpeechStart (barge-in) fires on
+    /// the first speech probe regardless. Utterances below this count are still
+    /// transcribed via the short-utterance fallback (so short answers like "yes"/"Vale"
+    /// work). Coughs/noise are rejected by NoSpeechGate after STT.
+    /// Default: 2. Set to 1 to confirm on the second probe (first starts accumulation).
     pub vad_confirm_probes: usize,
 
     // ── Language ─────────────────────────────────────────────────────────────

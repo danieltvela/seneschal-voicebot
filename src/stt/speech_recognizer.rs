@@ -52,6 +52,87 @@ enum VadAction {
     Discard,
 }
 
+/// Decision from pure accumulator bookkeeping (no VAD model required).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccumDecision {
+    /// Reached `confirm_probes` consecutive speech probes.
+    Confirmed,
+    /// Silence window after unconfirmed speech → short-utterance finalize.
+    ShortFinalize,
+    /// Hit `MAX_ACCUM_PROBES` without confirming or short-finalizing.
+    Discard,
+    /// Keep accumulating.
+    Continue,
+}
+
+/// Tracks consecutive speech/silence probes while waiting for VAD confirmation.
+/// Pure logic — unit-testable without Silero or Apple STT.
+#[derive(Debug, Clone)]
+struct AccumTracker {
+    confirm_probes: usize,
+    short_silence_probes: usize,
+    consecutive_speech_probes: usize,
+    silence_probes: usize,
+    probes_total: usize,
+}
+
+impl AccumTracker {
+    fn new(confirm_probes: usize, silence_samples_threshold: usize) -> Self {
+        Self {
+            confirm_probes: confirm_probes.max(1),
+            short_silence_probes: silence_samples_threshold
+                .div_ceil(VAD_PROBE_SAMPLES)
+                .max(1),
+            consecutive_speech_probes: 0,
+            silence_probes: 0,
+            probes_total: 0,
+        }
+    }
+
+    /// Record the first speech probe that started accumulation.
+    /// Does not return Confirmed (SpeechStart is emitted separately as AccumStarted).
+    fn begin_speech(&mut self) {
+        self.consecutive_speech_probes = 1;
+        self.silence_probes = 0;
+        self.probes_total = 1;
+    }
+
+    fn reset(&mut self) {
+        self.consecutive_speech_probes = 0;
+        self.silence_probes = 0;
+        self.probes_total = 0;
+    }
+
+    /// Process one subsequent probe while accumulating.
+    fn on_probe(&mut self, is_speech: bool) -> AccumDecision {
+        self.probes_total += 1;
+
+        if is_speech {
+            self.silence_probes = 0;
+            self.consecutive_speech_probes += 1;
+        } else {
+            self.consecutive_speech_probes = 0;
+            self.silence_probes += 1;
+        }
+
+        if self.probes_total >= MAX_ACCUM_PROBES {
+            self.reset();
+            return AccumDecision::Discard;
+        }
+
+        if is_speech && self.consecutive_speech_probes >= self.confirm_probes {
+            return AccumDecision::Confirmed;
+        }
+
+        if !is_speech && self.silence_probes >= self.short_silence_probes {
+            self.reset();
+            return AccumDecision::ShortFinalize;
+        }
+
+        AccumDecision::Continue
+    }
+}
+
 /// STT provider using macOS SFSpeechRecognizer via the `speech` crate.
 ///
 /// Hybrid architecture: Silero VAD gates audio feeding and drives endpointing.
@@ -78,12 +159,9 @@ pub struct SpeechRecognizerSttProvider {
     post_roll_remaining: usize,
 
     vad_confirm_probes: usize,
-    consecutive_speech_probes: usize,
     accumulating: bool,
     accum_buf: Vec<f32>,
-    accum_probes_total: usize,
-    /// Consecutive silence probes while accumulating (short-utterance fallback).
-    accum_silence_probes: usize,
+    accum: AccumTracker,
     probe_carry: Vec<f32>,
 }
 
@@ -168,11 +246,9 @@ impl SpeechRecognizerSttProvider {
             silence_samples_threshold,
             post_roll_remaining: 0,
             vad_confirm_probes,
-            consecutive_speech_probes: 0,
             accumulating: false,
             accum_buf: Vec::new(),
-            accum_probes_total: 0,
-            accum_silence_probes: 0,
+            accum: AccumTracker::new(vad_confirm_probes, silence_samples_threshold),
             probe_carry: Vec::with_capacity(VAD_PROBE_SAMPLES),
         })
     }
@@ -224,75 +300,63 @@ impl SpeechRecognizerSttProvider {
             VadAction::Feed(chunk.to_vec())
         } else if self.accumulating {
             self.accum_buf.extend_from_slice(chunk);
-            self.accum_probes_total += 1;
 
             let is_speech = avg_prob >= self.vad_start_threshold;
-            if is_speech {
-                self.accum_silence_probes = 0;
-            } else {
-                self.accum_silence_probes += 1;
+            let prev_consec = self.accum.consecutive_speech_probes;
+            let decision = self.accum.on_probe(is_speech);
+
+            if !is_speech && prev_consec > 0 {
+                debug!(
+                    target: "stt",
+                    "Accum reset: {} consecutive, needed {} (prob={:.3})",
+                    prev_consec,
+                    self.vad_confirm_probes,
+                    avg_prob
+                );
             }
 
-            if self.accum_probes_total >= MAX_ACCUM_PROBES {
-                debug!(target: "stt", "Accum timeout after {} probes", self.accum_probes_total);
-                self.reset_accum();
-                return VadAction::Discard;
-            }
-
-            if is_speech {
-                self.consecutive_speech_probes += 1;
-                if self.consecutive_speech_probes >= self.vad_confirm_probes {
+            match decision {
+                AccumDecision::Discard => {
+                    debug!(
+                        target: "stt",
+                        "Accum timeout after {} probes",
+                        MAX_ACCUM_PROBES
+                    );
+                    self.reset_accum();
+                    VadAction::Discard
+                }
+                AccumDecision::Confirmed => {
                     let buf = std::mem::take(&mut self.accum_buf);
+                    let confirmed_probes = self.accum.consecutive_speech_probes;
                     self.in_speech = true;
                     self.accumulating = false;
-                    self.accum_silence_probes = 0;
+                    self.accum.reset();
                     debug!(
                         target: "stt",
                         "Speech confirmed after {} probes ({:.1}s)",
-                        self.consecutive_speech_probes,
+                        confirmed_probes,
                         buf.len() as f32 / SR_USIZE as f32
                     );
-                    return VadAction::Start(buf);
+                    VadAction::Start(buf)
                 }
-            } else {
-                if self.consecutive_speech_probes > 0 {
-                    debug!(
-                        target: "stt",
-                        "Accum reset: {} consecutive, needed {} (prob={:.3})",
-                        self.consecutive_speech_probes,
-                        self.vad_confirm_probes,
-                        avg_prob
-                    );
-                }
-                self.consecutive_speech_probes = 0;
-
-                // Short-utterance fallback: ≥1 speech probe already seen (we're in
-                // accumulating), then a full silence window → finalize without confirm.
-                let short_silence_probes =
-                    self.silence_samples_threshold.div_ceil(VAD_PROBE_SAMPLES);
-                if self.accum_silence_probes >= short_silence_probes.max(1) {
+                AccumDecision::ShortFinalize => {
                     let buf = std::mem::take(&mut self.accum_buf);
                     self.accumulating = false;
-                    self.consecutive_speech_probes = 0;
-                    self.accum_silence_probes = 0;
-                    self.accum_probes_total = 0;
                     debug!(
                         target: "stt",
                         "Short utterance finalized ({:.1}s, silence_probes={})",
                         buf.len() as f32 / SR_USIZE as f32,
-                        short_silence_probes.max(1)
+                        self.accum.short_silence_probes
                     );
-                    return VadAction::StartShort(buf);
+                    VadAction::StartShort(buf)
                 }
+                AccumDecision::Continue => VadAction::None,
             }
-            VadAction::None
         } else {
             let is_speech = avg_prob >= self.vad_start_threshold;
             if is_speech {
                 self.accumulating = true;
-                self.consecutive_speech_probes = 1;
-                self.accum_probes_total = 1;
-                self.accum_silence_probes = 0;
+                self.accum.begin_speech();
                 self.accum_buf.clear();
                 self.accum_buf.extend_from_slice(chunk);
                 debug!(
@@ -308,9 +372,7 @@ impl SpeechRecognizerSttProvider {
 
     fn reset_accum(&mut self) {
         self.accumulating = false;
-        self.consecutive_speech_probes = 0;
-        self.accum_probes_total = 0;
-        self.accum_silence_probes = 0;
+        self.accum.reset();
         self.accum_buf.clear();
     }
 
@@ -569,5 +631,80 @@ mod tests {
             compression_ratio: 0.0,
         };
         assert!(q.text.is_empty());
+    }
+
+    /// silence_ms=300 → silence_samples=4800; probe=1600 → short_silence_probes=3.
+    fn tracker_300ms_silence_confirm2() -> AccumTracker {
+        let silence_samples = SR_USIZE * 300 / 1000;
+        AccumTracker::new(2, silence_samples)
+    }
+
+    #[test]
+    fn accum_two_consecutive_speech_confirms() {
+        let mut t = tracker_300ms_silence_confirm2();
+        t.begin_speech(); // probe 1 speech
+        assert_eq!(t.on_probe(true), AccumDecision::Confirmed); // probe 2 speech
+    }
+
+    #[test]
+    fn accum_one_speech_then_three_silence_short_finalize() {
+        let mut t = tracker_300ms_silence_confirm2();
+        t.begin_speech(); // 1 speech
+        assert_eq!(t.on_probe(false), AccumDecision::Continue); // silence 1
+        assert_eq!(t.on_probe(false), AccumDecision::Continue); // silence 2
+        assert_eq!(t.on_probe(false), AccumDecision::ShortFinalize); // silence 3
+    }
+
+    #[test]
+    fn accum_one_speech_then_two_silence_continues() {
+        let mut t = tracker_300ms_silence_confirm2();
+        t.begin_speech();
+        assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        // still need one more silence probe
+        assert_eq!(t.silence_probes, 2);
+        assert_eq!(t.short_silence_probes, 3);
+    }
+
+    #[test]
+    fn accum_never_confirms_discards_at_max_probes() {
+        let mut t = tracker_300ms_silence_confirm2();
+        t.begin_speech(); // probes_total = 1 (speech)
+                          // Alternate silence/speech so consecutive never reaches 2
+                          // and silence never reaches 3 in a row.
+                          // After begin (S): F, S, F, S, ...
+        let mut last = AccumDecision::Continue;
+        // begin already counted 1; need MAX_ACCUM_PROBES-1 more to hit discard
+        for i in 0..(MAX_ACCUM_PROBES - 1) {
+            let is_speech = i % 2 == 1; // F, S, F, S, ...
+            last = t.on_probe(is_speech);
+            if last == AccumDecision::Discard {
+                break;
+            }
+            assert_ne!(
+                last,
+                AccumDecision::Confirmed,
+                "should not confirm on alternating pattern"
+            );
+            assert_ne!(
+                last,
+                AccumDecision::ShortFinalize,
+                "should not short-finalize on alternating pattern"
+            );
+        }
+        assert_eq!(last, AccumDecision::Discard);
+    }
+
+    #[test]
+    fn accum_speech_after_silence_resets_silence_counter() {
+        let mut t = tracker_300ms_silence_confirm2();
+        t.begin_speech();
+        assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        assert_eq!(t.silence_probes, 2);
+        // speech resets silence counter — no premature ShortFinalize
+        assert_eq!(t.on_probe(true), AccumDecision::Continue);
+        assert_eq!(t.silence_probes, 0);
+        assert_eq!(t.consecutive_speech_probes, 1);
     }
 }

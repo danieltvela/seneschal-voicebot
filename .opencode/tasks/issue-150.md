@@ -88,12 +88,12 @@
 
 ## Phase 3: Tests, docs, and QA
 
-- [ ] Step 3.1: Extract pure accumulator decision logic into a testable helper
+- [x] Step 3.1: Extract pure accumulator decision logic into a testable helper
   - File(s): `src/stt/speech_recognizer.rs`
   - Change: Refactor the `else if self.accumulating` branch bookkeeping (consecutive speech counter, `accum_silence_probes` tracking, `MAX_ACCUM_PROBES` guard, and the `Start`/`StartShort`/`discard` decisions) into a small `struct AccumTracker { ... }` with a method `fn on_probe(&mut self, is_speech: bool) -> AccumDecision` returning an enum (`Confirmed`, `ShortFinalize`, `Discard`, `Continue`). Move the counters (`consecutive_speech_probes`, `accum_silence_probes`, `accum_probes_total`) into this struct. `process_probe` calls it. Keep `WhisperVadProcessor` usage in `process_probe` (the helper only consumes `is_speech: bool`, so unit tests need no model/audio).
   - Acceptance criteria: Logic identical to Steps 1.4/1.6; `cargo test --features speech` still compiles and the existing `compression_ratio_calculation` / `empty_text_quality` tests pass.
 
-- [ ] Step 3.2: Add unit tests for `AccumTracker`
+- [x] Step 3.2: Add unit tests for `AccumTracker`
   - File(s): `src/stt/speech_recognizer.rs`
   - Change: Add `#[cfg(test)]` tests covering:
     - 2 consecutive speech probes → `Confirmed`.
@@ -103,7 +103,7 @@
     - A speech probe after a reset zeroes `accum_silence_probes` (no premature `ShortFinalize`).
   - Acceptance criteria: `cargo test --features speech speech_recognizer` is green and assertions reflect the expected decisions.
 
-- [ ] Step 3.3: Update docs
+- [x] Step 3.3: Update docs
   - File(s): `doc/env-vars.md`, `src/config.rs` (VAD field comments)
   - Change:
     - In `doc/env-vars.md`, under the VAD section, document the new behavior: `SpeechStart` now fires on the first speech probe (fast barge-in); a short-utterance fallback feeds unconfirmed speech to STT and relies on `NoSpeechGate` to drop coughs/noise; `VAD_SILENCE_MS` also controls the short-utterance silence window.
