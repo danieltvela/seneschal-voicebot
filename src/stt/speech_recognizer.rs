@@ -37,6 +37,9 @@ struct SharedState {
     task_done: bool,
     awaiting_finalize: bool,
     speech_start_sent: bool,
+    /// True once SpeechEnd was emitted for the current Apple task (avoids duplicates
+    /// when DidFinishRecognition arrives after a last-partial fallback).
+    speech_end_sent: bool,
     event_buffer: Vec<RecognitionTaskEvent>,
 }
 
@@ -231,6 +234,7 @@ impl SpeechRecognizerSttProvider {
             task_done: false,
             awaiting_finalize: false,
             speech_start_sent: false,
+            speech_end_sent: false,
             event_buffer: Vec::new(),
         }));
 
@@ -531,6 +535,7 @@ impl SpeechRecognizerSttProvider {
         let mut st = self.state.lock().await;
         st.task_done = false;
         st.awaiting_finalize = false;
+        st.speech_end_sent = false;
         // Do not reset speech_start_sent — VAD emits SpeechStart on Start/StartShort
         // just before create_task. Clearing it here would allow a duplicate from
         // any late Apple partial path.
@@ -582,13 +587,20 @@ impl SpeechRecognizerSttProvider {
 
     /// Drain buffered events into the pipeline channel.
     async fn drain_events(&self, tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
-        let (events, mut speech_start_sent) = {
+        let (events, mut speech_start_sent, mut speech_end_sent) = {
             let mut st = self.state.lock().await;
-            (std::mem::take(&mut st.event_buffer), st.speech_start_sent)
+            (
+                std::mem::take(&mut st.event_buffer),
+                st.speech_start_sent,
+                st.speech_end_sent,
+            )
         };
 
-        let mut got_final = false;
         let mut task_terminal = false;
+        let mut task_success = false;
+        // SFSpeechRecognizer often finishes with DidFinishSuccessfully and never
+        // sends DidFinishRecognition. The best text then lives only in partials.
+        let mut last_partial: Option<String> = None;
 
         for event in events {
             match event {
@@ -598,15 +610,17 @@ impl SpeechRecognizerSttProvider {
                 RecognitionTaskEvent::DidHypothesizeTranscription(t) => {
                     let text = t.formatted_string;
                     if !text.is_empty() {
-                        // SpeechStart is emitted by VAD on AccumStarted (fast barge-in).
-                        // Never re-emit from Apple partials — that caused a second
-                        // SpeechStart right before SpeechEnd, making main.rs discard
-                        // the final as "Too short (0ms)".
+                        // Never re-emit SpeechStart from partials (VAD commit owns that).
+                        last_partial = Some(text.clone());
                         debug!(target: "stt", "Partial: {}", text);
                         let _ = tx.send(SpeechEvent::Speech(text)).await;
                     }
                 }
                 RecognitionTaskEvent::DidFinishRecognition(r) => {
+                    if speech_end_sent {
+                        debug!(target: "stt", "Ignoring late DidFinishRecognition (already finalized)");
+                        continue;
+                    }
                     let text = r.best_transcription.formatted_string.trim().to_string();
                     let compression_ratio = if !text.is_empty() {
                         calculate_compression_ratio(&text)
@@ -623,15 +637,18 @@ impl SpeechRecognizerSttProvider {
 
                     info!(target: "stt", "SpeechEnd: {}", quality.text);
                     let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
-                    got_final = true;
+                    speech_end_sent = true;
+                    speech_start_sent = false;
                 }
                 RecognitionTaskEvent::DidFinishSuccessfully(success) => {
                     debug!(target: "stt", "Task finished: {}", success);
                     task_terminal = true;
+                    task_success = success;
                 }
                 RecognitionTaskEvent::WasCancelled => {
                     debug!(target: "stt", "Task cancelled");
                     task_terminal = true;
+                    task_success = false;
                 }
                 RecognitionTaskEvent::FinishedReadingAudio => {
                     debug!(target: "stt", "Finished reading audio");
@@ -642,25 +659,38 @@ impl SpeechRecognizerSttProvider {
             }
         }
 
-        // Apple can finish with success=false and no DidFinishRecognition (e.g. too
-        // little audio, recognition error). Without SpeechEnd the TUI stays LISTENING.
-        if task_terminal && !got_final && speech_start_sent {
+        // No DidFinishRecognition: promote last partial on success, else empty
+        // (so TUI leaves LISTENING and NoSpeechGate can reject noise).
+        if task_terminal && !speech_end_sent && speech_start_sent {
+            let text = if task_success {
+                last_partial.unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let compression_ratio = if !text.is_empty() {
+                calculate_compression_ratio(&text)
+            } else {
+                0.0
+            };
             let quality = TranscriptionQuality {
-                text: String::new(),
+                text: text.clone(),
                 no_speech_prob: 0.0,
                 avg_logprob: 0.0,
-                compression_ratio: 0.0,
+                compression_ratio,
             };
-            debug!(target: "stt", "SpeechEnd (task terminal without recognition, empty)");
+            if text.is_empty() {
+                debug!(target: "stt", "SpeechEnd (task terminal, no text)");
+            } else {
+                info!(target: "stt", "SpeechEnd (from last partial): {}", text);
+            }
             let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
-            got_final = true;
-        }
-
-        if got_final {
+            speech_end_sent = true;
             speech_start_sent = false;
         }
+
         let mut st = self.state.lock().await;
         st.speech_start_sent = speech_start_sent;
+        st.speech_end_sent = speech_end_sent;
 
         Ok(())
     }
