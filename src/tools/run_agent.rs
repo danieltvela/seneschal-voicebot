@@ -1881,6 +1881,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn visible_returns_acknowledgment_immediately() {
+        let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
+        let config = test_agent_config("test-visible", "visible", Some("echo".to_string()));
+        let tool = RunAgentTool::new(config, Arc::new(DashMap::new()), empty_history(), tx);
+        let start = std::time::Instant::now();
+        let result = tool.run(r#"{"task": "test task"}"#).await;
+        assert!(
+            start.elapsed().as_millis() < 200,
+            "should return immediately"
+        );
+        assert!(
+            !result.is_empty(),
+            "should return acknowledgment: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn visible_without_manager_returns_error() {
+        let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
+        let config = test_agent_config("test-visible", "visible", Some("echo".to_string()));
+        let tool = RunAgentTool::new(config, Arc::new(DashMap::new()), empty_history(), tx);
+        let result = tool.run("test task").await;
+        assert!(
+            result.contains("Visible session manager not configured"),
+            "should report missing manager: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn cli_delivers_result_to_proactive_channel() {
         let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
         let tool = cli_tool("echo agent_done", empty_history(), tx);
