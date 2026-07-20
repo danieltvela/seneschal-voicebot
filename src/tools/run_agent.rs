@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::Tool;
+use crate::agent_session::VisibleSessionManager;
 use crate::agents::{
     AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, ProactiveEvent,
 };
@@ -227,10 +228,11 @@ async fn synthesize_agent_result(
 
 /// Unified agent delegation tool.
 ///
-/// Supports three modes (selected by the `config.mode` field):
+/// Supports four modes (selected by the `config.mode` field):
 /// - `"cli"` — spawns the agent as a one-shot CLI subprocess (fire-and-forget).
 /// - `"acp"` — maintains a persistent ACP subprocess via JSON-RPC 2.0 over stdio.
 /// - `"remote"` — connects to an OpenCode HTTP server for prompt submission.
+/// - `"visible"` — spawns the agent in a PTY with a visible Terminal window.
 ///
 /// Additionally handles two inline commands that require no subprocess:
 /// - `run_<name>: cancel` — cancels the currently running ACP task.
@@ -244,6 +246,10 @@ pub struct RunAgentTool {
     session_manager: Option<Arc<AcpSessionManager>>,
     opencode_transport: Option<Arc<OpenCodeHttpTransport>>,
     hermes_viewer_mode: HermesSessionViewerMode,
+    /// Manager for visible (PTY-based) agent sessions.
+    visible_manager: Option<Arc<VisibleSessionManager>>,
+    /// Directory for visible session log files.
+    session_dir: String,
     tool_name: OnceLock<&'static str>,
 }
 
@@ -263,6 +269,8 @@ impl RunAgentTool {
             session_manager: None,
             opencode_transport: None,
             hermes_viewer_mode: HermesSessionViewerMode::Off,
+            visible_manager: None,
+            session_dir: "/tmp/seneschal_sessions".to_string(),
             tool_name: OnceLock::new(),
         }
     }
@@ -287,6 +295,18 @@ impl RunAgentTool {
     /// Attach an OpenCode HTTP transport for remote mode.
     pub fn with_opencode_transport(mut self, transport: Arc<OpenCodeHttpTransport>) -> Self {
         self.opencode_transport = Some(transport);
+        self
+    }
+
+    /// Attach a visible session manager for PTY-based (visible) agent mode.
+    pub fn with_visible_manager(mut self, mgr: Arc<VisibleSessionManager>) -> Self {
+        self.visible_manager = Some(mgr);
+        self
+    }
+
+    /// Set the directory for visible session log files.
+    pub fn with_session_dir(mut self, dir: String) -> Self {
+        self.session_dir = dir;
         self
     }
 
@@ -533,6 +553,127 @@ impl RunAgentTool {
         });
 
         "[Tarea delegada al agente remoto (Hermes). El resultado llegará en breve.]".to_string()
+    }
+
+    /// Visible mode: send prompt to a PTY-based visible agent session and
+    /// poll for output. The user can watch the agent in a Terminal window.
+    async fn run_visible(&self, task: String) -> String {
+        let command = match &self.config.command {
+            Some(c) => c.clone(),
+            None => return "Error: Visible agent command not configured.".to_string(),
+        };
+        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let proactive_tx = self.proactive_tx.clone();
+        let synthesis_client = self.synthesis_client.clone();
+        let visible_mgr = match &self.visible_manager {
+            Some(m) => Arc::clone(m),
+            None => return "Error: Visible session manager not configured.".to_string(),
+        };
+        let agent_name = self.config.name.clone();
+        let session_dir = self.session_dir.clone();
+
+        tokio::spawn(async move {
+            info!(target: "agent", "RunAgentTool(visible): task started: {:?}", task);
+
+            // Get or create visible session
+            let session = match visible_mgr.get_or_create(&agent_name, &command, &session_dir) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(target: "agent", "Failed to create visible session: {e}");
+                    let _ = proactive_tx
+                        .send(ProactiveEvent::AgentResult {
+                            task,
+                            result: format!("Visible session error: {e}"),
+                            tool_call_id: None,
+                            correlation_id: String::new(),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            // Send the query
+            if let Err(e) = session.send(&query) {
+                warn!(target: "agent", "Failed to send to visible agent: {e}");
+                let _ = proactive_tx
+                    .send(ProactiveEvent::AgentResult {
+                        task,
+                        result: format!("Visible agent send error: {e}"),
+                        tool_call_id: None,
+                        correlation_id: String::new(),
+                    })
+                    .await;
+                return;
+            }
+
+            // Poll for output with timeout
+            let max_idle = std::time::Duration::from_secs(5); // 5s idle -> consider done
+            let hard_timeout = std::time::Duration::from_secs(300); // 5min max
+            let poll_interval = std::time::Duration::from_millis(200);
+            let start = std::time::Instant::now();
+            let mut last_output = std::time::Instant::now();
+            let mut accumulated = String::new();
+
+            loop {
+                // Check hard timeout
+                if start.elapsed() > hard_timeout {
+                    info!(target: "agent", "RunAgentTool(visible): hard timeout reached");
+                    break;
+                }
+
+                // Poll for new output
+                if let Some(lines) = session.receive() {
+                    if !lines.is_empty() {
+                        accumulated.push_str(&lines);
+                        accumulated.push('\n');
+                        last_output = std::time::Instant::now();
+                    }
+                }
+
+                // Check if agent has gone idle (no output for 5s + process may have exited)
+                if last_output.elapsed() > max_idle {
+                    // Give one more brief chance and break
+                    tokio::time::sleep(poll_interval).await;
+                    if let Some(lines) = session.receive() {
+                        if !lines.is_empty() {
+                            accumulated.push_str(&lines);
+                            accumulated.push('\n');
+                        }
+                    }
+                    info!(target: "agent", "RunAgentTool(visible): idle timeout — accumulated {} chars", accumulated.len());
+                    break;
+                }
+
+                tokio::time::sleep(poll_interval).await;
+            }
+
+            let result = if accumulated.is_empty() {
+                accumulated
+            } else {
+                accumulated.trim().to_string()
+            };
+
+            info!(target: "agent", "RunAgentTool(visible): task complete ({} chars)", result.len());
+            let final_result =
+                synthesize_agent_result(&task, result, synthesis_client.as_deref()).await;
+
+            if proactive_tx
+                .send(ProactiveEvent::AgentResult {
+                    task,
+                    result: final_result,
+                    tool_call_id: None,
+                    correlation_id: String::new(),
+                })
+                .await
+                .is_err()
+            {
+                warn!(
+                    "RunAgentTool(visible): failed to deliver agent result: main loop channel closed"
+                );
+            }
+        });
+
+        "[Tarea delegada al agente visible. El resultado llegará en breve.]".to_string()
     }
 
     /// CLI mode: spawn agent as one-shot subprocess, deliver result proactively.
@@ -806,6 +947,7 @@ impl Tool for RunAgentTool {
         match self.config.mode.as_str() {
             "remote" => self.run_remote(task).await,
             "acp" => self.run_acp(task).await,
+            "visible" => self.run_visible(task).await,
             _ => self.run_cli(task).await,
         }
     }
