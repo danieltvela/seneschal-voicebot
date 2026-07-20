@@ -622,23 +622,23 @@ impl RunAgentTool {
                 }
 
                 // Poll for new output
-                if let Some(lines) = session.receive() {
-                    if !lines.is_empty() {
-                        accumulated.push_str(&lines);
-                        accumulated.push('\n');
-                        last_output = std::time::Instant::now();
-                    }
+                if let Some(lines) = session.receive()
+                    && !lines.is_empty()
+                {
+                    accumulated.push_str(&lines);
+                    accumulated.push('\n');
+                    last_output = std::time::Instant::now();
                 }
 
                 // Check if agent has gone idle (no output for 5s + process may have exited)
                 if last_output.elapsed() > max_idle {
                     // Give one more brief chance and break
                     tokio::time::sleep(poll_interval).await;
-                    if let Some(lines) = session.receive() {
-                        if !lines.is_empty() {
-                            accumulated.push_str(&lines);
-                            accumulated.push('\n');
-                        }
+                    if let Some(lines) = session.receive()
+                        && !lines.is_empty()
+                    {
+                        accumulated.push_str(&lines);
+                        accumulated.push('\n');
                     }
                     info!(target: "agent", "RunAgentTool(visible): idle timeout — accumulated {} chars", accumulated.len());
                     break;

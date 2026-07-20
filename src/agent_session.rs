@@ -71,16 +71,16 @@ impl VisibleSession {
         let log_path_str = log_path.to_string_lossy().to_string();
         let log_file = OpenOptions::new()
             .create(true)
-            .write(true)
             .append(true)
             .open(&log_path)
             .with_context(|| format!("Failed to create log file at {log_path_str}"))?;
 
         // ── Parse command into program + args ─────────────────────────────────
         let parts: Vec<&str> = command.split_whitespace().collect();
-        let program = parts.first().copied().ok_or_else(|| {
-            anyhow::anyhow!("Visible agent command is empty")
-        })?;
+        let program = parts
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("Visible agent command is empty"))?;
         let args = &parts[1..];
 
         // ── Open PTY ─────────────────────────────────────────────────────────
@@ -132,7 +132,6 @@ impl VisibleSession {
                 // Reader opens its own log file handle
                 let mut f = match OpenOptions::new()
                     .create(true)
-                    .write(true)
                     .append(true)
                     .open(&log_path_for_reader)
                 {
@@ -218,8 +217,7 @@ impl VisibleSession {
             let escaped = log_path_str.replace('"', "\\\"");
             let osa = format!(
                 r#"tell application "Terminal" to do script "clear && echo 'Visible Agent: {}' && tail -f {}""#,
-                agent_name,
-                escaped,
+                agent_name, escaped,
             );
 
             if let Err(e) = std::process::Command::new("osascript")
@@ -264,8 +262,7 @@ impl VisibleSession {
         {
             let mut guard = self.writer.lock().unwrap();
             if let Some(w) = guard.as_mut() {
-                w.write_all(&data)
-                    .context("Failed to write to PTY")?;
+                w.write_all(&data).context("Failed to write to PTY")?;
                 w.flush().context("Failed to flush PTY writer")?;
             }
         }
@@ -488,7 +485,8 @@ impl VisibleSessionManager {
         }
 
         let session = VisibleSession::spawn(command, agent_name, session_dir)?;
-        self.sessions.insert(agent_name.to_string(), Arc::clone(&session));
+        self.sessions
+            .insert(agent_name.to_string(), Arc::clone(&session));
         Ok(session)
     }
 
@@ -559,16 +557,15 @@ mod tests {
 
     /// Helper: create a temp dir for session logs
     fn temp_session_dir() -> String {
-        let dir = std::env::temp_dir()
-            .join(format!("seneschal-test-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("seneschal-test-{}", Uuid::new_v4()));
         dir.to_string_lossy().to_string()
     }
 
     #[test]
     fn test_spawn_cat_and_send_receive() {
         let dir = temp_session_dir();
-        let session = VisibleSession::spawn("/bin/cat", "test-cat", &dir)
-            .expect("Failed to spawn cat");
+        let session =
+            VisibleSession::spawn("/bin/cat", "test-cat", &dir).expect("Failed to spawn cat");
 
         // Wait a moment for the process to start
         std::thread::sleep(Duration::from_millis(200));
@@ -592,8 +589,8 @@ mod tests {
     #[test]
     fn test_spawn_cat_multiline() {
         let dir = temp_session_dir();
-        let session = VisibleSession::spawn("/bin/cat", "test-cat-2", &dir)
-            .expect("Failed to spawn cat");
+        let session =
+            VisibleSession::spawn("/bin/cat", "test-cat-2", &dir).expect("Failed to spawn cat");
 
         std::thread::sleep(Duration::from_millis(200));
 
@@ -616,22 +613,25 @@ mod tests {
     #[test]
     fn test_close_terminates_process() {
         let dir = temp_session_dir();
-        let session = VisibleSession::spawn("sleep 30", "test-sleep", &dir)
-            .expect("Failed to spawn sleep");
+        let session =
+            VisibleSession::spawn("sleep 30", "test-sleep", &dir).expect("Failed to spawn sleep");
 
         assert!(session.is_alive(), "Process should be alive");
 
         session.close();
 
         std::thread::sleep(Duration::from_millis(100));
-        assert!(!session.is_alive(), "Process should not be alive after close");
+        assert!(
+            !session.is_alive(),
+            "Process should not be alive after close"
+        );
     }
 
     #[test]
     fn test_send_empty_string() {
         let dir = temp_session_dir();
-        let session = VisibleSession::spawn("/bin/cat", "test-empty", &dir)
-            .expect("Failed to spawn cat");
+        let session =
+            VisibleSession::spawn("/bin/cat", "test-empty", &dir).expect("Failed to spawn cat");
 
         std::thread::sleep(Duration::from_millis(200));
 
@@ -652,8 +652,8 @@ mod tests {
     #[test]
     fn test_log_file_created() {
         let dir = temp_session_dir();
-        let session = VisibleSession::spawn("/bin/cat", "test-log", &dir)
-            .expect("Failed to spawn cat");
+        let session =
+            VisibleSession::spawn("/bin/cat", "test-log", &dir).expect("Failed to spawn cat");
 
         let log_path = session.log_path();
         assert!(
@@ -677,8 +677,8 @@ mod tests {
     #[test]
     fn test_session_id_assigned() {
         let dir = temp_session_dir();
-        let session = VisibleSession::spawn("/bin/cat", "test-id", &dir)
-            .expect("Failed to spawn cat");
+        let session =
+            VisibleSession::spawn("/bin/cat", "test-id", &dir).expect("Failed to spawn cat");
 
         assert!(!session.session_id().is_empty());
         assert_eq!(session.agent_name(), "test-id");
@@ -760,7 +760,11 @@ mod tests {
         // This session was just created, so it shouldn't be cleaned up
         // (sessions are idle for <1ms, so a 1-hour timeout keeps them)
         let _count = mgr.cleanup_idle(Duration::from_secs(3600));
-        assert_eq!(mgr.list_sessions().len(), 1, "Fresh session should not be cleaned up");
+        assert_eq!(
+            mgr.list_sessions().len(),
+            1,
+            "Fresh session should not be cleaned up"
+        );
 
         mgr.close_session("no-cleanup");
     }
