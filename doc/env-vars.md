@@ -14,7 +14,7 @@ Read from `.env` (dotenvy loads automatically):
 | `VAD_SILENCE_MS` | `500` | ms of continuous silence before SpeechEnd. Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |
 | `VAD_END_THRESHOLD` | `0.45` | Speech probability floor to keep a segment open. |
-| `VAD_CONFIRM_PROBES` | `2` | Consecutive speech probes required before the VAD *commits* to full STT feeding. With `STT_PROVIDER=speech`, `SpeechStart` (LISTENING + barge-in) fires on the **first** speech probe (~100ms window); short words that never reach this confirm count are still transcribed via the short-utterance fallback. Coughs/noise are rejected downstream by `NoSpeechGate`. |
+| `VAD_CONFIRM_PROBES` | `2` | Consecutive speech probes (100ms each with `STT_PROVIDER=speech`) required before the VAD *commits* to STT. `SpeechStart` (LISTENING + barge-in) fires at commit time (~200ms) or on the short-utterance fallback after `VAD_SILENCE_MS` of silence — not on a single noisy probe. Short words that never reach the confirm count are still transcribed via the short-utterance fallback. Coughs/noise are rejected by `NoSpeechGate`. |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |

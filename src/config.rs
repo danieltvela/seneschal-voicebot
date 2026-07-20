@@ -101,11 +101,11 @@ pub struct Config {
     /// Path to Silero VAD model file (.bin) used by whisper-cpp-plus
     pub vad_model: String,
     /// Minimum consecutive speech probes required before VAD *commits* to full STT.
-    /// With STT_PROVIDER=speech, probes are 100ms each; SpeechStart (barge-in) fires on
-    /// the first speech probe regardless. Utterances below this count are still
-    /// transcribed via the short-utterance fallback (so short answers like "yes"/"Vale"
-    /// work). Coughs/noise are rejected by NoSpeechGate after STT.
-    /// Default: 2. Set to 1 to confirm on the second probe (first starts accumulation).
+    /// With STT_PROVIDER=speech, probes are 100ms each; SpeechStart (barge-in / LISTENING)
+    /// fires at commit (or short-utterance finalize), not on the first noisy probe.
+    /// Utterances below this count are still transcribed via the short-utterance fallback
+    /// (so short answers like "yes"/"Vale" work). Coughs/noise are rejected by NoSpeechGate.
+    /// Default: 2 (~200ms sustained speech-like signal).
     pub vad_confirm_probes: usize,
 
     // ── Language ─────────────────────────────────────────────────────────────

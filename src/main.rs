@@ -1658,7 +1658,13 @@ async fn async_main() -> Result<()> {
                                     .map(|t| t.elapsed().as_millis() as u32)
                                     .unwrap_or(0);
 
-                                if segment_duration_ms < MIN_SPEECH_DURATION_MS {
+                                // Wall-clock duration can be tiny on the short-utterance
+                                // path (SpeechStart fires at finalize, Apple returns in
+                                // ~50–200ms). NoSpeechGate already rejected empty/junk;
+                                // accept non-empty gated text even if wall duration is low.
+                                if segment_duration_ms < MIN_SPEECH_DURATION_MS
+                                    && quality.text.trim().is_empty()
+                                {
                                     debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
                                     t_speech_start = None;
                                     #[cfg(feature = "tui")]

@@ -205,16 +205,14 @@ impl SpeechRecognizerSttProvider {
             let mut rx = event_rx;
             while let Some(event) = rx.recv().await {
                 let mut st = state_clone.lock().await;
+                // Mark task terminal on ANY finish (success or failure) / cancel.
+                // Do NOT clear speech_start_sent here — that races with drain_events
+                // and caused duplicate SpeechStart + "Too short (0ms)" dropped finals.
                 match &event {
-                    RecognitionTaskEvent::DidFinishSuccessfully(true) => {
+                    RecognitionTaskEvent::DidFinishSuccessfully(_)
+                    | RecognitionTaskEvent::WasCancelled => {
                         st.task_done = true;
                         st.awaiting_finalize = false;
-                        st.speech_start_sent = false;
-                    }
-                    RecognitionTaskEvent::WasCancelled => {
-                        st.task_done = true;
-                        st.awaiting_finalize = false;
-                        st.speech_start_sent = false;
                     }
                     _ => {}
                 }
@@ -381,14 +379,31 @@ impl SpeechRecognizerSttProvider {
         self.silence_samples = 0;
     }
 
+    /// Emit SpeechStart once per utterance (idempotent via speech_start_sent).
+    async fn emit_speech_start_if_needed(&self, tx: &mpsc::Sender<SpeechEvent>) {
+        let should_emit = {
+            let mut st = self.state.lock().await;
+            if st.speech_start_sent {
+                false
+            } else {
+                st.speech_start_sent = true;
+                true
+            }
+        };
+        if should_emit {
+            debug!(target: "stt", "SpeechStart (from VAD commit)");
+            let _ = tx.send(SpeechEvent::SpeechStart).await;
+        }
+    }
+
     /// Create a new recognition task.
     async fn create_task(&self) -> Result<()> {
         let mut st = self.state.lock().await;
         st.task_done = false;
         st.awaiting_finalize = false;
-        // Do not reset speech_start_sent — VAD may have already emitted SpeechStart
-        // on AccumStarted (fast barge-in). Resetting would cause a duplicate on the
-        // first Apple partial.
+        // Do not reset speech_start_sent — VAD emits SpeechStart on Start/StartShort
+        // just before create_task. Clearing it here would allow a duplicate from
+        // any late Apple partial path.
 
         let request = AudioBufferRecognitionRequest::new().with_options(
             RecognitionRequestOptions::new()
@@ -443,6 +458,8 @@ impl SpeechRecognizerSttProvider {
         };
 
         let mut got_final = false;
+        let mut task_terminal = false;
+
         for event in events {
             match event {
                 RecognitionTaskEvent::DidDetectSpeech => {
@@ -451,11 +468,10 @@ impl SpeechRecognizerSttProvider {
                 RecognitionTaskEvent::DidHypothesizeTranscription(t) => {
                     let text = t.formatted_string;
                     if !text.is_empty() {
-                        if !speech_start_sent {
-                            speech_start_sent = true;
-                            debug!(target: "stt", "SpeechStart (from first partial)");
-                            let _ = tx.send(SpeechEvent::SpeechStart).await;
-                        }
+                        // SpeechStart is emitted by VAD on AccumStarted (fast barge-in).
+                        // Never re-emit from Apple partials — that caused a second
+                        // SpeechStart right before SpeechEnd, making main.rs discard
+                        // the final as "Too short (0ms)".
                         debug!(target: "stt", "Partial: {}", text);
                         let _ = tx.send(SpeechEvent::Speech(text)).await;
                     }
@@ -481,9 +497,11 @@ impl SpeechRecognizerSttProvider {
                 }
                 RecognitionTaskEvent::DidFinishSuccessfully(success) => {
                     debug!(target: "stt", "Task finished: {}", success);
+                    task_terminal = true;
                 }
                 RecognitionTaskEvent::WasCancelled => {
                     debug!(target: "stt", "Task cancelled");
+                    task_terminal = true;
                 }
                 RecognitionTaskEvent::FinishedReadingAudio => {
                     debug!(target: "stt", "Finished reading audio");
@@ -492,6 +510,20 @@ impl SpeechRecognizerSttProvider {
                     debug!(target: "stt", "Processed: {:.2}s", duration);
                 }
             }
+        }
+
+        // Apple can finish with success=false and no DidFinishRecognition (e.g. too
+        // little audio, recognition error). Without SpeechEnd the TUI stays LISTENING.
+        if task_terminal && !got_final && speech_start_sent {
+            let quality = TranscriptionQuality {
+                text: String::new(),
+                no_speech_prob: 0.0,
+                avg_logprob: 0.0,
+                compression_ratio: 0.0,
+            };
+            debug!(target: "stt", "SpeechEnd (task terminal without recognition, empty)");
+            let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+            got_final = true;
         }
 
         if got_final {
@@ -536,21 +568,20 @@ impl SttProvider for SpeechRecognizerSttProvider {
             match self.process_probe(&chunk) {
                 VadAction::None => {}
                 VadAction::AccumStarted => {
-                    // Fast barge-in: emit SpeechStart on the first speech-like probe.
-                    {
-                        let mut st = self.state.lock().await;
-                        st.speech_start_sent = true;
-                    }
-                    debug!(target: "stt", "SpeechStart (from VAD onset)");
-                    let _ = tx.send(SpeechEvent::SpeechStart).await;
+                    // First speech-like probe only starts accumulation. SpeechStart is
+                    // deferred until Confirm (Start) or short-utterance finalize
+                    // (StartShort) so a single noisy 100ms probe does not flip the
+                    // TUI to LISTENING or fire barge-in.
+                    debug!(target: "stt", "VAD onset (accumulating, SpeechStart deferred)");
                 }
                 VadAction::Start(buf) => {
+                    self.emit_speech_start_if_needed(tx).await;
                     self.create_task().await?;
                     self.feed_audio(&buf).await?;
                 }
                 VadAction::StartShort(buf) => {
-                    // Short unconfirmed utterance: feed Apple and finalize immediately.
-                    // SpeechStart was already emitted on AccumStarted.
+                    // Short unconfirmed utterance: barge-in now, feed Apple, finalize.
+                    self.emit_speech_start_if_needed(tx).await;
                     self.create_task().await?;
                     self.feed_audio(&buf).await?;
                     self.signal_end_audio().await;
@@ -559,11 +590,9 @@ impl SttProvider for SpeechRecognizerSttProvider {
                     self.feed_audio(&chunk).await?;
                 }
                 VadAction::End => {
-                    // Feed remaining pre-roll as context before finalizing
-                    let pr: Vec<f32> = self.pre_roll.iter().copied().collect();
-                    if !pr.is_empty() {
-                        self.feed_audio(&pr).await.ok();
-                    }
+                    // Do not re-feed pre_roll here: it already contains the most
+                    // recent audio, which was streamed via Feed. Double-feeding
+                    // confuses Apple and can yield empty/failed finals.
                     self.signal_end_audio().await;
                     self.reset_vad();
                 }
@@ -586,16 +615,32 @@ impl SttProvider for SpeechRecognizerSttProvider {
             }
         }
 
-        // Drain buffered events
+        // Drain buffered events (may emit SpeechEnd for failed tasks)
         self.drain_events(tx).await?;
 
-        // Reset VAD state if task is done AND we're not currently in speech.
-        // Don't reset while accumulating — the user may be starting a new utterance.
-        let task_done = {
+        // Reset VAD state if task is done.
+        // If the task died while we still thought we were in_speech, force-reset
+        // so the next utterance is not blocked on a dead Apple task.
+        let (task_done, speech_start_sent) = {
             let st = self.state.lock().await;
-            st.task_done
+            (st.task_done, st.speech_start_sent)
         };
-        if task_done && !self.in_speech && !self.accumulating {
+        if task_done && self.in_speech {
+            warn!(target: "stt", "Recognition task ended while in_speech — force VAD reset");
+            self.reset_vad();
+            if speech_start_sent {
+                let quality = TranscriptionQuality {
+                    text: String::new(),
+                    no_speech_prob: 0.0,
+                    avg_logprob: 0.0,
+                    compression_ratio: 0.0,
+                };
+                debug!(target: "stt", "SpeechEnd (mid-speech task death, empty)");
+                let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+                let mut st = self.state.lock().await;
+                st.speech_start_sent = false;
+            }
+        } else if task_done && !self.in_speech && !self.accumulating {
             self.reset_vad();
         }
 
