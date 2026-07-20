@@ -110,7 +110,7 @@
     - In `src/config.rs`, update the `vad_confirm_probes` doc comment: clarify that below `vad_confirm_probes` the utterance is still transcribed via the short-utterance fallback (so short answers like "yes"/"Vale" work).
   - Acceptance criteria: Docs accurately describe the new flow; no code behavior change.
 
-- [ ] Step 3.4: QA gate
+- [x] Step 3.4: QA gate
   - File(s): none
   - Change: Run `cargo fmt --check`, `cargo clippy --features control,speech,avspeech,tui,parakeet,remote --all-targets -- -D warnings`, `cargo test`, `cargo test --features tui,remote,control` (the project's `make qa` fast suite, but scoped so the build includes `speech`).
   - Acceptance criteria: all green.

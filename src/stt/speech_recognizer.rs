@@ -80,9 +80,7 @@ impl AccumTracker {
     fn new(confirm_probes: usize, silence_samples_threshold: usize) -> Self {
         Self {
             confirm_probes: confirm_probes.max(1),
-            short_silence_probes: silence_samples_threshold
-                .div_ceil(VAD_PROBE_SAMPLES)
-                .max(1),
+            short_silence_probes: silence_samples_threshold.div_ceil(VAD_PROBE_SAMPLES).max(1),
             consecutive_speech_probes: 0,
             silence_probes: 0,
             probes_total: 0,
@@ -670,9 +668,9 @@ mod tests {
     fn accum_never_confirms_discards_at_max_probes() {
         let mut t = tracker_300ms_silence_confirm2();
         t.begin_speech(); // probes_total = 1 (speech)
-                          // Alternate silence/speech so consecutive never reaches 2
-                          // and silence never reaches 3 in a row.
-                          // After begin (S): F, S, F, S, ...
+        // Alternate silence/speech so consecutive never reaches 2
+        // and silence never reaches 3 in a row.
+        // After begin (S): F, S, F, S, ...
         let mut last = AccumDecision::Continue;
         // begin already counted 1; need MAX_ACCUM_PROBES-1 more to hit discard
         for i in 0..(MAX_ACCUM_PROBES - 1) {
