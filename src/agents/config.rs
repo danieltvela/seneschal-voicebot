@@ -7,7 +7,7 @@ use std::env;
 pub struct AgentTomlConfig {
     /// Unique name (e.g. "hermes").
     pub name: String,
-    /// Communication mode: "cli", "acp", or "remote".
+    /// Communication mode: "cli", "acp", "remote", or "visible".
     pub mode: String,
     /// CLI command. Used only when mode = "cli".
     #[serde(default)]
@@ -74,7 +74,7 @@ pub struct AgentConfig {
     /// Unique name used as tool suffix: `run_{name}`.
     pub name: String,
     /// Communication mode: `"cli"` (one-shot subprocess), `"acp"` (persistent JSON-RPC stdio),
-    /// or `"remote"` (OpenCode HTTP transport).
+    /// `"remote"` (OpenCode HTTP transport), or `"visible"` (PTY-based visible session).
     pub mode: String,
     /// CLI command (e.g. `"hermes chat"`). Used only when `mode = "cli"`.
     pub command: Option<String>,
