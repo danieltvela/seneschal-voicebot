@@ -40,6 +40,9 @@ struct SharedState {
     /// True once SpeechEnd was emitted for the current Apple task (avoids duplicates
     /// when DidFinishRecognition arrives after a last-partial fallback).
     speech_end_sent: bool,
+    /// Latest non-empty Apple partial for this task. Must survive across drain_events
+    /// calls: partials often arrive in earlier batches than DidFinishSuccessfully.
+    last_partial: Option<String>,
     event_buffer: Vec<RecognitionTaskEvent>,
 }
 
@@ -235,6 +238,7 @@ impl SpeechRecognizerSttProvider {
             awaiting_finalize: false,
             speech_start_sent: false,
             speech_end_sent: false,
+            last_partial: None,
             event_buffer: Vec::new(),
         }));
 
@@ -536,6 +540,7 @@ impl SpeechRecognizerSttProvider {
         st.task_done = false;
         st.awaiting_finalize = false;
         st.speech_end_sent = false;
+        st.last_partial = None;
         // Do not reset speech_start_sent — VAD emits SpeechStart on Start/StartShort
         // just before create_task. Clearing it here would allow a duplicate from
         // any late Apple partial path.
@@ -587,20 +592,20 @@ impl SpeechRecognizerSttProvider {
 
     /// Drain buffered events into the pipeline channel.
     async fn drain_events(&self, tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
-        let (events, mut speech_start_sent, mut speech_end_sent) = {
+        let (events, mut speech_start_sent, mut speech_end_sent, mut last_partial) = {
             let mut st = self.state.lock().await;
             (
                 std::mem::take(&mut st.event_buffer),
                 st.speech_start_sent,
                 st.speech_end_sent,
+                // Carry last partial across drain batches — Apple often delivers
+                // DidFinishSuccessfully in a later process_audio tick than partials.
+                st.last_partial.take(),
             )
         };
 
         let mut task_terminal = false;
         let mut task_success = false;
-        // SFSpeechRecognizer often finishes with DidFinishSuccessfully and never
-        // sends DidFinishRecognition. The best text then lives only in partials.
-        let mut last_partial: Option<String> = None;
 
         for event in events {
             match event {
@@ -639,6 +644,7 @@ impl SpeechRecognizerSttProvider {
                     let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
                     speech_end_sent = true;
                     speech_start_sent = false;
+                    last_partial = None;
                 }
                 RecognitionTaskEvent::DidFinishSuccessfully(success) => {
                     debug!(target: "stt", "Task finished: {}", success);
@@ -663,8 +669,9 @@ impl SpeechRecognizerSttProvider {
         // (so TUI leaves LISTENING and NoSpeechGate can reject noise).
         if task_terminal && !speech_end_sent && speech_start_sent {
             let text = if task_success {
-                last_partial.unwrap_or_default()
+                last_partial.take().unwrap_or_default()
             } else {
+                last_partial = None;
                 String::new()
             };
             let compression_ratio = if !text.is_empty() {
@@ -691,6 +698,12 @@ impl SpeechRecognizerSttProvider {
         let mut st = self.state.lock().await;
         st.speech_start_sent = speech_start_sent;
         st.speech_end_sent = speech_end_sent;
+        // Keep last_partial if task still running (more partials may arrive).
+        if !speech_end_sent {
+            st.last_partial = last_partial;
+        } else {
+            st.last_partial = None;
+        }
 
         Ok(())
     }
