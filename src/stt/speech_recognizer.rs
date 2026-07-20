@@ -17,7 +17,7 @@ use super::whisper::WhisperSTTVADConfig;
 const SAMPLE_RATE: f64 = 16_000.0;
 const CHANNELS: usize = 1;
 const SR_USIZE: usize = 16_000;
-const VAD_PROBE_MS: usize = 200;
+const VAD_PROBE_MS: usize = 100;
 const VAD_PROBE_SAMPLES: usize = SR_USIZE * VAD_PROBE_MS / 1000;
 const PRE_ROLL_MS: usize = 300;
 const PRE_ROLL_SAMPLES: usize = SR_USIZE * PRE_ROLL_MS / 1000;
@@ -38,12 +38,18 @@ struct SharedState {
 enum VadAction {
     /// Silence or accumulating — feed nothing to Apple.
     None,
+    /// First speech-like probe — emit SpeechStart immediately (fast barge-in).
+    AccumStarted,
     /// Speech confirmed — create task and feed the accumulated buffer.
     Start(Vec<f32>),
+    /// Short unconfirmed utterance — create task, feed buffer, end_audio immediately.
+    StartShort(Vec<f32>),
     /// In speech — feed this chunk to Apple.
     Feed(Vec<f32>),
     /// Silence timeout — call end_audio() on the task.
     End,
+    /// Accumulation timed out without confirmation — emit empty SpeechEnd to reset state.
+    Discard,
 }
 
 /// STT provider using macOS SFSpeechRecognizer via the `speech` crate.
@@ -76,6 +82,8 @@ pub struct SpeechRecognizerSttProvider {
     accumulating: bool,
     accum_buf: Vec<f32>,
     accum_probes_total: usize,
+    /// Consecutive silence probes while accumulating (short-utterance fallback).
+    accum_silence_probes: usize,
     probe_carry: Vec<f32>,
 }
 
@@ -164,11 +172,12 @@ impl SpeechRecognizerSttProvider {
             accumulating: false,
             accum_buf: Vec::new(),
             accum_probes_total: 0,
+            accum_silence_probes: 0,
             probe_carry: Vec::with_capacity(VAD_PROBE_SAMPLES),
         })
     }
 
-    /// Process a single VAD probe (200ms chunk). Returns the action to take.
+    /// Process a single VAD probe (100ms chunk). Returns the action to take.
     fn process_probe(&mut self, chunk: &[f32]) -> VadAction {
         // Update pre-roll
         for &s in chunk {
@@ -217,19 +226,26 @@ impl SpeechRecognizerSttProvider {
             self.accum_buf.extend_from_slice(chunk);
             self.accum_probes_total += 1;
 
+            let is_speech = avg_prob >= self.vad_start_threshold;
+            if is_speech {
+                self.accum_silence_probes = 0;
+            } else {
+                self.accum_silence_probes += 1;
+            }
+
             if self.accum_probes_total >= MAX_ACCUM_PROBES {
                 debug!(target: "stt", "Accum timeout after {} probes", self.accum_probes_total);
                 self.reset_accum();
-                return VadAction::None;
+                return VadAction::Discard;
             }
 
-            let is_speech = avg_prob >= self.vad_start_threshold;
             if is_speech {
                 self.consecutive_speech_probes += 1;
                 if self.consecutive_speech_probes >= self.vad_confirm_probes {
                     let buf = std::mem::take(&mut self.accum_buf);
                     self.in_speech = true;
                     self.accumulating = false;
+                    self.accum_silence_probes = 0;
                     debug!(
                         target: "stt",
                         "Speech confirmed after {} probes ({:.1}s)",
@@ -249,6 +265,25 @@ impl SpeechRecognizerSttProvider {
                     );
                 }
                 self.consecutive_speech_probes = 0;
+
+                // Short-utterance fallback: ≥1 speech probe already seen (we're in
+                // accumulating), then a full silence window → finalize without confirm.
+                let short_silence_probes = (self.silence_samples_threshold + VAD_PROBE_SAMPLES - 1)
+                    / VAD_PROBE_SAMPLES;
+                if self.accum_silence_probes >= short_silence_probes.max(1) {
+                    let buf = std::mem::take(&mut self.accum_buf);
+                    self.accumulating = false;
+                    self.consecutive_speech_probes = 0;
+                    self.accum_silence_probes = 0;
+                    self.accum_probes_total = 0;
+                    debug!(
+                        target: "stt",
+                        "Short utterance finalized ({:.1}s, silence_probes={})",
+                        buf.len() as f32 / SR_USIZE as f32,
+                        short_silence_probes.max(1)
+                    );
+                    return VadAction::StartShort(buf);
+                }
             }
             VadAction::None
         } else {
@@ -257,6 +292,7 @@ impl SpeechRecognizerSttProvider {
                 self.accumulating = true;
                 self.consecutive_speech_probes = 1;
                 self.accum_probes_total = 1;
+                self.accum_silence_probes = 0;
                 self.accum_buf.clear();
                 self.accum_buf.extend_from_slice(chunk);
                 debug!(
@@ -264,6 +300,7 @@ impl SpeechRecognizerSttProvider {
                     "Start accumulating (1/{}) prob={:.3}",
                     self.vad_confirm_probes, avg_prob
                 );
+                return VadAction::AccumStarted;
             }
             VadAction::None
         }
@@ -273,6 +310,7 @@ impl SpeechRecognizerSttProvider {
         self.accumulating = false;
         self.consecutive_speech_probes = 0;
         self.accum_probes_total = 0;
+        self.accum_silence_probes = 0;
         self.accum_buf.clear();
     }
 
@@ -288,7 +326,9 @@ impl SpeechRecognizerSttProvider {
         let mut st = self.state.lock().await;
         st.task_done = false;
         st.awaiting_finalize = false;
-        st.speech_start_sent = false;
+        // Do not reset speech_start_sent — VAD may have already emitted SpeechStart
+        // on AccumStarted (fast barge-in). Resetting would cause a duplicate on the
+        // first Apple partial.
 
         let request = AudioBufferRecognitionRequest::new().with_options(
             RecognitionRequestOptions::new()
@@ -435,9 +475,25 @@ impl SttProvider for SpeechRecognizerSttProvider {
             let chunk: Vec<f32> = self.probe_carry.drain(..VAD_PROBE_SAMPLES).collect();
             match self.process_probe(&chunk) {
                 VadAction::None => {}
+                VadAction::AccumStarted => {
+                    // Fast barge-in: emit SpeechStart on the first speech-like probe.
+                    {
+                        let mut st = self.state.lock().await;
+                        st.speech_start_sent = true;
+                    }
+                    debug!(target: "stt", "SpeechStart (from VAD onset)");
+                    let _ = tx.send(SpeechEvent::SpeechStart).await;
+                }
                 VadAction::Start(buf) => {
                     self.create_task().await?;
                     self.feed_audio(&buf).await?;
+                }
+                VadAction::StartShort(buf) => {
+                    // Short unconfirmed utterance: feed Apple and finalize immediately.
+                    // SpeechStart was already emitted on AccumStarted.
+                    self.create_task().await?;
+                    self.feed_audio(&buf).await?;
+                    self.signal_end_audio().await;
                 }
                 VadAction::Feed(chunk) => {
                     self.feed_audio(&chunk).await?;
@@ -450,6 +506,22 @@ impl SttProvider for SpeechRecognizerSttProvider {
                     }
                     self.signal_end_audio().await;
                     self.reset_vad();
+                }
+                VadAction::Discard => {
+                    // Continuous non-speech that never confirmed: close the utterance
+                    // so main.rs can reject empty text and return TUI to Idle.
+                    {
+                        let mut st = self.state.lock().await;
+                        st.speech_start_sent = false;
+                    }
+                    let quality = TranscriptionQuality {
+                        text: String::new(),
+                        no_speech_prob: 0.0,
+                        avg_logprob: 0.0,
+                        compression_ratio: 0.0,
+                    };
+                    debug!(target: "stt", "SpeechEnd (accum discard, empty)");
+                    let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
                 }
             }
         }
