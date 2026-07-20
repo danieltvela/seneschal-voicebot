@@ -21,9 +21,15 @@ const VAD_PROBE_MS: usize = 100;
 const VAD_PROBE_SAMPLES: usize = SR_USIZE * VAD_PROBE_MS / 1000;
 const PRE_ROLL_MS: usize = 300;
 const PRE_ROLL_SAMPLES: usize = SR_USIZE * PRE_ROLL_MS / 1000;
+/// Leading silence pad so Apple SFSpeechRecognizer has acoustic context before onset.
+const PRE_SILENCE_MS: usize = 200;
+const PRE_SILENCE_SAMPLES: usize = SR_USIZE * PRE_SILENCE_MS / 1000;
 const POST_ROLL_MS: usize = 500;
 const POST_ROLL_SAMPLES: usize = SR_USIZE * POST_ROLL_MS / 1000;
 const MAX_ACCUM_PROBES: usize = 50;
+/// Minimum silence probes before short-utterance finalize (500ms). Brief VAD dips
+/// mid-phrase must not chop "Uno, dos, tres" off before "Probando…".
+const MIN_SHORT_SILENCE_PROBES: usize = 5;
 
 /// Shared mutable state for the recognition task and event buffer.
 struct SharedState {
@@ -61,6 +67,8 @@ enum AccumDecision {
     ShortFinalize,
     /// Hit `MAX_ACCUM_PROBES` without confirming or short-finalizing.
     Discard,
+    /// Single noise blip — silent reset (no Apple task, no SpeechStart).
+    Abort,
     /// Keep accumulating.
     Continue,
 }
@@ -72,16 +80,21 @@ struct AccumTracker {
     confirm_probes: usize,
     short_silence_probes: usize,
     consecutive_speech_probes: usize,
+    /// Total speech probes seen this accumulation (not necessarily consecutive).
+    speech_probes_seen: usize,
     silence_probes: usize,
     probes_total: usize,
 }
 
 impl AccumTracker {
     fn new(confirm_probes: usize, silence_samples_threshold: usize) -> Self {
+        let from_silence = silence_samples_threshold.div_ceil(VAD_PROBE_SAMPLES).max(1);
         Self {
             confirm_probes: confirm_probes.max(1),
-            short_silence_probes: silence_samples_threshold.div_ceil(VAD_PROBE_SAMPLES).max(1),
+            // At least MIN_SHORT_SILENCE_PROBES so brief dips don't short-finalize.
+            short_silence_probes: from_silence.max(MIN_SHORT_SILENCE_PROBES),
             consecutive_speech_probes: 0,
+            speech_probes_seen: 0,
             silence_probes: 0,
             probes_total: 0,
         }
@@ -91,12 +104,14 @@ impl AccumTracker {
     /// Does not return Confirmed (SpeechStart is emitted separately as AccumStarted).
     fn begin_speech(&mut self) {
         self.consecutive_speech_probes = 1;
+        self.speech_probes_seen = 1;
         self.silence_probes = 0;
         self.probes_total = 1;
     }
 
     fn reset(&mut self) {
         self.consecutive_speech_probes = 0;
+        self.speech_probes_seen = 0;
         self.silence_probes = 0;
         self.probes_total = 0;
     }
@@ -108,6 +123,7 @@ impl AccumTracker {
         if is_speech {
             self.silence_probes = 0;
             self.consecutive_speech_probes += 1;
+            self.speech_probes_seen += 1;
         } else {
             self.consecutive_speech_probes = 0;
             self.silence_probes += 1;
@@ -123,12 +139,26 @@ impl AccumTracker {
         }
 
         if !is_speech && self.silence_probes >= self.short_silence_probes {
+            // A single probe blip (cough/noise) → abort quietly. Real short words
+            // usually leave ≥1 speech probe in the buffer with enough energy that
+            // confirm nearly fired; still allow ShortFinalize when we saw speech.
+            if self.speech_probes_seen < self.confirm_probes && self.speech_probes_seen <= 1 {
+                self.reset();
+                return AccumDecision::Abort;
+            }
             self.reset();
             return AccumDecision::ShortFinalize;
         }
 
         AccumDecision::Continue
     }
+}
+
+/// Utterance waiting because the previous Apple task is still finalizing.
+struct PendingUtterance {
+    audio: Vec<f32>,
+    /// If true, call end_audio() immediately after creating the task.
+    end_immediately: bool,
 }
 
 /// STT provider using macOS SFSpeechRecognizer via the `speech` crate.
@@ -160,6 +190,10 @@ pub struct SpeechRecognizerSttProvider {
     accumulating: bool,
     accum_buf: Vec<f32>,
     accum: AccumTracker,
+    /// Audio immediately before VAD onset (from pre_roll, excludes first speech probe).
+    onset_prefix: Vec<f32>,
+    /// Next utterance held while the previous Apple task finishes.
+    pending: Option<PendingUtterance>,
     probe_carry: Vec<f32>,
 }
 
@@ -245,6 +279,8 @@ impl SpeechRecognizerSttProvider {
             accumulating: false,
             accum_buf: Vec::new(),
             accum: AccumTracker::new(vad_confirm_probes, silence_samples_threshold),
+            onset_prefix: Vec::new(),
+            pending: None,
             probe_carry: Vec::with_capacity(VAD_PROBE_SAMPLES),
         })
     }
@@ -321,22 +357,27 @@ impl SpeechRecognizerSttProvider {
                     self.reset_accum();
                     VadAction::Discard
                 }
+                AccumDecision::Abort => {
+                    debug!(target: "stt", "Accum abort (noise blip)");
+                    self.reset_accum();
+                    VadAction::None
+                }
                 AccumDecision::Confirmed => {
-                    let buf = std::mem::take(&mut self.accum_buf);
+                    let buf = self.take_utterance_audio();
                     let confirmed_probes = self.accum.consecutive_speech_probes;
                     self.in_speech = true;
                     self.accumulating = false;
                     self.accum.reset();
                     debug!(
                         target: "stt",
-                        "Speech confirmed after {} probes ({:.1}s)",
+                        "Speech confirmed after {} probes ({:.1}s incl. onset)",
                         confirmed_probes,
                         buf.len() as f32 / SR_USIZE as f32
                     );
                     VadAction::Start(buf)
                 }
                 AccumDecision::ShortFinalize => {
-                    let buf = std::mem::take(&mut self.accum_buf);
+                    let buf = self.take_utterance_audio();
                     self.accumulating = false;
                     debug!(
                         target: "stt",
@@ -351,14 +392,21 @@ impl SpeechRecognizerSttProvider {
         } else {
             let is_speech = avg_prob >= self.vad_start_threshold;
             if is_speech {
+                // pre_roll already includes this chunk; keep only audio *before* onset.
+                let pr: Vec<f32> = self.pre_roll.iter().copied().collect();
+                let prefix_len = pr.len().saturating_sub(chunk.len());
+                self.onset_prefix = pr[..prefix_len].to_vec();
+
                 self.accumulating = true;
                 self.accum.begin_speech();
                 self.accum_buf.clear();
                 self.accum_buf.extend_from_slice(chunk);
                 debug!(
                     target: "stt",
-                    "Start accumulating (1/{}) prob={:.3}",
-                    self.vad_confirm_probes, avg_prob
+                    "Start accumulating (1/{}) prob={:.3} onset_prefix_ms={}",
+                    self.vad_confirm_probes,
+                    avg_prob,
+                    self.onset_prefix.len() * 1000 / SR_USIZE
                 );
                 return VadAction::AccumStarted;
             }
@@ -366,10 +414,22 @@ impl SpeechRecognizerSttProvider {
         }
     }
 
+    /// Build the audio package for Apple: leading silence + pre-onset pad + accum.
+    fn take_utterance_audio(&mut self) -> Vec<f32> {
+        let prefix = std::mem::take(&mut self.onset_prefix);
+        let accum = std::mem::take(&mut self.accum_buf);
+        let mut out = Vec::with_capacity(PRE_SILENCE_SAMPLES + prefix.len() + accum.len());
+        out.extend(std::iter::repeat_n(0.0f32, PRE_SILENCE_SAMPLES));
+        out.extend(prefix);
+        out.extend(accum);
+        out
+    }
+
     fn reset_accum(&mut self) {
         self.accumulating = false;
         self.accum.reset();
         self.accum_buf.clear();
+        self.onset_prefix.clear();
     }
 
     fn reset_vad(&mut self) {
@@ -377,6 +437,76 @@ impl SpeechRecognizerSttProvider {
         self.in_post_roll = false;
         self.reset_accum();
         self.silence_samples = 0;
+    }
+
+    async fn task_is_busy(&self) -> bool {
+        let st = self.state.lock().await;
+        st.task.is_some() && !st.task_done
+    }
+
+    /// Start Apple recognition, or queue audio if the previous task is still finalizing.
+    async fn start_recognition(
+        &mut self,
+        buf: Vec<f32>,
+        end_immediately: bool,
+        tx: &mpsc::Sender<SpeechEvent>,
+    ) -> Result<()> {
+        self.emit_speech_start_if_needed(tx).await;
+
+        if self.task_is_busy().await {
+            debug!(
+                target: "stt",
+                "Queuing {:.1}s audio — previous task still finalizing",
+                buf.len() as f32 / SR_USIZE as f32
+            );
+            if let Some(ref mut p) = self.pending {
+                p.audio.extend_from_slice(&buf);
+                p.end_immediately = p.end_immediately || end_immediately;
+            } else {
+                self.pending = Some(PendingUtterance {
+                    audio: buf,
+                    end_immediately,
+                });
+            }
+            return Ok(());
+        }
+
+        self.create_task().await?;
+        self.feed_audio(&buf).await?;
+        if end_immediately {
+            self.signal_end_audio().await;
+        }
+        Ok(())
+    }
+
+    /// After a task completes, start any queued utterance.
+    async fn flush_pending(&mut self, tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(());
+        };
+        if self.task_is_busy().await {
+            // Still busy — put it back.
+            self.pending = Some(pending);
+            return Ok(());
+        }
+        debug!(
+            target: "stt",
+            "Flushing queued utterance ({:.1}s, end_immediately={})",
+            pending.audio.len() as f32 / SR_USIZE as f32,
+            pending.end_immediately
+        );
+        // New utterance — allow a fresh SpeechStart.
+        {
+            let mut st = self.state.lock().await;
+            st.speech_start_sent = false;
+        }
+        self.emit_speech_start_if_needed(tx).await;
+        self.create_task().await?;
+        self.feed_audio(&pending.audio).await?;
+        if pending.end_immediately {
+            self.signal_end_audio().await;
+        }
+        Ok(())
     }
 
     /// Emit SpeechStart once per utterance (idempotent via speech_start_sent).
@@ -575,25 +705,29 @@ impl SttProvider for SpeechRecognizerSttProvider {
                     debug!(target: "stt", "VAD onset (accumulating, SpeechStart deferred)");
                 }
                 VadAction::Start(buf) => {
-                    self.emit_speech_start_if_needed(tx).await;
-                    self.create_task().await?;
-                    self.feed_audio(&buf).await?;
+                    self.start_recognition(buf, false, tx).await?;
                 }
                 VadAction::StartShort(buf) => {
-                    // Short unconfirmed utterance: barge-in now, feed Apple, finalize.
-                    self.emit_speech_start_if_needed(tx).await;
-                    self.create_task().await?;
-                    self.feed_audio(&buf).await?;
-                    self.signal_end_audio().await;
+                    self.start_recognition(buf, true, tx).await?;
                 }
                 VadAction::Feed(chunk) => {
-                    self.feed_audio(&chunk).await?;
+                    // If the previous task is still finalizing, this audio belongs
+                    // to the queued follow-up utterance — don't feed the dying task.
+                    if let Some(ref mut p) = self.pending {
+                        p.audio.extend_from_slice(&chunk);
+                    } else {
+                        self.feed_audio(&chunk).await?;
+                    }
                 }
                 VadAction::End => {
-                    // Do not re-feed pre_roll here: it already contains the most
-                    // recent audio, which was streamed via Feed. Double-feeding
-                    // confuses Apple and can yield empty/failed finals.
-                    self.signal_end_audio().await;
+                    if let Some(ref mut p) = self.pending {
+                        // Follow-up utterance ended before it could start — finalize when flushed.
+                        p.end_immediately = true;
+                        debug!(target: "stt", "End while queued — will end_audio on flush");
+                    } else {
+                        // Do not re-feed pre_roll: already streamed via Feed.
+                        self.signal_end_audio().await;
+                    }
                     self.reset_vad();
                 }
                 VadAction::Discard => {
@@ -644,6 +778,11 @@ impl SttProvider for SpeechRecognizerSttProvider {
             self.reset_vad();
         }
 
+        // Previous task finished — start any utterance that was queued behind it.
+        if task_done {
+            self.flush_pending(tx).await?;
+        }
+
         Ok(())
     }
 
@@ -690,12 +829,26 @@ mod tests {
     }
 
     #[test]
-    fn accum_one_speech_then_three_silence_short_finalize() {
+    fn accum_single_blip_aborts_after_min_silence() {
         let mut t = tracker_300ms_silence_confirm2();
-        t.begin_speech(); // 1 speech
-        assert_eq!(t.on_probe(false), AccumDecision::Continue); // silence 1
-        assert_eq!(t.on_probe(false), AccumDecision::Continue); // silence 2
-        assert_eq!(t.on_probe(false), AccumDecision::ShortFinalize); // silence 3
+        t.begin_speech(); // 1 speech only
+        for _ in 0..(MIN_SHORT_SILENCE_PROBES - 1) {
+            assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        }
+        // Single-probe noise blip → Abort (no Apple task)
+        assert_eq!(t.on_probe(false), AccumDecision::Abort);
+    }
+
+    #[test]
+    fn accum_two_speech_probes_then_silence_short_finalize() {
+        let mut t = tracker_300ms_silence_confirm2();
+        t.begin_speech(); // seen=1
+        assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        assert_eq!(t.on_probe(true), AccumDecision::Continue); // seen=2, not consecutive enough to confirm
+        for _ in 0..(MIN_SHORT_SILENCE_PROBES - 1) {
+            assert_eq!(t.on_probe(false), AccumDecision::Continue);
+        }
+        assert_eq!(t.on_probe(false), AccumDecision::ShortFinalize);
     }
 
     #[test]
@@ -704,9 +857,9 @@ mod tests {
         t.begin_speech();
         assert_eq!(t.on_probe(false), AccumDecision::Continue);
         assert_eq!(t.on_probe(false), AccumDecision::Continue);
-        // still need one more silence probe
         assert_eq!(t.silence_probes, 2);
-        assert_eq!(t.short_silence_probes, 3);
+        // short window is at least MIN_SHORT_SILENCE_PROBES (500ms)
+        assert_eq!(t.short_silence_probes, MIN_SHORT_SILENCE_PROBES);
     }
 
     #[test]
