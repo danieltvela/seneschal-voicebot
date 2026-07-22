@@ -4,6 +4,30 @@ All notable changes to Seneschal will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.1.0-alpha.7 (2026-07-22)
+
+### Features
+- **[#129](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/129)**: Rename binary from voicebot to seneschal
+- **[#138](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/138)**: Improved subagent integration (Hermes, OpenCode) with session persistence and viewer
+- **[#142](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/142)**: Prompt-Build Mode -- iterative prompt building with TUI display
+- **[#144](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/144)**: MCP server support via URL (throw server)
+- **[#145](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/145)**: File/directory input tool for TUI
+- **[#146](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/146)**: BrowserOS plugin for web navigation
+- **[#151](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/151)**: Visible subagent mode with PTY sessions and terminal viewer
+
+### Bug Fixes
+- **[#127](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/127)**: CI release build now compiled with speech feature
+- **[#128](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/128)**: Install script voice test phrase updated to "Hello, this is Seneschal"
+- **[#131](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/131)**: Fixed Hermes integration config parsing
+- **[#132](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/132)**: Reminders now lists the Today list correctly
+- **[#133](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/133)**: Calendar event search returns recent events
+- **[#134](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/134)**: Fixed end-of-speech detection misses (~1/6 of turns)
+- **[#147](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/147)**: TUI now uses full viewport with status bar on last line
+- **[#148](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/148)**: Removed developer message role, unified under system role
+- **[#150](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/150)**: Fixed VAD not detecting short user phrases
+
+---
+
 ## v0.1.0-alpha.6 (2026-07-10)
 
 ### Features
