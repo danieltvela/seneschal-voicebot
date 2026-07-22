@@ -3,6 +3,7 @@
 #![allow(unused_mut)]
 #![allow(unused_variables)]
 
+mod agent_session;
 mod agents;
 mod analysis;
 mod audio;
@@ -41,6 +42,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use crate::agent_session::VisibleSessionManager;
 use crate::agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport, ProactiveEvent};
 use crate::analysis::ContextLens;
 use crate::analysis::identity::IdentityAnalyzer;
@@ -307,6 +309,7 @@ async fn async_main() -> Result<()> {
     let agent_registry = AgentRegistry::from_config_and_env(config.agents.clone());
     let agent_section = agent_registry.system_prompt_section();
     let session_manager = Arc::new(AcpSessionManager::new());
+    let visible_session_manager = Arc::new(VisibleSessionManager::new());
 
     // ── Search provider (fast path) ───────────────────────────────────────────
     if let Some(provider) = crate::search::from_config(&config) {
@@ -350,6 +353,15 @@ async fn async_main() -> Result<()> {
         } else if agent.mode == "acp" {
             run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
             run_agent_tool = run_agent_tool.with_hermes_viewer(config.hermes_session_viewer);
+        } else if agent.mode == "visible" {
+            run_agent_tool = run_agent_tool
+                .with_visible_manager(Arc::clone(&visible_session_manager))
+                .with_session_dir(config.session_dir.clone());
+            if let Some(command) = &agent.command {
+                info!(target: "seneschal", "run_{} visible mode enabled (command={})", agent.name, command);
+            } else {
+                warn!(target: "seneschal", "run_{} visible mode enabled but no command set", agent.name);
+            }
         }
         tool_registry.register(run_agent_tool);
     }

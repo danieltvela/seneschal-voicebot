@@ -94,6 +94,10 @@ llm_idle_consolidation_secs = 900
 llm_idle_min_context_pct = 20
 llm_history_load_limit = 0
 
+# ── Visible agent sessions (PTY) ─────────────────────────────────────────────
+session_dir = "/tmp/seneschal_sessions"
+visible_agent_enabled = false
+
 # ── Agent delegation ──────────────────────────────────────────────────────────
 agent_timeout_secs = 120
 agent_mode = "cli"
