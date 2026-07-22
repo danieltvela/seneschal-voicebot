@@ -6,7 +6,8 @@ servers:
       vllm:
         port: 8005
         token: ""
-        models: []
+        models:
+          - Laguna-S-2.1-NVFP4
           # - Step-3.7-Flash
           # - Qwen3.6-27B-FP8
           # - Qwen3.6-27B-NVFP4
@@ -55,8 +56,8 @@ servers:
       omlx:
         port: 8000
         token: "asdf"
-        models:
-          - gemma-4-26B-A4B-it-QAT-MLX-4bit
+        models: []
+          # - gemma-4-26B-A4B-it-QAT-MLX-4bit
           # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
           # - gemma-4-26B-A4B-it-MLX-4bit
           # - "Qwen3.6-35B-A3B-4bit"
@@ -85,14 +86,14 @@ servers:
       lm-studio:
         port: 1234
         token: ""
-        models:
+        models: []
           # - google/gemma-4-12b
           # - gemma-4-12b-it-mlx
           # - google/gemma-4-12b-qat
           # - google/gemma-4-26b-a4b
           # - gemma-4-26b-a4b-it-qat-nvfp4
           # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
-          - gemma-4-26b-a4b-it-nvfp4
+          # - gemma-4-26b-a4b-it-nvfp4
       vllm:
         port: 8000
         token: ""
