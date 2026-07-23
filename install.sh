@@ -81,9 +81,16 @@ if [ "$_INTERACTIVE" = "0" ]; then
     :
 elif [ ! -t 0 ]; then
     if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-        exec </dev/tty
+        exec </dev/tty || {
+            warn "Could not redirect stdin to /dev/tty."
+            warn "Falling back to non-interactive mode (using defaults)."
+            _INTERACTIVE=0
+        }
     else
-        error "stdin is not a TTY and /dev/tty is unavailable. Re-run with --non-interactive or run: sh -c \"\$(curl -fsSL …/install.sh)\" </dev/tty"
+        warn "stdin is not a TTY and /dev/tty is unavailable."
+        warn "Falling back to non-interactive mode (using defaults)."
+        warn "Re-run with --non-interactive flag to suppress this warning."
+        _INTERACTIVE=0
     fi
 fi
 
@@ -253,12 +260,12 @@ download() {
     _url="$1"; _dest="$2"; _label="$3"
     info "  Downloading: $_label"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --progress-bar -o "$_dest" "$_url" 2>&1 >&2 || {
+        curl -fsSL --progress-bar -o "$_dest" "$_url" || {
             rm -f "$_dest"
             error "Download failed: $_url"
         }
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$_dest" "$_url" 2>&1 >&2 || {
+        wget -q --show-progress -O "$_dest" "$_url" || {
             rm -f "$_dest"
             error "Download failed: $_url"
         }
@@ -1246,7 +1253,11 @@ configure_external_agents() {
     _AGENT_COUNT=0
 
     # Ask which agents to configure
-    _configure_any=$(confirm "Configure external agents?" "y")
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        _configure_any="n"
+    else
+        _configure_any=$(confirm "Configure external agents?" "y")
+    fi
     if [ "$_configure_any" != "y" ]; then
         info "  Skipping external agent configuration."
         return
