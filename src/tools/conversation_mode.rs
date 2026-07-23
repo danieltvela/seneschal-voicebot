@@ -10,7 +10,8 @@ pub enum ConversationMode {
     /// Default — responds to the enrolled user's voice normally.
     Active,
     /// Quiet mode activated automatically (silence timer or non-user streak).
-    /// Any speech from the main user immediately returns the bot to Active.
+    /// Requires wake word to respond. Main-user wake word switches to Active;
+    /// secondary-voice wake word responds without mode change.
     Ambient,
     /// Quiet mode activated explicitly by the user via the tool.
     /// Stays locked until the user explicitly requests Active mode — automatic
