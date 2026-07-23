@@ -6,8 +6,8 @@ servers:
       vllm:
         port: 8005
         token: ""
-        models:
-          - Laguna-S-2.1-NVFP4
+        models: []
+          # - Laguna-S-2.1-NVFP4
           # - Step-3.7-Flash
           # - Qwen3.6-27B-FP8
           # - Qwen3.6-27B-NVFP4
@@ -22,10 +22,10 @@ servers:
       vllm-gemma:
         port: 8006
         token: ""
-        models: []
+        models:
           # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
-          # - gemma-4-31B-it-NVFP4
+          - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
           # - Qwen3.6-27B-NVFP4
