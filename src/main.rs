@@ -1620,7 +1620,10 @@ async fn async_main() -> Result<()> {
 
                     stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
-                    while let Ok(event) = stt_rx.try_recv() {
+                    // Collect pending STT events, then process each one.
+                    // Using a Vec + for loop allows .await inside SpeechEnd handling.
+                    let pending_events: Vec<SpeechEvent> = std::iter::from_fn(|| stt_rx.try_recv().ok()).collect();
+                    for event in pending_events {
                         match event {
                             SpeechEvent::SpeechStart => {
                                 t_speech_start = Some(Instant::now());
@@ -1709,63 +1712,51 @@ async fn async_main() -> Result<()> {
 
                                 *last_speech_at.lock().unwrap() = Instant::now();
 
-                                let mut is_main_speaker = true;
-                                let mut speaker_label = "Usuario".to_string();
+                                // ── Speaker verification (synchronous, CPU-blocking) ──
+                                let (is_main_speaker, speaker_label) =
+                                    if let Some(ref analyzer) = identity_analyzer {
+                                        let analyzer = Arc::clone(analyzer);
+                                        let audio_c = audio.clone();
+                                        let sample_rate = config.sample_rate;
+                                        tokio::task::spawn_blocking(move || {
+                                            let mut a = analyzer.lock().unwrap();
+                                            let result = a.verify(sample_rate, &audio_c);
+                                            (result.is_main_speaker, result.speaker_label)
+                                        })
+                                        .await
+                                        .unwrap()
+                                    } else {
+                                        (true, "Usuario".to_string())
+                                    };
 
-                                if let Some(analyzer) = identity_analyzer.clone() {
-                                    let audio_c = audio.clone();
-                                    let streak_c = Arc::clone(&non_user_streak);
-                                    let mode_c = Arc::clone(&conv_mode);
-                                    let amb_trigger = config.speaker_ambient_trigger;
-                                    let amb_buf_c = Arc::clone(&ambient_buffer);
-                                    let stt_cfg = config.clone();
-                                    let sample_rate = config.sample_rate;
-                                    let label = speaker_label.clone();
-
-                                    tokio::spawn(async move {
-                                        let mut analyzer = analyzer.lock().unwrap();
-                                        let result = analyzer.verify(sample_rate, &audio_c);
-                                        let is_main = result.is_main_speaker;
-                                        let speaker_label = result.speaker_label;
-
-                                        if !is_main {
-                                            let mut streak = streak_c.lock().unwrap();
-                                            *streak = streak.saturating_add(1);
-                                            if *streak >= amb_trigger {
-                                                let mut mode = mode_c.lock().unwrap();
-                                                if *mode == ConversationMode::Active {
-                                                    *mode = ConversationMode::Ambient;
-                                                    drop(mode);
-                                                    info!(
-                                                        target: "pipeline",
-                                                        "Ambient mode: {} consecutive non-user voices",
-                                                        *streak
-                                                    );
-                                                }
-                                            }
-                                            let t0 = Instant::now();
-                                            if let Ok(provider) = create_provider(&stt_cfg)
-                                                && let Ok(quality) = provider.transcribe_complete(&audio_c)
-                                                && !quality.text.is_empty()
-                                            {
-                                                amb_buf_c.lock().unwrap().push(speaker_label.clone(), quality.text.clone());
-                                                debug!(
-                                                    target: "pipeline",
-                                                    "Ambient buffer ← {speaker_label}: {} ({}ms)",
-                                                    quality.text,
-                                                    t0.elapsed().as_millis()
-                                                );
-                                            }
-                                        } else {
-                                            *streak_c.lock().unwrap() = 0;
+                                // ── Mode-change side effects (streak, ambient buffer) ──
+                                if !is_main_speaker {
+                                    let mut streak = non_user_streak.lock().unwrap();
+                                    *streak = streak.saturating_add(1);
+                                    if *streak >= config.speaker_ambient_trigger {
+                                        let mut mode = conv_mode.lock().unwrap();
+                                        if *mode == ConversationMode::Active {
+                                            *mode = ConversationMode::Ambient;
+                                            drop(mode);
+                                            info!(
+                                                target: "pipeline",
+                                                "Ambient mode: {} consecutive non-user voices",
+                                                *streak
+                                            );
                                         }
-                                    });
+                                    }
+                                    drop(streak);
+                                    // Buffer non-main-speaker transcript regardless of mode.
+                                    ambient_buffer.lock().unwrap()
+                                        .push(speaker_label.clone(), segment_text.clone());
+                                    debug!(
+                                        target: "pipeline",
+                                        "Ambient buffer ← {speaker_label}: {}",
+                                        segment_text
+                                    );
+                                } else {
+                                    *non_user_streak.lock().unwrap() = 0;
                                 }
-
-                                let mode_snapshot = conv_mode.lock().unwrap().clone();
-                                let ambient_locked = mode_snapshot == ConversationMode::AmbientLocked;
-                                let ambient_auto   = mode_snapshot == ConversationMode::Ambient;
-                                let wake_word_check = config.wake_word.clone();
 
                                 // ── ACP permission gate (FIFO queue) ──────────────────
                                 if let Some(entry) = pending_agent_questions.pop_front() {
@@ -1802,23 +1793,48 @@ async fn async_main() -> Result<()> {
                                     continue;
                                 }
 
-                                let mut final_text = segment_text;
+                                // ── Ambient/Active mode gating with wake word ─────────
+                                let mode_snapshot = conv_mode.lock().unwrap().clone();
+                                let is_ambient = matches!(
+                                    mode_snapshot,
+                                    ConversationMode::Ambient | ConversationMode::AmbientLocked
+                                );
+                                let has_wake_word = segment_text
+                                    .to_lowercase()
+                                    .contains(&config.wake_word.to_lowercase());
 
-                                if ambient_locked {
-                                    let lower = final_text.to_lowercase();
-                                    if !lower.contains(&wake_word_check.to_lowercase()) {
-                                        ambient_buffer.lock().unwrap()
-                                            .push("Usuario".to_string(), final_text.clone());
-                                        debug!(target: "pipeline", "Ambient (locked): no wake word — buffered");
+                                if is_ambient {
+                                    if has_wake_word && is_main_speaker {
+                                        // Main user + wake word → respond AND switch to Active
+                                        *conv_mode.lock().unwrap() = ConversationMode::Active;
+                                        info!(target: "pipeline", "Main user wake word — switching to Active");
+                                        // Fall through → respond normally
+                                    } else if has_wake_word {
+                                        // Secondary voice + wake word → respond BUT stay Ambient
+                                        info!(target: "pipeline", "Secondary voice wake word — responding, staying Ambient");
+                                        // Fall through → respond normally (mode unchanged)
+                                    } else {
+                                        // No wake word → buffer (already buffered for
+                                        // non-main above) and skip LLM pipeline.
+                                        if is_main_speaker {
+                                            ambient_buffer.lock().unwrap()
+                                                .push(speaker_label.clone(), segment_text.clone());
+                                            debug!(target: "pipeline", "Ambient: main user without wake word — buffered");
+                                        }
                                         continue;
                                     }
-                                    info!(target: "pipeline", "Ambient (locked): wake word detected");
-                                } else if ambient_auto {
-                                    *conv_mode.lock().unwrap() = ConversationMode::Active;
-                                    info!(target: "pipeline", "Auto-ambient: main user spoke — returning Active");
+                                } else {
+                                    // Active mode
+                                    if !is_main_speaker {
+                                        // Non-main user in Active → discard (already buffered
+                                        // above in the mode-change side effects section).
+                                        continue;
+                                    }
+                                    // Main user in Active → respond normally (fall through)
                                 }
 
-                                // Inject ambient context if query contains a referential.
+                                // ── Ambient context injection ──────────────────────────
+                                let mut final_text = segment_text;
                                 final_text = {
                                     let buf = ambient_buffer.lock().unwrap();
                                     if crate::audio::ambient_buffer::has_referential(&final_text) {
