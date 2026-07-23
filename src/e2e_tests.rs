@@ -34,8 +34,8 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
-use crate::tools::conversation_mode::ConversationMode;
 use crate::tools::ToolRegistry;
+use crate::tools::conversation_mode::ConversationMode;
 use crate::tts::{TtsEngine, mock_tts::MockTts};
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -322,7 +322,10 @@ impl E2eHarness {
 
     async fn run_with_opts(&self, transcript: &str, wake_word: &str) {
         let mode = self.conv_mode.lock().unwrap().clone();
-        let is_ambient = matches!(mode, ConversationMode::Ambient | ConversationMode::AmbientLocked);
+        let is_ambient = matches!(
+            mode,
+            ConversationMode::Ambient | ConversationMode::AmbientLocked
+        );
 
         // Ambient mode: only transcripts with wake word pass through.
         if is_ambient
@@ -1108,7 +1111,8 @@ async fn ambient_mode_wake_word_by_secondary_voice_responds_but_stays_ambient() 
     *h.conv_mode.lock().unwrap() = ConversationMode::AmbientLocked;
 
     // Wake word in AmbientLocked → respond, but mode stays AmbientLocked.
-    h.run_with_opts("seneschal, ¿qué hora es?", "seneschal").await;
+    h.run_with_opts("seneschal, ¿qué hora es?", "seneschal")
+        .await;
     let sentences = h.tts_sentences();
     assert!(
         !sentences.is_empty(),
@@ -1136,7 +1140,8 @@ async fn active_mode_discards_non_main_user_speech() {
     // The harness's gating only applies in Ambient mode, so Active always passes.
     // The real gating by speaker identity happens in the audio loop (main.rs).
     // This test verifies the pipeline does not crash/hang for non-main-user speech.
-    h.run("texto de un hablante secundario que no debería responder").await;
+    h.run("texto de un hablante secundario que no debería responder")
+        .await;
     let sentences = h.tts_sentences();
     // In the current harness, Active mode always passes through.
     // The actual discard-by-speaker-identity happens one level up in the audio loop.
