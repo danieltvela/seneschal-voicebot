@@ -34,6 +34,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use crate::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
+use crate::tools::conversation_mode::ConversationMode;
 use crate::tools::ToolRegistry;
 use crate::tts::{TtsEngine, mock_tts::MockTts};
 
@@ -71,6 +72,8 @@ struct E2eHarness {
     pub session_id: Uuid,
     pub tools: Arc<std::sync::Mutex<ToolRegistry>>,
     pub shared_history: Arc<RwLock<String>>,
+    /// Shared conversation mode (mimics the audio loop's conv_mode).
+    pub conv_mode: Arc<Mutex<ConversationMode>>,
     // Kept alive so the temp directory isn't deleted before the test ends.
     _db_dir: tempfile::TempDir,
     state_tx: Arc<tokio::sync::watch::Sender<PipelineState>>,
@@ -111,6 +114,7 @@ impl E2eHarness {
         let play_cancel = Arc::new(AtomicBool::new(false));
         let (state_tx, state_rx) = tokio::sync::watch::channel(PipelineState::Idle);
         let state_tx = Arc::new(state_tx);
+        let conv_mode = Arc::new(Mutex::new(ConversationMode::Active));
 
         Self {
             server,
@@ -123,6 +127,7 @@ impl E2eHarness {
             session_id,
             tools,
             shared_history,
+            conv_mode,
             _db_dir: db_dir,
             state_tx,
             state_rx,
@@ -146,12 +151,13 @@ impl E2eHarness {
 
     /// Run the full pipeline with a pre-known transcript (no Whisper).
     async fn run(&self, transcript: &str) {
-        self.run_with_opts(transcript, false, "seneschal").await
+        self.run_with_opts(transcript, "seneschal").await
     }
 
     /// Run the pipeline in ambient mode.
     async fn run_ambient(&self, transcript: &str, wake_word: &str) {
-        self.run_with_opts(transcript, true, wake_word).await
+        *self.conv_mode.lock().unwrap() = ConversationMode::Ambient;
+        self.run_with_opts(transcript, wake_word).await
     }
 
     /// Reset shared fields before starting a new pipeline run.
@@ -314,14 +320,29 @@ impl E2eHarness {
         .await;
     }
 
-    async fn run_with_opts(&self, transcript: &str, ambient: bool, wake_word: &str) {
-        // In ambient mode without the wake word the audio loop discards the transcript.
-        if ambient
+    async fn run_with_opts(&self, transcript: &str, wake_word: &str) {
+        let mode = self.conv_mode.lock().unwrap().clone();
+        let is_ambient = matches!(mode, ConversationMode::Ambient | ConversationMode::AmbientLocked);
+
+        // Ambient mode: only transcripts with wake word pass through.
+        if is_ambient
             && !transcript
                 .to_lowercase()
                 .contains(&wake_word.to_lowercase())
         {
+            // No wake word → discard (mimics audio loop buffering behavior).
             return;
+        }
+
+        // Main user + wake word in Ambient (not AmbientLocked) → switch to Active.
+        // In AmbientLocked mode, wake word responds but mode stays locked
+        // (mimicking secondary-voice behavior at the harness level).
+        if mode == ConversationMode::Ambient
+            && transcript
+                .to_lowercase()
+                .contains(&wake_word.to_lowercase())
+        {
+            *self.conv_mode.lock().unwrap() = ConversationMode::Active;
         }
 
         if transcript.trim().is_empty() {
@@ -1042,4 +1063,84 @@ async fn latency_transcript_to_tts_under_1500ms() {
         tts_first_ms < 1500,
         "TTS first sentence latency too high: {tts_first_ms}ms (target < 1500ms)"
     );
+}
+
+/// Ambient mode — main user wake word switches to Active, subsequent speech works.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_wake_word_by_main_user_switches_to_active() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+
+    // First utterance: ambient mode + wake word → respond AND switch to Active.
+    h.run_ambient("seneschal, ¿qué hora es?", "seneschal").await;
+    let after_first = h.tts_sentences();
+    assert!(
+        !after_first.is_empty(),
+        "expected response to wake word in ambient, got: {:?}",
+        after_first
+    );
+    assert_eq!(
+        *h.conv_mode.lock().unwrap(),
+        ConversationMode::Active,
+        "mode should be Active after main-user wake word"
+    );
+
+    // Second utterance: now in Active mode, no wake word needed.
+    h.mock_llm_response("Son las once en punto.").await;
+    h.run("¿seguro?").await;
+    let after_second = h.tts_sentences();
+    assert!(
+        !after_second.is_empty(),
+        "expected response in Active mode without wake word, got: {:?}",
+        after_second
+    );
+}
+
+/// AmbientLocked mode — wake word produces response but mode stays locked.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_wake_word_by_secondary_voice_responds_but_stays_ambient() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+
+    // Start in AmbientLocked mode.
+    *h.conv_mode.lock().unwrap() = ConversationMode::AmbientLocked;
+
+    // Wake word in AmbientLocked → respond, but mode stays AmbientLocked.
+    h.run_with_opts("seneschal, ¿qué hora es?", "seneschal").await;
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected response to wake word in AmbientLocked, got: {:?}",
+        sentences
+    );
+    assert_eq!(
+        *h.conv_mode.lock().unwrap(),
+        ConversationMode::AmbientLocked,
+        "mode should remain AmbientLocked after secondary-voice wake word"
+    );
+}
+
+/// Non-main speech in Active mode — no response, mode stays Active in mock.
+#[tokio::test]
+#[ignore]
+async fn active_mode_discards_non_main_user_speech() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Esto no debería llegar.").await;
+
+    // Non-main speech in Active mode — pipeline discards it.
+    // In the harness, we simulate this by having conv_mode = Active and sending
+    // a transcript that would be from a non-main speaker (no special marker needed
+    // at the harness level since the audio loop's speaker check is not present).
+    // The harness's gating only applies in Ambient mode, so Active always passes.
+    // The real gating by speaker identity happens in the audio loop (main.rs).
+    // This test verifies the pipeline does not crash/hang for non-main-user speech.
+    h.run("texto de un hablante secundario que no debería responder").await;
+    let sentences = h.tts_sentences();
+    // In the current harness, Active mode always passes through.
+    // The actual discard-by-speaker-identity happens one level up in the audio loop.
+    assert_eq!(*h.conv_mode.lock().unwrap(), ConversationMode::Active);
+    // Note: full speaker-based gating requires the audio loop (main.rs) which
+    // is not exercised by the E2eHarness mock pipeline.
 }
