@@ -32,7 +32,7 @@ cat > "$FIXTURE_DIR/seneschal" << 'EOF'
 echo "Seneschal stub"
 EOF
 chmod +x "$FIXTURE_DIR/seneschal"
-tar -czf "$FIXTURE_DIR/seneschal-stub.tar.gz" -C "$FIXTURE_DIR" seneschal
+tar -czf "$FIXTURE_DIR/voicebot-stub.tar.gz" -C "$FIXTURE_DIR" seneschal
 
 echo "STUB_WHISPER_TINY"   > "$FIXTURE_DIR/ggml-tiny.bin"
 echo "STUB_WHISPER_SMALL"  > "$FIXTURE_DIR/ggml-small.bin"
@@ -110,8 +110,8 @@ fi
 
 # File download — serve from fixtures based on URL pattern
 case "$URL" in
-    *seneschal-*.tar.gz*)
-        cp "$MOCK_FIXTURE_DIR/seneschal-stub.tar.gz" "$OUT_FILE" ;;
+    *voicebot-*.tar.gz*)
+        cp "$MOCK_FIXTURE_DIR/voicebot-stub.tar.gz" "$OUT_FILE" ;;
     *ggml-tiny.bin*)
         cp "$MOCK_FIXTURE_DIR/ggml-tiny.bin" "$OUT_FILE" ;;
     *ggml-small.bin*)

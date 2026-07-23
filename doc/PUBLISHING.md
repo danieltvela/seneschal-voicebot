@@ -15,10 +15,10 @@ Each release contains:
 
 | File | Description |
 |------|-------------|
-| `seneschal-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon (M1/M2/M3) |
-| `seneschal-x86_64-apple-darwin.tar.gz` | macOS Intel |
-| `seneschal-x86_64-unknown-linux-gnu.tar.gz` | Linux x86\_64 |
-| `seneschal-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
+| `voicebot-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon (M1/M2/M3) |
+| `voicebot-x86_64-apple-darwin.tar.gz` | macOS Intel |
+| `voicebot-x86_64-unknown-linux-gnu.tar.gz` | Linux x86\_64 |
+| `voicebot-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
 | `*.sha256` | SHA-256 checksums for each tarball |
 | `install.sh` | The installer script |
 
@@ -103,7 +103,7 @@ GitHub Actions.
 # Requires: Xcode Command Line Tools (xcode-select --install)
 cargo build --release --bin seneschal --features avspeech
 strip target/release/seneschal
-tar -czf seneschal-aarch64-apple-darwin.tar.gz -C target/release seneschal
+tar -czf voicebot-aarch64-apple-darwin.tar.gz -C target/release seneschal
 ```
 
 ### macOS — Intel
@@ -114,7 +114,7 @@ do **not** publish a Rosetta binary as the ARM64 release):
 ```sh
 cargo build --release --bin seneschal --features avspeech
 strip target/release/seneschal
-tar -czf seneschal-x86_64-apple-darwin.tar.gz -C target/release seneschal
+tar -czf voicebot-x86_64-apple-darwin.tar.gz -C target/release seneschal
 ```
 
 ### Linux x86\_64
@@ -125,7 +125,7 @@ sudo apt-get install -y libasound2-dev espeak-ng pkg-config build-essential cmak
 
 cargo build --release --bin seneschal --features kokoro
 strip target/release/seneschal
-tar -czf seneschal-x86_64-unknown-linux-gnu.tar.gz -C target/release seneschal
+tar -czf voicebot-x86_64-unknown-linux-gnu.tar.gz -C target/release seneschal
 ```
 
 ### Linux ARM64
@@ -137,7 +137,7 @@ AWS Graviton, or an OrbStack/QEMU VM):
 sudo apt-get install -y libasound2-dev espeak-ng pkg-config build-essential cmake
 cargo build --release --bin seneschal --features kokoro
 strip target/release/seneschal
-tar -czf seneschal-aarch64-unknown-linux-gnu.tar.gz -C target/release seneschal
+tar -czf voicebot-aarch64-unknown-linux-gnu.tar.gz -C target/release seneschal
 ```
 
 ---
@@ -202,7 +202,7 @@ cargo build --release --bin seneschal --features avspeech   # macOS
 
 # 2. Package it
 strip target/release/seneschal
-tar -czf seneschal-$(rustc -vV | grep host | cut -d' ' -f2).tar.gz \
+tar -czf voicebot-$(rustc -vV | grep host | cut -d' ' -f2).tar.gz \
     -C target/release seneschal
 
 # 3. Serve locally

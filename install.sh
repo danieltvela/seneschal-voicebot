@@ -1,6 +1,6 @@
 #!/bin/bash
 # Seneschal Installer — GitHub release edition
-# Usage: curl -fsSL https://raw.githubusercontent.com/danielvela/seneschal/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/danieltvela/seneschal-voicebot/main/install.sh | sh
 #
 # Modes:
 #   Interactive (default): prompts for language, LLM, voice, etc.
@@ -8,7 +8,7 @@
 #   Non-interactive (-n): uses defaults/env vars only; never prompts.
 #
 # Environment overrides:
-#   GITHUB_REPO       — GitHub owner/repo (default: danielvela/seneschal)
+#   GITHUB_REPO       — GitHub owner/repo (default: danieltvela/seneschal-voicebot)
 #   SENESCHAL_HOME    — where models/data/config live (default: ~/.seneschal)
 #   BIN_DIR           — where to place the `seneschal` launcher (default: ~/.local/bin)
 #   SENESCHAL_VERSION — pin a release tag, e.g. v1.2.0 (default: latest)
@@ -32,7 +32,7 @@ for _arg in "$@"; do
 done
 
 # ── Caller contract ──────────────────────────────────────────────
-GITHUB_REPO="${GITHUB_REPO:-danielvela/seneschal}"
+GITHUB_REPO="${GITHUB_REPO:-danieltvela/seneschal-voicebot}"
 SENESCHAL_VERSION="${SENESCHAL_VERSION:-latest}"
 
 if [ "$SENESCHAL_VERSION" = "latest" ]; then
@@ -51,7 +51,7 @@ case "$(uname -m)" in
     arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
     *)               ARCH_TRIPLE="aarch64" ;;
 esac
-TARBALL="seneschal-${ARCH_TRIPLE}-${PLATFORM}.tar.gz"
+TARBALL="voicebot-${ARCH_TRIPLE}-${PLATFORM}.tar.gz"
 
 # TTS defaults — overridden at runtime by select_voice_macos / select_voice_kokoro
 DEFAULT_TTS_PROVIDER="avspeech"

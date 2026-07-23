@@ -45,13 +45,13 @@ jobs:
         run: |
           BIN="target/${{ matrix.target }}/release/seneschal"
           strip "$BIN"
-          tar -czf "seneschal-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
-          shasum -a 256 "seneschal-${{ matrix.target }}.tar.gz" > "seneschal-${{ matrix.target }}.tar.gz.sha256"
+          tar -czf "voicebot-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
+          shasum -a 256 "voicebot-${{ matrix.target }}.tar.gz" > "voicebot-${{ matrix.target }}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: seneschal-${{ matrix.target }}
-          path: seneschal-${{ matrix.target }}.tar.gz*
+          name: voicebot-${{ matrix.target }}
+          path: voicebot-${{ matrix.target }}.tar.gz*
           if-no-files-found: error
           retention-days: 1
 
@@ -98,15 +98,15 @@ jobs:
   #       run: |
   #         BIN="target/${{ matrix.target }}/release/seneschal"
   #         strip "$BIN" 2>/dev/null || true
-  #         tar -czf "seneschal-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
-  #         sha256sum "seneschal-${{ matrix.target }}.tar.gz" > "seneschal-${{ matrix.target }}.tar.gz.sha256"
-  #         echo "Tarball contents:"
-  #         tar -tzf "seneschal-${{ matrix.target }}.tar.gz"
-  #
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: seneschal-${{ matrix.target }}
-  #         path: seneschal-${{ matrix.target }}.tar.gz*
+        #         tar -czf "voicebot-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
+        #         sha256sum "voicebot-${{ matrix.target }}.tar.gz" > "voicebot-${{ matrix.target }}.tar.gz.sha256"
+        #         echo "Tarball contents:"
+        #         tar -tzf "voicebot-${{ matrix.target }}.tar.gz"
+        #
+        #     - uses: actions/upload-artifact@v4
+        #       with:
+        #         name: voicebot-${{ matrix.target }}
+        #         path: voicebot-${{ matrix.target }}.tar.gz*
   #         if-no-files-found: error
   #         retention-days: 1
 

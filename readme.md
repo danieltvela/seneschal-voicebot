@@ -21,7 +21,7 @@ Real-time voice interaction with natural conversation flow, proactive assistance
 ### Quick Install (recommended for end users)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danielvela/seneschal/refs/heads/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/danieltvela/seneschal-voicebot/refs/heads/master/install.sh | sh
 ```
 
 The installer downloads all required models and sets up a working configuration.
