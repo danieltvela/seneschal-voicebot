@@ -198,16 +198,19 @@ sequenceDiagram
 The `ConversationMode` is shared between the main audio loop and `SetConversationModeTool`.
 
 ```
-Active  ──────────────────────────────────────────────────►  Active
-  │  (user speaks)                                           ▲
+Active ───────────────────────────────────────────────────►  Active
+  │  (main user speaks)                                       ▲
   │                                                          │
-  │  silence > ambient_clear_secs                           user speaks
-  │  OR n consecutive non-main-speaker segments              │
+  │  silence > ambient_clear_secs                           main-user wake word
+  │  OR n consecutive non-main-speaker segments              │  (any ambient state)
   ▼                                                          │
 Ambient ──── user explicitly sets "ambient locked" ──────► AmbientLocked
   │                                                          │
-  └── any speech from main user ──────────────────────────►  returns to Active
-                                                              (only wake-word in locked)
+  │  main-user wake word ────────── respond + Active ─────►  Active
+  │                                                          │
+  │  secondary-voice wake word ─── respond, stay ─────────►  Ambient / AmbientLocked
+  │                                                          │
+  └── no wake word ────────────── buffer / discard ───────►  stays Ambient / AmbientLocked
 ```
 
 ---

@@ -1255,8 +1255,9 @@ The key insight is to stop trying to infer "is the user talking to me?" (hard, u
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  AMBIENT MODE  (guest / TV / radio present)                              │
 │  • Any voice → transcribe → check for wake word ("Seneschal, …")           │
-│      Wake word found → respond to that turn, stay in AMBIENT            │
-│      No wake word → discard, even if speaker is the main user           │
+│      Main user + wake word → respond + switch to ACTIVE (re-engage)    │
+│      Guest + wake word → respond to that turn, stay in AMBIENT         │
+│      No wake word → discard, even if speaker is the main user          │
 │  • Silence for AMBIENT_CLEAR_SECS (e.g. 5 min) → → ACTIVE              │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1276,11 +1277,11 @@ The key insight is to stop trying to infer "is the user talking to me?" (hard, u
 
 1. **N consecutive non-main-user detections to trigger ambient** (not just one). A single bad speaker ID frame (user with a cold, room echo) should not drop the bot into ambient. Use N=3 as default.
 
-2. **Wake word in ambient mode does not require a speaker ID match** — a guest can also address the bot with "Seneschal, what time is it?" This is natural and intentional. The wake word is the explicit signal, regardless of who says it.
+2. **Wake word in ambient mode does not require a speaker ID match** — a guest can also address the bot with "Seneschal, what time is it?" This is natural and intentional. However, the bot uses speaker ID to decide whether to switch to Active: the main user's wake word returns to Active mode (the user has explicitly re-engaged), while a guest's wake word only elicits a response while keeping Ambient mode active.
 
 3. **Wake word detection is transcript-based** — no separate wake word model needed. Whisper already runs on every VAD segment. Check if the transcript starts with (or contains near the start) the bot's name or configured keyword. This adds zero latency to the existing pipeline.
 
-4. **Return to active is time-based** — after `AMBIENT_CLEAR_SECS` of hearing only the main user's voice or silence, the state machine resets to active. This handles guests leaving naturally without requiring an explicit "goodbye" command.
+4. **Return to active is time-based or wake-word-based** — after `AMBIENT_CLEAR_SECS` of hearing only the main user's voice or silence, the state machine resets to active. Additionally, the main user can explicitly re-engage by saying the wake word in Ambient mode, which immediately returns to Active. This handles guests leaving naturally as well as urgent re-engagement.
 
 5. **Active mode still benefits from linguistic heuristics** — when alone and in active mode, Layer 3 address heuristics can suppress obvious non-bot-directed speech (user thinking aloud, muttering to themselves). This is an optional refinement.
 
@@ -1296,8 +1297,8 @@ VAD fires → speaker ID embedding extracted
     │       │
     │       └── AMBIENT mode → transcribe → wake word check
     │                               │
-    │                           wake word found → LLM → TTS
-    │                           no wake word    → discard
+    │                       ┌── wake word → switch to ACTIVE + LLM → TTS
+    │                       └── no wake word → discard
     │
     └── Non-main-user (similarity < threshold)
             │
@@ -1306,7 +1307,7 @@ VAD fires → speaker ID embedding extracted
             │
             └── AMBIENT mode → transcribe → wake word check
                                     │
-                                wake word found → LLM → TTS
+                                wake word found → LLM → TTS (stay AMBIENT)
                                 no wake word    → discard
 ```
 
