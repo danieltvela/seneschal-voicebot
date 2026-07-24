@@ -359,6 +359,26 @@ impl AcpSessionManager {
             .unwrap_or(false)
     }
 
+    /// Send a follow-up user prompt on an existing session (TUI input path).
+    pub async fn send_user_message(&self, agent_name: &str, text: &str) -> Result<()> {
+        let entry = self
+            .sessions
+            .get(agent_name)
+            .map(|e| e.clone())
+            .ok_or_else(|| anyhow::anyhow!("no ACP session for agent '{agent_name}'"))?;
+        let mut writer = entry.writer.lock().await;
+        writer.send_prompt(&entry.session_id, text).await?;
+        drop(writer);
+        self.emit(SessionEvent::UserMessage {
+            agent_name: agent_name.to_string(),
+            session_id: entry.session_id.clone(),
+            text: text.to_string(),
+            correlation_id: String::new(),
+        });
+        self.mark_session_busy(agent_name);
+        Ok(())
+    }
+
     /// Check if a session is available for keepalive (status is Idle).
     pub fn is_session_available_for_keepalive(&self, agent_name: &str) -> bool {
         self.sessions

@@ -1709,10 +1709,7 @@ async fn collect_acp_response(
                 if let Some(ref mgr) = session_mgr {
                     mgr.mark_session_needs_input(&agent_name);
                 }
-                emit_log(
-                    &session_event_tx,
-                    format!("? ¿permiso: {description}?"),
-                );
+                emit_log(&session_event_tx, format!("? ¿permiso: {description}?"));
 
                 let (resp_tx, resp_rx) = oneshot::channel::<String>();
                 let _ = proactive_tx

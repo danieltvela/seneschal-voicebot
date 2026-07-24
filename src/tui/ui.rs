@@ -3,44 +3,41 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
-use super::app::{App, ChatMessage, Role};
+use super::acp_panel::state_style;
+use super::app::{App, ChatMessage, FocusTarget, InputMode, Role};
 use super::events::{InputSource, PipelineState};
 use crate::tools::ConversationMode;
 
 const MAX_INPUT_ROWS: u16 = 4;
 
-/// Compute layout heights for the five regions.
+/// Compute layout heights for conversation stack regions inside `main_h`.
 ///
-/// Returns `(history, streaming, prompt, input, status)`.
-/// All values sum to `total_h`, and `status` is always `1` (pinned to the last row).
+/// Returns `(history, streaming, prompt)`. Values sum to `main_h`.
+/// Input and status are laid out outside this function (full width).
 fn compute_layout_heights(
     total_h: u16,
     input_h: u16,
     prompt_h: u16,
     streaming_nonempty: bool,
 ) -> (u16, u16, u16, u16, u16) {
+    // Legacy signature kept for tests: when called with full terminal height,
+    // also returns input/status. Prefer `compute_conversation_heights` for the
+    // side-by-side layout path.
     let status_h = 1u16;
     let after_status = total_h.saturating_sub(status_h);
-
-    // Clamp input to available space
     let input_clamped = input_h.min(after_status);
     let after_input = after_status.saturating_sub(input_clamped);
-
-    // Clamp prompt to remaining space
     let prompt_clamped = prompt_h.min(after_input);
     let remaining = after_input.saturating_sub(prompt_clamped);
-
-    // Split remaining between streaming and history
     let (streaming_h, history_h) = if !streaming_nonempty || remaining < 3 {
         (0, remaining)
     } else {
         let sh = (remaining / 3).max(3).min(remaining);
         (sh, remaining.saturating_sub(sh))
     };
-
     (
         history_h,
         streaming_h,
@@ -50,23 +47,58 @@ fn compute_layout_heights(
     )
 }
 
+/// Heights for history/streaming/prompt inside a main pane of height `main_h`.
+fn compute_conversation_heights(
+    main_h: u16,
+    prompt_h: u16,
+    streaming_nonempty: bool,
+) -> (u16, u16, u16) {
+    let prompt_clamped = prompt_h.min(main_h);
+    let remaining = main_h.saturating_sub(prompt_clamped);
+    let (streaming_h, history_h) = if !streaming_nonempty || remaining < 3 {
+        (0, remaining)
+    } else {
+        let sh = (remaining / 3).max(3).min(remaining);
+        (sh, remaining.saturating_sub(sh))
+    };
+    (history_h, streaming_h, prompt_clamped)
+}
+
 /// Render the fullscreen TUI.
 ///
-/// The layout (top → bottom) is:
-///   1. Message history (scrollable, auto-scroll to bottom)
-///   2. Streaming preview (when assistant is speaking)
-///   3. Prompt-build display (when active)
-///   4. Text input
-///   5. Status bar (always the last row)
+/// Outer: main | input | status. Main splits horizontally when ACP sessions exist.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let total = frame.area();
     let width = total.width as usize;
 
-    // Input height: wraps at terminal width (no border so full width available).
     let input_height =
         input_display_lines(&app.input, width).clamp(1, MAX_INPUT_ROWS as usize) as u16;
+    let status_h = 1u16;
+    let after_status = total.height.saturating_sub(status_h);
+    let input_h = input_height.min(after_status);
+    let main_h = after_status.saturating_sub(input_h);
 
-    // Prompt-build display height: show only when active.
+    let outer = Layout::vertical([
+        Constraint::Length(main_h),
+        Constraint::Length(input_h),
+        Constraint::Length(status_h),
+    ])
+    .split(total);
+
+    let main_area = outer[0];
+    let input_area = outer[1];
+    let status_area = outer[2];
+
+    let has_acp = app.has_acp_sessions();
+    let (left_area, right_area) = if has_acp {
+        let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(main_area);
+        (cols[0], Some(cols[1]))
+    } else {
+        (main_area, None)
+    };
+
+    let left_width = left_area.width as usize;
     let prompt_active = app.prompt_build_state.lock().unwrap().is_active();
     let prompt_height = if prompt_active {
         let prompt_text = app
@@ -76,44 +108,141 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .prompt_text()
             .unwrap_or("")
             .to_string();
-        compute_prompt_display_height(&prompt_text, width).min(6) as u16
+        compute_prompt_display_height(&prompt_text, left_width).min(6) as u16
     } else {
         0
     };
 
-    let (history_height, streaming_height, prompt_h, input_h, status_h) = compute_layout_heights(
-        total.height,
-        input_height,
+    let (history_height, streaming_height, prompt_h) = compute_conversation_heights(
+        left_area.height,
         prompt_height,
         !app.streaming_buffer.is_empty(),
     );
 
-    let areas = Layout::vertical([
+    let left_parts = Layout::vertical([
         Constraint::Length(history_height),
         Constraint::Length(streaming_height),
         Constraint::Length(prompt_h),
-        Constraint::Length(input_h),
-        Constraint::Length(status_h),
     ])
-    .split(total);
-
-    let history_area = areas[0];
-    let streaming_area = areas[1];
-    let prompt_area = areas[2];
-    let input_area = areas[3];
-    let status_area = areas[4];
+    .split(left_area);
 
     if history_height > 0 {
-        render_history(frame, app, history_area);
+        render_history(frame, app, left_parts[0]);
     }
     if streaming_height > 0 {
-        render_streaming(frame, app, streaming_area);
+        render_streaming(frame, app, left_parts[1]);
     }
     if prompt_height > 0 {
-        render_prompt_display(frame, app, prompt_area);
+        render_prompt_display(frame, app, left_parts[2]);
     }
+
+    if let Some(right) = right_area {
+        let strip_h = (app.acp_sessions.len() as u16)
+            .saturating_add(2)
+            .min(right.height)
+            .max(2);
+        let right_parts =
+            Layout::vertical([Constraint::Length(strip_h), Constraint::Min(0)]).split(right);
+        render_session_strip(frame, app, right_parts[0]);
+        render_session_detail(frame, app, right_parts[1]);
+    }
+
     render_input(frame, app, input_area);
     render_status(frame, app, status_area);
+}
+
+fn render_session_strip(frame: &mut Frame, app: &App, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let focused = app.focus == FocusTarget::SessionStrip;
+    let border = if focused { Color::Cyan } else { Color::Gray };
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::styled(
+            " SESIONES ACP ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("[Tab]", Style::default().fg(Color::DarkGray)),
+    ])];
+
+    for (i, sess) in app.acp_sessions.iter().enumerate() {
+        let (icon, color) = state_style(sess.state);
+        let selected = i == app.selected_session;
+        let prefix = format!(" [{}] {} {} ", i + 1, sess.label, icon);
+        let style = if selected {
+            Style::default()
+                .fg(color)
+                .bg(Color::Rgb(40, 40, 60))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(color)
+        };
+        lines.push(Line::from(Span::styled(prefix, style)));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let skip = lines.len().saturating_sub(inner.height as usize);
+    frame.render_widget(Paragraph::new(Text::from(lines[skip..].to_vec())), inner);
+}
+
+fn render_session_detail(frame: &mut Frame, app: &App, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let focused = app.focus == FocusTarget::SessionDetail;
+    let border = if focused { Color::Cyan } else { Color::Gray };
+
+    let Some(sess) = app.selected_acp() else {
+        return;
+    };
+
+    let title = format!(" {} · {} ", sess.label, sess.agent_name);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let width = inner.width as usize;
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    if sess.lines.is_empty() {
+        all_lines.push(Line::from(Span::styled(
+            "(sin actividad)",
+            Style::default().fg(Color::DarkGray).italic(),
+        )));
+    } else {
+        for line in &sess.lines {
+            let (style, display) = if line.starts_with('?') {
+                (Style::default().fg(Color::Yellow), line.clone())
+            } else if line.starts_with("tú:") {
+                (Style::default().fg(Color::Cyan), line.clone())
+            } else if line.starts_with("thinking:") {
+                (Style::default().fg(Color::DarkGray).italic(), line.clone())
+            } else {
+                (
+                    Style::default().fg(Color::Rgb(180, 180, 180)),
+                    format!("> {line}"),
+                )
+            };
+            for row in word_wrap_plain(&display, width) {
+                all_lines.push(Line::from(Span::styled(row, style)));
+            }
+        }
+    }
+
+    let scroll = sess.scroll as usize;
+    let visible = inner.height as usize;
+    let end = all_lines.len().saturating_sub(scroll);
+    let start = end.saturating_sub(visible);
+    let display = Text::from(all_lines[start..end].to_vec());
+    frame.render_widget(Paragraph::new(display), inner);
 }
 
 /// Render the message history, auto-scrolled to the bottom.
@@ -477,30 +606,47 @@ fn compute_prompt_display_height(prompt_text: &str, width: usize) -> usize {
 /// Render the text input — no border, full width.
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
+    let dest = app.input_destination_label();
+    let mode_hint = match app.input_mode {
+        InputMode::Normal => " -- NORMAL (i=insert)",
+        InputMode::Insert => "",
+    };
 
     let text = if app.input.is_empty() {
         Text::from(Line::from(vec![
             Span::styled("┌ ", Style::default().fg(Color::Rgb(100, 100, 100))),
+            Span::styled(format!("[{dest}] "), Style::default().fg(Color::Cyan)),
             Span::styled(
-                "Type a message... (Enter to send)",
+                format!("Type a message... (Enter to send){mode_hint}"),
                 Style::default().fg(Color::Rgb(100, 100, 100)),
             ),
         ]))
     } else {
-        let chars: Vec<char> = app.input.chars().collect();
+        let prefix = format!("│ [{dest}] ");
+        let content = format!("{}{mode_hint}", app.input);
+        let chars: Vec<char> = content.chars().collect();
+        let wrap_w = width.saturating_sub(prefix.chars().count()).max(1);
         let lines: Vec<Line> = if width == 0 {
             vec![Line::from(vec![
-                Span::styled("│ ", Style::default().fg(Color::Rgb(100, 100, 100))),
+                Span::styled(prefix, Style::default().fg(Color::Rgb(100, 100, 100))),
                 Span::raw(app.input.as_str()),
             ])]
         } else {
             chars
-                .chunks(width)
-                .map(|chunk| {
-                    Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(Color::Rgb(100, 100, 100))),
-                        Span::raw(chunk.iter().collect::<String>()),
-                    ])
+                .chunks(wrap_w)
+                .enumerate()
+                .map(|(i, chunk)| {
+                    if i == 0 {
+                        Line::from(vec![
+                            Span::styled(
+                                prefix.clone(),
+                                Style::default().fg(Color::Rgb(100, 100, 100)),
+                            ),
+                            Span::raw(chunk.iter().collect::<String>()),
+                        ])
+                    } else {
+                        Line::from(vec![Span::raw(chunk.iter().collect::<String>())])
+                    }
                 })
                 .collect()
         };
@@ -509,17 +655,24 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(Paragraph::new(text), area);
 
-    // Position cursor - account for "│ " prefix (2 chars)
-    let char_pos = app.input[..app.cursor].chars().count();
-    let (row, col) = if width == 0 {
-        (0u16, 2u16 + char_pos as u16)
-    } else {
-        let prefix_offset = 2; // "│ " is 2 characters
-        let line_num = char_pos.checked_div(width).unwrap_or(0);
-        let col_in_line = char_pos.checked_rem(width).unwrap_or(0);
-        (line_num as u16, prefix_offset as u16 + col_in_line as u16)
-    };
-    frame.set_cursor_position((area.x + col, area.y + row));
+    if app.input_mode == InputMode::Insert {
+        let dest_prefix_w = format!("│ [{dest}] ").chars().count();
+        let char_pos = app.input[..app.cursor].chars().count();
+        let wrap_w = (area.width as usize).saturating_sub(dest_prefix_w).max(1);
+        let (row, col) = if width == 0 {
+            (0u16, dest_prefix_w as u16 + char_pos as u16)
+        } else {
+            let line_num = char_pos / wrap_w;
+            let col_in_line = char_pos % wrap_w;
+            let col = if line_num == 0 {
+                dest_prefix_w + col_in_line
+            } else {
+                col_in_line
+            };
+            (line_num as u16, col as u16)
+        };
+        frame.set_cursor_position((area.x + col, area.y + row));
+    }
 }
 
 /// Render the status bar at the bottom of the viewport.
@@ -545,6 +698,16 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         ConversationMode::AmbientLocked => ("AMBIENT🔒", Color::Yellow),
     };
 
+    let mode_label = match app.input_mode {
+        InputMode::Insert => "INSERT",
+        InputMode::Normal => "NORMAL",
+    };
+    let focus_label = match app.focus {
+        FocusTarget::Conversation => "CONV",
+        FocusTarget::SessionStrip => "STRIP",
+        FocusTarget::SessionDetail => "ACP",
+    };
+
     let text = Text::from(vec![Line::from(vec![
         Span::styled(
             " seneschal ",
@@ -557,8 +720,12 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(" │ "),
         Span::styled(conv_label, Style::default().fg(conv_color)),
         Span::raw(" │ "),
+        Span::styled(mode_label, Style::default().fg(Color::Yellow)),
+        Span::raw(" "),
+        Span::styled(focus_label, Style::default().fg(Color::Cyan)),
+        Span::raw(" │ "),
         Span::styled(
-            "Ctrl+T: toggle TTS  Esc: quit",
+            "Ctrl+T TTS  Tab focus  i insert  Esc normal  Ctrl+C quit",
             Style::default().fg(Color::Rgb(100, 100, 100)),
         ),
     ])]);
@@ -769,6 +936,22 @@ mod tests {
                         );
                         assert_eq!(st, 1);
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn conversation_heights_sum_to_main_h() {
+        for main_h in 0..=40u16 {
+            for prompt_h in 0..=6u16 {
+                for streaming in [false, true] {
+                    let (h, s, p) = compute_conversation_heights(main_h, prompt_h, streaming);
+                    assert_eq!(
+                        h + s + p,
+                        main_h,
+                        "main_h={main_h} prompt={prompt_h} streaming={streaming}"
+                    );
                 }
             }
         }

@@ -115,7 +115,7 @@
 
 ## Phase 3: TUI model — state, events, focus, input mode
 
-- [ ] Step 3.1: Add `AcpSessionState` and view types in TUI
+- [x] Step 3.1: Add `AcpSessionState` and view types in TUI
   - File(s): create `src/tui/acp_panel.rs` (new module); update `src/tui/mod.rs` with `mod acp_panel;`
   - Change: Define exactly:
     ```rust
@@ -175,7 +175,7 @@
     - Module compiles under `feature = "tui"`.
     - Unit tests in `acp_panel.rs`: `map_session_status` for each `SessionStatus` variant; `push_line` caps at 500.
 
-- [ ] Step 3.2: Extend `TuiEvent` with ACP variants
+- [x] Step 3.2: Extend `TuiEvent` with ACP variants
   - File(s): `src/tui/events.rs`
   - Change: Append variants (keep existing ones unchanged):
     ```rust
@@ -197,7 +197,7 @@
     Re-export or use paths that compile; if `acp_panel` is private, put `AcpSessionState` in `events.rs` instead and re-export from `acp_panel` — **prefer defining `AcpSessionState` in `events.rs` or `acp_panel.rs` once and referencing it**. Avoid circular mods: define state enum in `acp_panel.rs`, import in `events.rs` via `super::acp_panel::AcpSessionState`.
   - Acceptance criteria: `TuiEvent` still `Clone + Debug`; all existing match sites in `app.rs` updated in Step 3.3.
 
-- [ ] Step 3.3: Extend `App` with ACP panel + focus + mode fields
+- [x] Step 3.3: Extend `App` with ACP panel + focus + mode fields
   - File(s): `src/tui/app.rs`
   - Change:
     1. Add enums:
@@ -242,7 +242,7 @@
 
 ## Phase 4: Keyboard — Normal/Insert, focus cycle, session jump
 
-- [ ] Step 4.1: Expand `Action` enum
+- [x] Step 4.1: Expand `Action` enum
   - File(s): `src/tui/app.rs`
   - Change: Replace/extend `Action` to:
     ```rust
@@ -257,7 +257,7 @@
     ```
     Update all match sites (`src/tui/mod.rs`) in Phase 6. Temporarily keep compiling by matching both in mod.rs in the same PR step as 4.2.
 
-- [ ] Step 4.2: Rewrite `handle_key_event` with modal behavior
+- [x] Step 4.2: Rewrite `handle_key_event` with modal behavior
   - File(s): `src/tui/app.rs`
   - Change: Implement this exact key matrix:
 
@@ -299,7 +299,7 @@
 
 ## Phase 5: Layout + rendering
 
-- [ ] Step 5.1: Refactor top-level layout in `render()`
+- [x] Step 5.1: Refactor top-level layout in `render()`
   - File(s): `src/tui/ui.rs`
   - Change:
     1. Split **full frame** vertically first into: `main_area` (flex) + `input_area` + `status_area` (status always 1 row; input height via existing `input_display_lines` / clamp logic).
@@ -323,7 +323,7 @@
       }
       ```
 
-- [ ] Step 5.2: Render session strip
+- [x] Step 5.2: Render session strip
   - File(s): `src/tui/ui.rs` (or `acp_panel.rs` with `pub fn render_session_strip(...)`)
   - Change:
     - Title line: `SESIONES ACP` + hint `[Tab]`.
@@ -333,7 +333,7 @@
     - NeedsInput: icon `!` in Yellow; optional `Modifier::SLOW_BLINK` only if you verify terminal support — if unsure, bold yellow without blink.
   - Acceptance criteria: Compiles; no panic on empty (caller must not call when empty).
 
-- [ ] Step 5.3: Render session detail
+- [x] Step 5.3: Render session detail
   - File(s): `src/tui/ui.rs` or `acp_panel.rs`
   - Change:
     - Header: `{label} · {agent_name}` truncated to width.
@@ -342,7 +342,7 @@
     - Border color Cyan when `focus == SessionDetail`.
   - Acceptance criteria: Long logs do not panic; empty lines show placeholder `(sin actividad)`.
 
-- [ ] Step 5.4: Update input + status chrome
+- [x] Step 5.4: Update input + status chrome
   - File(s): `src/tui/ui.rs` (`render_input`, `render_status`)
   - Change:
     1. `render_input`: show destination badge on the placeholder/first line, e.g. `┌ [→ Seneschal] Type...` or `┌ [→ issue-134] ...`. When `input_mode == Normal`, show a dim suffix ` -- NORMAL (i=insert)` and **do not** set cursor (or set cursor off). When Insert, keep cursor positioning as today.
@@ -353,7 +353,7 @@
 
 ## Phase 6: Wire channels in main + TUI event loop
 
-- [ ] Step 6.1: Bridge `SessionEvent` → `TuiEvent`
+- [x] Step 6.1: Bridge `SessionEvent` → `TuiEvent`
   - File(s): `src/main.rs` (TUI spawn section ~1210–1231); optionally small helper in `src/tui/mod.rs`
   - Change:
     1. Before `Arc::new(AcpSessionManager::new())` (search `AcpSessionManager::new` ~line 311), create:
@@ -384,7 +384,7 @@
        - On `Status { Closed | Done }` → optionally `AcpSessionRemove` after upsert, **or** keep Done rows until replaced — **keep Done/Error rows visible** (no auto-remove) so the user can read them; only `Closed` may `AcpSessionRemove`.
   - Acceptance criteria: Without TUI feature, session manager still builds (cfg-gate the bridge only; event_tx may still be set only when tui feature on).
 
-- [ ] Step 6.2: Handle new `Action`s in `tui::run`
+- [x] Step 6.2: Handle new `Action`s in `tui::run`
   - File(s): `src/tui/mod.rs`
   - Change:
     1. Extend `run(...)` signature with:
@@ -415,24 +415,24 @@
     - Typed message to Seneschal still works end-to-end.
     - `cargo build --features tui` succeeds.
 
-- [ ] Step 6.3: Emit UserMessage SessionEvent when run_acp sends prompt
+- [x] Step 6.3: Emit UserMessage SessionEvent when run_acp sends prompt
   - File(s): `src/tools/run_agent.rs`
   - Change: After successful `send_prompt`, emit `SessionEvent::UserMessage` with the task/query text (truncate to 200 chars for the log if longer).
   - Acceptance criteria: Opening a delegated task populates the ACP detail pane with the user task line.
 
 ## Phase 7: Tests + QA polish
 
-- [ ] Step 7.1: Layout height regression tests
+- [x] Step 7.1: Layout height regression tests
   - File(s): `src/tui/ui.rs` `#[cfg(test)]`
   - Change: Keep existing `compute_layout_heights` sum invariant tests. Add test that when simulating outer split, `history+streaming+prompt` heights are computed from `main_h` not full terminal height (call `compute_layout_heights(main_h, ...)` and assert sum == `main_h` with status/input excluded — document that status/input are outer).
   - Acceptance criteria: `cargo test --features tui` (or default if tui tests cfg-gated) passes.
 
-- [ ] Step 7.2: App key + event unit tests
+- [x] Step 7.2: App key + event unit tests
   - File(s): `src/tui/app.rs` tests module
   - Change: Cover Phase 4 acceptance list and Phase 3 upsert/log/remove.
   - Acceptance criteria: All new tests green.
 
-- [ ] Step 7.3: Format, lint, full QA subset
+- [x] Step 7.3: Format, lint, full QA subset
   - File(s): none
   - Change: Run:
     ```bash
@@ -444,7 +444,7 @@
 
 ## Phase 8: Docs touch (minimal)
 
-- [ ] Step 8.1: Document TUI ACP keys
+- [x] Step 8.1: Document TUI ACP keys
   - File(s): `readme.md` (TUI section if present) **or** `doc/common-workflows.md` — only if an existing TUI keybinding section exists (search `Ctrl+T` in docs). If found, add 5–10 lines for Tab/focus/Normal/Insert/Ctrl+N. If not found, skip file creation; status bar is enough.
   - Acceptance criteria: No new orphan doc files; no mention of trademarked names other than Seneschal.
 
