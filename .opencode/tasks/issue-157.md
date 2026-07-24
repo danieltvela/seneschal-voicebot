@@ -83,7 +83,7 @@
 
 ## Phase 2: Emit session lifecycle + log lines from ACP runtime
 
-- [ ] Step 2.1: Mark busy/idle/done/error around `run_acp`
+- [x] Step 2.1: Mark busy/idle/done/error around `run_acp`
   - File(s): `src/tools/run_agent.rs` (`run_acp` async block ~714–890)
   - Change:
     1. After successful `get_or_create_session`, call `mgr.mark_session_busy(&agent_name)` and `mgr.add_task(&agent_name, &task_id)`.
@@ -94,7 +94,7 @@
     - Compiles with `cargo build --features tui`.
     - No double-free / panic; existing run_agent unit tests still pass.
 
-- [ ] Step 2.2: Forward streaming ACP chunks as `SessionEvent` log lines
+- [x] Step 2.2: Forward streaming ACP chunks as `SessionEvent` log lines
   - File(s): `src/tools/run_agent.rs` (`collect_acp_response` ~1508–1680)
   - Change:
     1. Add optional parameter `session_event_tx: Option<crate::agents::SessionEventTx>` to `collect_acp_response` (and thread it from `run_acp`). Obtain tx by cloning from manager if you add `AcpSessionManager::event_sender(&self) -> Option<SessionEventTx>` (clone the sender).
@@ -108,7 +108,7 @@
     - `cargo test` for run_agent / session_events still passes.
     - Clippy clean on touched signatures (`#[allow(clippy::too_many_arguments)]` already present — keep it).
 
-- [ ] Step 2.3: Checkpoint compile
+- [x] Step 2.3: Checkpoint compile
   - File(s): none (verify only)
   - Change: Run `cargo build --features tui,remote,control` and `cargo test --lib`.
   - Acceptance criteria: build + lib tests green before TUI work.
