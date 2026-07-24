@@ -17,6 +17,7 @@ use super::Tool;
 use crate::agent_session::VisibleSessionManager;
 use crate::agents::{
     AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, ProactiveEvent,
+    SessionEvent, SessionEventTx,
 };
 use crate::config::{Config, HermesSessionViewerMode};
 
@@ -731,7 +732,9 @@ impl RunAgentTool {
             let writer_arc: Arc<Mutex<AcpWriter>>;
             let inbound_rx: Arc<Mutex<mpsc::Receiver<JsonRpcMessage>>>;
             let session_id: String;
-            let owned_process = if let Some(mgr) = session_mgr {
+            let session_event_tx: Option<SessionEventTx> =
+                session_mgr.as_ref().and_then(|m| m.event_sender());
+            let owned_process = if let Some(ref mgr) = session_mgr {
                 let sess = match mgr.get_or_create_session(&config).await {
                     Ok(e) => e,
                     Err(e) => {
@@ -749,6 +752,8 @@ impl RunAgentTool {
                 writer_arc = sess.writer;
                 inbound_rx = sess.inbound_rx;
                 session_id = sess.session_id;
+                mgr.mark_session_busy(&agent_name);
+                mgr.add_task(&agent_name, &task_id);
                 // If log viewer is enabled and log not yet opened, open it now
                 if viewer_mode == HermesSessionViewerMode::LogFile {
                     let mut w = writer_arc.lock().await;
@@ -808,6 +813,10 @@ impl RunAgentTool {
             let prompt_request_id = match send_result {
                 Ok(id) => id,
                 Err(e) => {
+                    if let Some(ref mgr) = session_mgr {
+                        mgr.mark_session_error(&agent_name);
+                        mgr.remove_task(&agent_name, &task_id);
+                    }
                     let mut w = writer_arc.lock().await;
                     let _ = w.kill().await;
                     let _ = proactive_tx
@@ -821,6 +830,21 @@ impl RunAgentTool {
                     return;
                 }
             };
+
+            if let Some(ref tx) = session_event_tx {
+                let preview = if task_c.chars().count() > 200 {
+                    let t: String = task_c.chars().take(200).collect();
+                    format!("{t}…")
+                } else {
+                    task_c.clone()
+                };
+                let _ = tx.try_send(SessionEvent::UserMessage {
+                    agent_name: agent_name.clone(),
+                    session_id: session_id.clone(),
+                    text: preview,
+                    correlation_id: task_id.clone(),
+                });
+            }
 
             // ── Register active task in task_map ─────────────────────────────
             let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
@@ -851,6 +875,8 @@ impl RunAgentTool {
                 cancel_rx,
                 task_id.clone(),
                 agent_name.clone(),
+                session_event_tx.clone(),
+                session_mgr.clone(),
             )
             .await;
             let latency_ms = latency_start.elapsed().as_millis();
@@ -858,6 +884,17 @@ impl RunAgentTool {
             drop(rx_guard);
 
             // ── Cleanup ──────────────────────────────────────────────────────
+            if let Some(ref mgr) = session_mgr {
+                mgr.remove_task(&agent_name, &task_id);
+                if result.starts_with("ACP error:") || result.starts_with("ACP send error:") {
+                    mgr.mark_session_error(&agent_name);
+                } else if owned_process {
+                    mgr.mark_session_done(&agent_name);
+                } else if !mgr.has_tasks(&agent_name) {
+                    mgr.mark_session_idle(&agent_name);
+                }
+            }
+
             if owned_process {
                 {
                     let mut w = writer_arc.lock().await;
@@ -1509,12 +1546,24 @@ async fn collect_acp_response(
     acp_writer: Arc<Mutex<Option<AcpWriter>>>,
     inbound_rx: &mut mpsc::Receiver<JsonRpcMessage>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
-    _session_id: String,
+    session_id: String,
     prompt_request_id: u64,
     mut cancel_rx: oneshot::Receiver<()>,
     task_id: String,
     agent_name: String,
+    session_event_tx: Option<SessionEventTx>,
+    session_mgr: Option<Arc<AcpSessionManager>>,
 ) -> String {
+    let emit_log = |tx: &Option<SessionEventTx>, text: String| {
+        if let Some(tx) = tx {
+            let _ = tx.try_send(SessionEvent::AgentMessage {
+                agent_name: agent_name.clone(),
+                session_id: session_id.clone(),
+                text,
+                correlation_id: task_id.clone(),
+            });
+        }
+    };
     let mut accumulated_text = String::new();
     let mut progress: Vec<String> = Vec::new();
 
@@ -1591,21 +1640,43 @@ async fn collect_acp_response(
                         if let Some(text) = update["content"]["text"].as_str() {
                             accumulated_text.push_str(text);
                             debug!(target: "acp", "Agent chunk: {}", text);
+                            emit_log(&session_event_tx, text.to_string());
                         }
                     }
                     "agent_thought_chunk" => {
                         if let Some(text) = update["content"]["text"].as_str() {
                             debug!(target: "acp", "Thought: {}", text);
+                            emit_log(&session_event_tx, format!("thinking: {text}"));
                         }
                     }
                     "tool_call" => {
                         let tool_name = update["name"].as_str().unwrap_or("unknown");
                         info!(target: "acp", "Tool start: {}", tool_name);
                         progress.push(format!("usando {tool_name}"));
+                        if let Some(ref tx) = session_event_tx {
+                            let _ = tx.try_send(SessionEvent::ToolCall {
+                                agent_name: agent_name.clone(),
+                                session_id: session_id.clone(),
+                                tool_name: tool_name.to_string(),
+                                task_id: task_id.clone(),
+                                correlation_id: task_id.clone(),
+                            });
+                        }
                     }
                     "tool_call_update" => {
                         let tool_name = update["name"].as_str().unwrap_or("unknown");
+                        let status = update["status"].as_str().unwrap_or("");
                         debug!(target: "acp", "Tool update: {}", tool_name);
+                        if let Some(ref tx) = session_event_tx {
+                            let _ = tx.try_send(SessionEvent::ToolResult {
+                                agent_name: agent_name.clone(),
+                                session_id: session_id.clone(),
+                                tool_name: tool_name.to_string(),
+                                task_id: task_id.clone(),
+                                result: status.to_string(),
+                                correlation_id: task_id.clone(),
+                            });
+                        }
                     }
                     other => {
                         debug!(target: "acp", "Ignored session update: {}", other);
@@ -1635,6 +1706,14 @@ async fn collect_acp_response(
                     .unwrap_or("acción desconocida")
                     .to_string();
 
+                if let Some(ref mgr) = session_mgr {
+                    mgr.mark_session_needs_input(&agent_name);
+                }
+                emit_log(
+                    &session_event_tx,
+                    format!("? ¿permiso: {description}?"),
+                );
+
                 let (resp_tx, resp_rx) = oneshot::channel::<String>();
                 let _ = proactive_tx
                     .send(ProactiveEvent::AgentQuestion {
@@ -1654,6 +1733,10 @@ async fn collect_acp_response(
                             String::new() // will send cancelled outcome
                         }
                     };
+
+                if let Some(ref mgr) = session_mgr {
+                    mgr.mark_session_busy(&agent_name);
+                }
 
                 // Build the response: AllowedOutcome or DeniedOutcome
                 let result = if outcome_option_id.is_empty() || outcome_option_id == "cancelled" {
@@ -2254,6 +2337,8 @@ mod integration_tests {
                 cancel_rx,
                 String::new(),
                 String::new(),
+                None,
+                None,
             ),
         )
         .await
