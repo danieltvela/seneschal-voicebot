@@ -49,8 +49,15 @@ pub enum TuiEvent {
         label: String,
         state: AcpSessionState,
     },
-    /// Append one log line to a session detail pane.
-    AcpSessionLog { session_id: String, line: String },
+    /// Append log text to a session detail pane.
+    ///
+    /// Use `AcpLogMode::AgentStream` / `ThoughtStream` for token chunks so they
+    /// coalesce into readable paragraphs instead of one `>` line per chunk.
+    AcpSessionLog {
+        session_id: String,
+        line: String,
+        mode: super::acp_panel::AcpLogMode,
+    },
     /// Session removed / closed — drop from strip.
     AcpSessionRemove { session_id: String },
 }

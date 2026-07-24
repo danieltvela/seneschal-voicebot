@@ -218,18 +218,49 @@ fn render_session_detail(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::DarkGray).italic(),
         )));
     } else {
-        for line in &sess.lines {
-            let (style, display) = if line.starts_with('?') {
-                (Style::default().fg(Color::Yellow), line.clone())
-            } else if line.starts_with("tú:") {
-                (Style::default().fg(Color::Cyan), line.clone())
-            } else if line.starts_with("thinking:") {
-                (Style::default().fg(Color::DarkGray).italic(), line.clone())
-            } else {
-                (
-                    Style::default().fg(Color::Rgb(180, 180, 180)),
-                    format!("> {line}"),
-                )
+        use super::acp_panel::AcpEntryKind;
+        for entry in &sess.lines {
+            if entry.text.is_empty() {
+                continue;
+            }
+            let (style, display) = match entry.kind {
+                AcpEntryKind::Prompt => (
+                    Style::default().fg(Color::Yellow),
+                    if entry.text.starts_with('?') {
+                        entry.text.clone()
+                    } else {
+                        format!("? {}", entry.text)
+                    },
+                ),
+                AcpEntryKind::User => (
+                    Style::default().fg(Color::Cyan),
+                    format!("tú: {}", entry.text),
+                ),
+                AcpEntryKind::Thought => (
+                    Style::default().fg(Color::DarkGray).italic(),
+                    format!("thinking: {}", entry.text),
+                ),
+                AcpEntryKind::Tool => (Style::default().fg(Color::Magenta), entry.text.clone()),
+                AcpEntryKind::Error => (
+                    Style::default().fg(Color::Red),
+                    format!("error: {}", entry.text),
+                ),
+                AcpEntryKind::Agent => {
+                    // One logical stream entry → one ">" block; wrap body so
+                    // continuation rows are indented, not re-prefixed.
+                    let style = Style::default().fg(Color::Rgb(180, 180, 180));
+                    let body_w = width.saturating_sub(2).max(1);
+                    let body_rows = word_wrap_plain(&entry.text, body_w);
+                    for (i, row) in body_rows.into_iter().enumerate() {
+                        let display = if i == 0 {
+                            format!("> {row}")
+                        } else {
+                            format!("  {row}")
+                        };
+                        all_lines.push(Line::from(Span::styled(display, style)));
+                    }
+                    continue;
+                }
             };
             for row in word_wrap_plain(&display, width) {
                 all_lines.push(Line::from(Span::styled(row, style)));

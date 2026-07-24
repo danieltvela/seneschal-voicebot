@@ -264,26 +264,24 @@ impl App {
                     existing.state = state;
                 } else {
                     let is_first = self.acp_sessions.is_empty();
-                    self.acp_sessions.push(AcpSessionView {
-                        session_id,
-                        agent_name,
-                        label,
-                        state,
-                        lines: Vec::new(),
-                        scroll: 0,
-                    });
+                    self.acp_sessions
+                        .push(AcpSessionView::new(session_id, agent_name, label, state));
                     if is_first {
                         self.selected_session = 0;
                     }
                 }
             }
-            TuiEvent::AcpSessionLog { session_id, line } => {
+            TuiEvent::AcpSessionLog {
+                session_id,
+                line,
+                mode,
+            } => {
                 if let Some(s) = self
                     .acp_sessions
                     .iter_mut()
                     .find(|s| s.session_id == session_id)
                 {
-                    s.push_line(line);
+                    s.apply_log(mode, line);
                 }
             }
             TuiEvent::AcpSessionRemove { session_id } => {
@@ -620,8 +618,10 @@ mod tests {
         app.handle_tui_event(TuiEvent::AcpSessionLog {
             session_id: "s1".into(),
             line: "hi".into(),
+            mode: crate::tui::acp_panel::AcpLogMode::Line,
         });
-        assert_eq!(app.acp_sessions[0].lines, vec!["hi".to_string()]);
+        assert_eq!(app.acp_sessions[0].lines.len(), 1);
+        assert_eq!(app.acp_sessions[0].lines[0].text, "hi");
         app.handle_tui_event(TuiEvent::AcpSessionRemove {
             session_id: "s1".into(),
         });
