@@ -68,6 +68,9 @@ pub enum SessionStatus {
     Started,
     Idle,
     Busy,
+    NeedsInput,
+    Done,
+    Error,
     Closed,
 }
 
@@ -77,6 +80,9 @@ impl std::fmt::Display for SessionStatus {
             Self::Started => write!(f, "started"),
             Self::Idle => write!(f, "idle"),
             Self::Busy => write!(f, "busy"),
+            Self::NeedsInput => write!(f, "needs_input"),
+            Self::Done => write!(f, "done"),
+            Self::Error => write!(f, "error"),
             Self::Closed => write!(f, "closed"),
         }
     }
@@ -106,6 +112,7 @@ pub struct SessionInfo {
     pub agent_name: String,
     pub created_at: Instant,
     pub last_used: Instant,
+    pub status: SessionStatus,
 }
 
 /// Handle to a live ACP session.
@@ -141,12 +148,39 @@ impl std::fmt::Debug for SessionEntry {
 pub struct AcpSessionManager {
     sessions: DashMap<String, SessionEntry>,
     backoff_states: DashMap<String, BackoffState>,
+    /// Optional channel for TUI / display consumers (set before wrapping in Arc).
+    event_tx: Option<SessionEventTx>,
 }
 
 impl AcpSessionManager {
     /// Create a new, empty manager.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Attach a session-event sender (call before wrapping in `Arc`).
+    pub fn set_event_tx(&mut self, tx: SessionEventTx) {
+        self.event_tx = Some(tx);
+    }
+
+    /// Clone of the event sender, if configured.
+    pub fn event_sender(&self) -> Option<SessionEventTx> {
+        self.event_tx.clone()
+    }
+
+    fn emit(&self, event: SessionEvent) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(event);
+        }
+    }
+
+    fn emit_status(&self, agent_name: &str, session_id: &str, status: SessionStatus) {
+        self.emit(SessionEvent::Status {
+            agent_name: agent_name.to_string(),
+            session_id: session_id.to_string(),
+            status,
+            correlation_id: String::new(),
+        });
     }
 
     /// Retrieve an existing session for `agent_config.name`, or create one.
@@ -257,6 +291,9 @@ impl AcpSessionManager {
         if let Some(mut entry) = self.sessions.get_mut(agent_name) {
             entry.status = SessionStatus::Idle;
             entry.last_used = Instant::now();
+            let sid = entry.session_id.clone();
+            drop(entry);
+            self.emit_status(agent_name, &sid, SessionStatus::Idle);
         }
     }
 
@@ -265,6 +302,42 @@ impl AcpSessionManager {
         if let Some(mut entry) = self.sessions.get_mut(agent_name) {
             entry.status = SessionStatus::Busy;
             entry.last_used = Instant::now();
+            let sid = entry.session_id.clone();
+            drop(entry);
+            self.emit_status(agent_name, &sid, SessionStatus::Busy);
+        }
+    }
+
+    /// Mark a session as waiting for user input.
+    pub fn mark_session_needs_input(&self, agent_name: &str) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.status = SessionStatus::NeedsInput;
+            entry.last_used = Instant::now();
+            let sid = entry.session_id.clone();
+            drop(entry);
+            self.emit_status(agent_name, &sid, SessionStatus::NeedsInput);
+        }
+    }
+
+    /// Mark a session as done (completed cleanly).
+    pub fn mark_session_done(&self, agent_name: &str) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.status = SessionStatus::Done;
+            entry.last_used = Instant::now();
+            let sid = entry.session_id.clone();
+            drop(entry);
+            self.emit_status(agent_name, &sid, SessionStatus::Done);
+        }
+    }
+
+    /// Mark a session as errored.
+    pub fn mark_session_error(&self, agent_name: &str) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.status = SessionStatus::Error;
+            entry.last_used = Instant::now();
+            let sid = entry.session_id.clone();
+            drop(entry);
+            self.emit_status(agent_name, &sid, SessionStatus::Error);
         }
     }
 
@@ -272,7 +345,18 @@ impl AcpSessionManager {
     pub fn mark_session_closed(&self, agent_name: &str) {
         if let Some(mut entry) = self.sessions.get_mut(agent_name) {
             entry.status = SessionStatus::Closed;
+            let sid = entry.session_id.clone();
+            drop(entry);
+            self.emit_status(agent_name, &sid, SessionStatus::Closed);
         }
+    }
+
+    /// Whether the agent session still has registered tasks.
+    pub fn has_tasks(&self, agent_name: &str) -> bool {
+        self.sessions
+            .get(agent_name)
+            .map(|e| !e.task_ids.is_empty())
+            .unwrap_or(false)
     }
 
     /// Check if a session is available for keepalive (status is Idle).
@@ -314,6 +398,7 @@ impl AcpSessionManager {
                 agent_name: e.agent_name.clone(),
                 created_at: e.created_at,
                 last_used: e.last_used,
+                status: e.status,
             })
             .collect()
     }
@@ -943,6 +1028,9 @@ mod tests {
         assert_eq!(SessionStatus::Started.to_string(), "started");
         assert_eq!(SessionStatus::Idle.to_string(), "idle");
         assert_eq!(SessionStatus::Busy.to_string(), "busy");
+        assert_eq!(SessionStatus::NeedsInput.to_string(), "needs_input");
+        assert_eq!(SessionStatus::Done.to_string(), "done");
+        assert_eq!(SessionStatus::Error.to_string(), "error");
         assert_eq!(SessionStatus::Closed.to_string(), "closed");
     }
 
@@ -950,6 +1038,42 @@ mod tests {
     fn create_session_event_channel_has_capacity() {
         let (tx, _rx) = create_session_event_channel();
         assert_eq!(tx.max_capacity(), 16);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_includes_status() {
+        let mgr = AcpSessionManager::new();
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("list-sid", "hermes"));
+        mgr.mark_session_busy("hermes");
+        let list = mgr.list_sessions();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].status, SessionStatus::Busy);
+        assert_eq!(list[0].session_id, "list-sid");
+    }
+
+    #[tokio::test]
+    async fn mark_session_busy_emits_status_event() {
+        let (tx, mut rx) = create_session_event_channel();
+        let mut mgr = AcpSessionManager::new();
+        mgr.set_event_tx(tx);
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("emit-sid", "hermes"));
+        mgr.mark_session_busy("hermes");
+        let ev = rx.try_recv().expect("expected status event");
+        match ev {
+            SessionEvent::Status {
+                agent_name,
+                session_id,
+                status,
+                ..
+            } => {
+                assert_eq!(agent_name, "hermes");
+                assert_eq!(session_id, "emit-sid");
+                assert_eq!(status, SessionStatus::Busy);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]
