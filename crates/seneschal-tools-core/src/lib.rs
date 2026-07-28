@@ -1,0 +1,1 @@
+// seneschal-tools-core — placeholder

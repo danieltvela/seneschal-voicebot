@@ -1,3 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/seneschal-core",
+    "crates/seneschal-mcp",
+    "crates/seneschal-agents",
+    "crates/seneschal-plugins",
+    "crates/seneschal-control",
+    "crates/seneschal-remote",
+    "crates/seneschal-search",
+    "crates/seneschal-memory",
+    "crates/seneschal-tools-core",
+    "crates/seneschal-classifier",
+    "crates/seneschal-extras",
+    "crates/seneschal-tui",
+]
+
 [package]
 name = "seneschal"
 version = "0.1.0"

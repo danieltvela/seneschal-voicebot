@@ -1,0 +1,1 @@
+// seneschal-mcp — placeholder

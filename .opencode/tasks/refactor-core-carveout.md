@@ -143,7 +143,7 @@ Cada paso produce una doc **espec-nivel** (interfaces, tipos, dataflow), leyendo
 
 ## Phase 4 — Scaffold del workspace (primeTo compile)
 
-- [ ] Step 4.1: Convertir `Cargo.toml` raíz en workspace `[workspace] members=[...]`; crear `crates/` vacío con los subdirectorios y `Cargo.toml` mínimos (sin mover código todavía).
+- [x] Step 4.1: Convertir `Cargo.toml` raíz en workspace `[workspace] members=[...]`; crear `crates/` vacío con los subdirectorios y `Cargo.toml` mínimos (sin mover código todavía).
   - File(s): `Cargo.toml`, `crates/*/Cargo.toml` (nuevos vacíos)
   - Change: `members = ["crates/seneschal-core", ...]`; workspace hereda `rust-toolchain.toml`.
   - Acceptance: `cargo metadata --no-deps` resuelve el workspace sin error (aún sin código movido).
