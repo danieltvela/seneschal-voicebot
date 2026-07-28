@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use super::provider::RequestOptions;
+use super::provider::{RequestOptions, ToolChoice};
 use super::session::Message;
 
 /// Strips `<think>…</think>` blocks from a streaming token sequence.
@@ -210,20 +210,31 @@ impl OpenAIClient {
             "repetition_penalty": 1.1,
             "top_k": 40,
         });
-        if !tools.is_empty() {
-            payload["tools"] = serde_json::json!(tools);
-            payload["tool_choice"] = match forced_tool {
-                Some(_name) => serde_json::json!("required"),
-                None => serde_json::json!("auto"),
-            };
-            // Do NOT send chat_template_kwargs when tools are active: changing the
-            // Jinja2 template can conflict with tool calling for some mlx-community
-            // quantizations. ThinkFilter will strip any <think> blocks that arrive.
+        let tool_choice_override = options.tool_choice.unwrap_or(match forced_tool {
+            Some(_) => ToolChoice::Required,
+            None => ToolChoice::Auto,
+        });
+
+        if tool_choice_override == ToolChoice::None || tools.is_empty() {
+            // No tools (or explicit "none") → use thinking via chat_template_kwargs.
+            if tool_choice_override == ToolChoice::None {
+                payload["tool_choice"] = serde_json::json!("none");
+            }
+            if !tools.is_empty() && tool_choice_override == ToolChoice::None {
+                // tools were supplied but explicitly disabled — still omit tools field
+            } else if tools.is_empty() {
+                // normal Simple path
+            }
+            payload["chat_template_kwargs"] =
+                serde_json::json!({"enable_thinking": effective_thinking});
         } else {
-            // No tools → conditionally enable thinking based on config.
-            // When disabled, eliminates ~700ms of invisible <think>…</think>
-            // overhead that ThinkFilter would otherwise consume.
-            payload["chat_template_kwargs"] = serde_json::json!({"enable_thinking": self.thinking});
+            payload["tools"] = serde_json::json!(tools);
+            payload["tool_choice"] = match tool_choice_override {
+                ToolChoice::Required => serde_json::json!("required"),
+                ToolChoice::Auto => serde_json::json!("auto"),
+                ToolChoice::None => serde_json::json!("none"),
+            };
+            // Do NOT send chat_template_kwargs when tools are active.
         }
 
         tracing::debug!(target: "llm", "Request payload: {}", serde_json::to_string(&payload).unwrap_or_default());

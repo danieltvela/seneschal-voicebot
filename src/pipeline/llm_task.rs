@@ -10,7 +10,7 @@ use super::state::PipelineEvents;
 use crate::agents::ProactiveEvent;
 use crate::classifier::{ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent};
 use crate::db::Database;
-use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken};
+use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken, ToolChoice};
 use crate::tools::ToolRegistry;
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
@@ -232,6 +232,9 @@ pub async fn llm_task(
                             .with_thinking(llm_thinking_complex),
                     };
                     let tools_on = matches!(intent, Intent::Complex);
+                    if llm_tools_strict && !tools_on {
+                        opts = opts.with_tool_choice(ToolChoice::None);
+                    }
                     // Trace classification
                     info!(target: "classifier",
                         "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools={}",

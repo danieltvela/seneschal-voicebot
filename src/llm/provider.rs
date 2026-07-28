@@ -9,6 +9,17 @@ use crate::config::Config;
 use super::client::{OpenAIClient, StreamToken};
 use super::session::Message;
 
+/// Controls the `tool_choice` parameter in chat/completions requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolChoice {
+    /// Let the model decide whether to call tools (`auto`).
+    Auto,
+    /// Force the model to call a tool (`required`).
+    Required,
+    /// Disable tool calling explicitly (`none`).
+    None,
+}
+
 /// Per-request options that override fixed client settings.
 ///
 /// `None` = inherit from the client's default.
@@ -20,6 +31,8 @@ pub struct RequestOptions {
     pub thinking: Option<bool>,
     /// When false, caller MUST pass `tools=&[]` to `stream()`.
     pub enable_tools: bool,
+    /// Override the `tool_choice` parameter. `None` = default auto/required.
+    pub tool_choice: Option<ToolChoice>,
 }
 
 impl RequestOptions {
@@ -34,6 +47,11 @@ impl RequestOptions {
 
     pub fn with_thinking(mut self, t: bool) -> Self {
         self.thinking = Some(t);
+        self
+    }
+
+    pub fn with_tool_choice(mut self, c: ToolChoice) -> Self {
+        self.tool_choice = Some(c);
         self
     }
 }
