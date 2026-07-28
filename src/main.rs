@@ -1090,6 +1090,13 @@ async fn async_main() -> Result<()> {
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
         let filler_controller_c = Arc::clone(&filler_controller);
+        let classifier = Arc::new(crate::classifier::build_classifier(&config));
+        let classifier_c = Arc::clone(&classifier);
+        let llm_temp_simple = config.llm_temperature_simple;
+        let llm_temp_complex = config.llm_temperature_complex;
+        let llm_think_simple = config.llm_thinking_simple;
+        let llm_think_complex = config.llm_thinking_complex;
+        let llm_strict = config.llm_tools_strict;
         #[cfg(feature = "tui")]
         let tui_tx_c = tui_tx.clone();
         #[cfg(feature = "control")]
@@ -1112,6 +1119,12 @@ async fn async_main() -> Result<()> {
                 turn_commit_c,
                 proactive_tx_c,
                 filler_controller_c,
+                classifier_c,
+                llm_temp_simple,
+                llm_temp_complex,
+                llm_think_simple,
+                llm_think_complex,
+                llm_strict,
                 #[cfg(feature = "tui")]
                 tui_tx_c,
                 #[cfg(feature = "control")]

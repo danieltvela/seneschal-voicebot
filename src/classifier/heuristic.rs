@@ -1,11 +1,5 @@
 /// Heuristic intent classification (Nivel 1 de la cascada C01).
-///
-/// Resuelve en orden (primera regla que match termina):
-///   (a) Texto vacío → Simple, confianza 1.0
-///   (b) Saludos/confirmaciones triviales → Simple, confianza 1.0
-///   (c) Keywords → Complex confianza 1.0 si match, sino Simple confianza 0.0
-///
-/// La confianza 0.0 indica "no resuelto" y la cascada continúa al siguiente nivel.
+/// ...
 pub fn classify(text: &str, complex_keywords: &[String]) -> super::ClassifyResult {
     use super::{ClassifierLevel, ClassifyResult, Intent};
 
@@ -93,6 +87,48 @@ pub fn classify(text: &str, complex_keywords: &[String]) -> super::ClassifyResul
         level: ClassifierLevel::Heuristic,
         confidence: 0.0,
         matched_keyword: None,
+    }
+}
+
+use std::sync::Arc;
+use std::sync::Mutex;
+use async_trait::async_trait;
+use super::pipeline::ClassifierStage;
+use super::{ClassifierLevel, ClassifyResult};
+
+/// Wraps the heuristic classifier as a cascade stage.
+pub struct HeuristicStage {
+    keywords: Vec<String>,
+}
+
+impl HeuristicStage {
+    pub fn new(keywords: Vec<String>) -> Self {
+        Self { keywords }
+    }
+}
+
+#[async_trait]
+impl ClassifierStage for HeuristicStage {
+    fn name(&self) -> &'static str {
+        "heuristic"
+    }
+
+    fn level(&self) -> ClassifierLevel {
+        ClassifierLevel::Heuristic
+    }
+
+    async fn try_classify(
+        &self,
+        text: &str,
+        _shared_emb: &Arc<Mutex<Option<Vec<f32>>>>,
+        threshold: f32,
+    ) -> Option<ClassifyResult> {
+        let r = classify(text, &self.keywords);
+        if r.confidence >= threshold {
+            Some(r)
+        } else {
+            None
+        }
     }
 }
 

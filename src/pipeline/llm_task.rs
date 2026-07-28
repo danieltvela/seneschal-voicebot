@@ -8,8 +8,9 @@ use super::frames::PipelineFrame;
 use super::fsm::PipelineState;
 use super::state::PipelineEvents;
 use crate::agents::ProactiveEvent;
+use crate::classifier::{ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent};
 use crate::db::Database;
-use crate::llm::{LlmProvider, LlmSession, StreamToken};
+use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken};
 use crate::tools::ToolRegistry;
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
@@ -37,6 +38,12 @@ pub async fn llm_task(
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     filler_controller: Arc<crate::audio::filler::FillerController>,
+    classifier: Arc<ClassifierPipeline>,
+    llm_temperature_simple: f32,
+    llm_temperature_complex: f32,
+    llm_thinking_simple: bool,
+    llm_thinking_complex: bool,
+    llm_tools_strict: bool,
     #[cfg(feature = "tui")] tui_tx: crate::tui::events::TuiEventTx,
     #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
 ) {
@@ -201,8 +208,76 @@ pub async fn llm_task(
 
         'pipeline: {
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
+                // ── Classify intent before LLM call ─────────────────────────────
+                let (request_options, tools_enabled, result) = if iter == 0 {
+                    let is_complex_turn =
+                        tool_continuation || is_system_notification;
+                    let res = if is_complex_turn {
+                        ClassifyResult {
+                            intent: Intent::Complex,
+                            level: ClassifierLevel::Heuristic,
+                            confidence: 1.0,
+                            matched_keyword: None,
+                        }
+                    } else {
+                        classifier.classify(&text).await
+                    };
+                    let intent = res.intent;
+                    let mut opts = match intent {
+                        Intent::Simple => RequestOptions::new()
+                            .with_temperature(llm_temperature_simple)
+                            .with_thinking(llm_thinking_simple),
+                        Intent::Complex => RequestOptions::new()
+                            .with_temperature(llm_temperature_complex)
+                            .with_thinking(llm_thinking_complex),
+                    };
+                    let tools_on = matches!(intent, Intent::Complex);
+                    // Trace classification
+                    info!(target: "classifier",
+                        "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools={}",
+                        pipeline_id, intent, res.level, res.confidence,
+                        res.matched_keyword, tools_on);
+                    // Persist classification for analysis
+                    let db_log = db.save_classification(
+                        &session_id.to_string(),
+                        pipeline_id as i64,
+                        &text,
+                        match intent {
+                            Intent::Simple => "SIMPLE",
+                            Intent::Complex => "COMPLEX",
+                        },
+                        res.confidence,
+                        match res.level {
+                            ClassifierLevel::Heuristic => "Heuristic",
+                            ClassifierLevel::Embedding => "Embedding",
+                            ClassifierLevel::Logistic => "Logistic",
+                            ClassifierLevel::Fallback => "Fallback",
+                        },
+                        "cascade",
+                        res.matched_keyword.as_deref(),
+                    ).await;
+                    if let Err(e) = db_log {
+                        warn!(target: "classifier",
+                            "[pipe={}] failed to save classification: {e}",
+                            pipeline_id);
+                    }
+                    (opts, tools_on, res)
+                } else {
+                    // On tool-continuation iterations, keep the same options
+                    (RequestOptions::new(), true, ClassifyResult {
+                        intent: Intent::Complex,
+                        level: ClassifierLevel::Heuristic,
+                        confidence: 1.0,
+                        matched_keyword: None,
+                    })
+                };
+
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
-                let forced_tool = if iter == 0 && !tool_continuation && !is_system_notification {
+                let forced_tool = if tools_enabled
+                    && iter == 0
+                    && !tool_continuation
+                    && !is_system_notification
+                {
                     tools
                         .lock()
                         .unwrap()
@@ -214,8 +289,15 @@ pub async fn llm_task(
                 if let Some(ref name) = forced_tool {
                     info!(target: "pipeline", "Forcing tool '{}' for explicit request", name);
                 }
+                let active_tools: Vec<serde_json::Value> =
+                    if tools_enabled { tool_defs.clone() } else { Vec::new() };
                 let (token_rx, stream_handle) = match llm_client
-                    .stream(&messages, &tool_defs, forced_tool.as_deref())
+                    .stream(
+                        &messages,
+                        &active_tools,
+                        forced_tool.as_deref(),
+                        request_options,
+                    )
                     .await
                 {
                     Ok(r) => r,

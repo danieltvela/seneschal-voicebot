@@ -9,6 +9,35 @@ use crate::config::Config;
 use super::client::{OpenAIClient, StreamToken};
 use super::session::Message;
 
+/// Per-request options that override fixed client settings.
+///
+/// `None` = inherit from the client's default.
+#[derive(Clone, Copy, Default)]
+pub struct RequestOptions {
+    /// Override temperature for this single request.
+    pub temperature: Option<f32>,
+    /// Override thinking mode for this single request.
+    pub thinking: Option<bool>,
+    /// When false, caller MUST pass `tools=&[]` to `stream()`.
+    pub enable_tools: bool,
+}
+
+impl RequestOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_temperature(mut self, t: f32) -> Self {
+        self.temperature = Some(t);
+        self
+    }
+
+    pub fn with_thinking(mut self, t: bool) -> Self {
+        self.thinking = Some(t);
+        self
+    }
+}
+
 /// Abstraction over LLM inference backends.
 ///
 /// The primary implementation is `OpenAiLlmProvider` which speaks to an
@@ -30,6 +59,7 @@ pub trait LlmProvider: Send + Sync {
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
         forced_tool: Option<&str>,
+        options: RequestOptions,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)>;
 
     /// One-shot (non-streaming) completion.
@@ -82,8 +112,11 @@ impl LlmProvider for OpenAiLlmProvider {
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
         forced_tool: Option<&str>,
+        options: RequestOptions,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
-        self.inner.stream(messages, tools, forced_tool).await
+        self.inner
+            .stream(messages, tools, forced_tool, options)
+            .await
     }
 
     async fn complete(&self, messages: &[Message]) -> Result<String> {

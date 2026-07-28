@@ -220,6 +220,7 @@ impl E2eHarness {
             #[cfg(feature = "control")]
             let control_broadcast_c = crate::control::broadcast::ControlBroadcast::new(16);
             tokio::spawn(async move {
+                let c = crate::classifier::ClassifierPipeline::new(0.6);
                 llm_task(
                     events_c,
                     state_tx_c,
@@ -237,6 +238,12 @@ impl E2eHarness {
                     turn_c,
                     proactive_tx,
                     filler_c,
+                    Arc::new(c),
+                    0.8,    // llm_temperature_simple
+                    0.3,    // llm_temperature_complex
+                    false,  // llm_thinking_simple
+                    true,   // llm_thinking_complex
+                    false,  // llm_tools_strict
                     #[cfg(feature = "tui")]
                     tui_tx_c,
                     #[cfg(feature = "control")]

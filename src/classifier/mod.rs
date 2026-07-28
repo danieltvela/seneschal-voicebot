@@ -1,5 +1,10 @@
+pub mod fallback;
 pub mod heuristic;
 pub mod keyword;
+pub mod pipeline;
+
+pub use pipeline::build_classifier;
+pub use pipeline::ClassifierPipeline;
 
 /// Classification of a user utterance: either casual interaction (Simple)
 /// or a task that requires tool-calling and reasoning (Complex).

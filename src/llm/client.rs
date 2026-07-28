@@ -3,6 +3,7 @@ use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use super::provider::RequestOptions;
 use super::session::Message;
 
 /// Strips `<think>…</think>` blocks from a streaming token sequence.
@@ -196,18 +197,18 @@ impl OpenAIClient {
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
         forced_tool: Option<&str>,
+        options: RequestOptions,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
+        let effective_thinking = options.thinking.unwrap_or(self.thinking);
         let mut payload = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
+            "temperature": options.temperature.unwrap_or(self.temperature),
             "top_p": 0.90,
             "stream": true,
-            // mlx-lm requires sampling params per-request (no server-side config).
             "repetition_penalty": 1.1,
             "top_k": 40,
-            // "min_p": 0.05,
         });
         if !tools.is_empty() {
             payload["tools"] = serde_json::json!(tools);
@@ -657,7 +658,12 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let messages = make_messages();
         let (mut rx, _handle) = client
-            .stream(&messages_to_json(&messages), &[], None)
+            .stream(
+                &messages_to_json(&messages),
+                &[],
+                None,
+                RequestOptions::default(),
+            )
             .await
             .unwrap();
 
@@ -691,7 +697,12 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let messages = make_messages();
         let (mut rx, _handle) = client
-            .stream(&messages_to_json(&messages), &[], None)
+            .stream(
+                &messages_to_json(&messages),
+                &[],
+                None,
+                RequestOptions::default(),
+            )
             .await
             .unwrap();
 
@@ -803,7 +814,7 @@ mod tests {
             .await;
 
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
-        let (mut rx, _handle) = client.stream(&[], &[], None).await.unwrap();
+        let (mut rx, _handle) = client.stream(&[], &[], None, RequestOptions::default()).await.unwrap();
 
         let token = rx.recv().await.expect("should receive a token");
         match token {
