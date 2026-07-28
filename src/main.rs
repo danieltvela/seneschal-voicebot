@@ -7,6 +7,7 @@ mod agent_session;
 mod agents;
 mod analysis;
 mod audio;
+mod classifier;
 mod config;
 #[cfg(feature = "control")]
 mod control;
