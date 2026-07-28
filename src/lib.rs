@@ -8,7 +8,6 @@ pub mod i18n;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
-
 pub mod plugins;
 pub mod profile;
 pub mod screen_capture;

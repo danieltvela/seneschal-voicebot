@@ -2,7 +2,6 @@
 pub mod avspeech;
 #[cfg(feature = "kokoro")]
 pub mod kokoro;
-pub mod piper;
 pub mod sentence;
 
 #[cfg(feature = "avspeech")]
