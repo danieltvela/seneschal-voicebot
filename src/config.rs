@@ -160,6 +160,41 @@ pub struct Config {
     /// When true, `chat_template_kwargs: {"enable_thinking": true}` is sent and
     /// `<think>…</think>` blocks are stripped from the output.
     pub llm_thinking: bool,
+    /// SIMPLE-mode temperature (LLM_TEMPERATURE_SIMPLE, default 0.8).
+    pub llm_temperature_simple: f32,
+    /// COMPLEX-mode temperature (LLM_TEMPERATURE_COMPLEX, default = llm_temperature).
+    pub llm_temperature_complex: f32,
+    /// SIMPLE-mode thinking (LLM_THINKING_SIMPLE, default false).
+    pub llm_thinking_simple: bool,
+    /// COMPLEX-mode thinking (LLM_THINKING_COMPLEX, default = llm_thinking).
+    pub llm_thinking_complex: bool,
+    /// Keywords (CSV) that mark a request as COMPLEX.
+    /// Empty → use DEFAULT_COMPLEX_KEYWORDS from the classifier module.
+    pub llm_complex_keywords: Vec<String>,
+
+    // ── Intent Classifier (cascada C01) ───────────────────────────────
+    /// Umbral de confianza [0.0,1.0]: si un nivel baja de éste, la cascada continúa.
+    pub classifier_confidence_threshold: f32,
+    /// Activar Niveles 2/3 (embeddings) — requiere feature `classifier-embedding`.
+    pub classifier_enable_embedding: bool,
+    /// Ruta al modelo de embeddings ONNX (dir o .onnx). Vacío → skip Nivel 2.
+    pub classifier_model_path: String,
+    /// Ruta al fichero JSON con centroides de referencia por categoría.
+    pub classifier_centroids_path: String,
+    /// Ruta al fichero JSON con pesos de la regresión logística (Nivel 3).
+    pub classifier_weights_path: String,
+    /// Activar Nivel 4 (SLM fallback). Si false, la cascada termina en último nivel.
+    pub classifier_enable_fallback: bool,
+    /// URL base del segundo endpoint LLM (SLM en vLLM) para el fallback.
+    pub classifier_fallback_url: String,
+    /// Modelo del SLM fallback (campo `model` del payload).
+    pub classifier_fallback_model: String,
+    /// API key del SLM fallback (Bearer; vacío = sin auth).
+    pub classifier_fallback_api_key: String,
+    /// Timeout en ms del fallback SLM.
+    pub classifier_fallback_timeout_ms: u64,
+    /// "Tools Strict": en SIMPLE fuerza `tool_choice: "none"` explícito.
+    pub llm_tools_strict: bool,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
     /// TTS backend: "avspeech" (default, native AVSpeechSynthesizer, --features avspeech)
@@ -706,6 +741,65 @@ impl Config {
         // LLM thinking
         if let Ok(v) = env::var("LLM_THINKING") {
             self.llm_thinking = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("LLM_TEMPERATURE_SIMPLE") {
+            self.llm_temperature_simple =
+                v.parse().context("Invalid LLM_TEMPERATURE_SIMPLE")?;
+        }
+        if let Ok(v) = env::var("LLM_TEMPERATURE_COMPLEX") {
+            self.llm_temperature_complex =
+                v.parse().context("Invalid LLM_TEMPERATURE_COMPLEX")?;
+        }
+        if let Ok(v) = env::var("LLM_THINKING_SIMPLE") {
+            self.llm_thinking_simple = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("LLM_THINKING_COMPLEX") {
+            self.llm_thinking_complex = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("LLM_COMPLEX_KEYWORDS") {
+            self.llm_complex_keywords = v
+                .split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        // ── Classifier cascade (C01) ──────────────────────────────────────────
+        if let Ok(v) = env::var("CLASSIFIER_CONFIDENCE_THRESHOLD") {
+            self.classifier_confidence_threshold =
+                v.parse()
+                    .context("Invalid CLASSIFIER_CONFIDENCE_THRESHOLD")?;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_ENABLE_EMBEDDING") {
+            self.classifier_enable_embedding = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("CLASSIFIER_MODEL_PATH") {
+            self.classifier_model_path = v;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_CENTROIDS_PATH") {
+            self.classifier_centroids_path = v;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_WEIGHTS_PATH") {
+            self.classifier_weights_path = v;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_ENABLE_FALLBACK") {
+            self.classifier_enable_fallback = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("CLASSIFIER_FALLBACK_URL") {
+            self.classifier_fallback_url = v;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_FALLBACK_MODEL") {
+            self.classifier_fallback_model = v;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_FALLBACK_API_KEY") {
+            self.classifier_fallback_api_key = v;
+        }
+        if let Ok(v) = env::var("CLASSIFIER_FALLBACK_TIMEOUT_MS") {
+            self.classifier_fallback_timeout_ms =
+                v.parse()
+                    .context("Invalid CLASSIFIER_FALLBACK_TIMEOUT_MS")?;
+        }
+        if let Ok(v) = env::var("LLM_TOOLS_STRICT") {
+            self.llm_tools_strict = v == "1" || v.to_lowercase() == "true";
         }
 
         // Secondary LLM

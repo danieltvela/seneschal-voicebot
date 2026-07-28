@@ -255,6 +255,30 @@ impl Database {
                 VALUES (new.id, new.role, new.content);
             END",
         )
+            .execute(&self.pool)
+            .await?;
+
+        // ── Classification log for intent cascade tracing ─────────────────
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS classification_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      TEXT NOT NULL,
+                utterance_id    INTEGER NOT NULL,
+                transcript      TEXT NOT NULL,
+                intent          TEXT NOT NULL,
+                confidence      REAL NOT NULL,
+                level           TEXT NOT NULL,
+                classifier      TEXT NOT NULL,
+                matched_keyword TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_classification_log_session
+             ON classification_log(session_id)",
+        )
         .execute(&self.pool)
         .await?;
 
@@ -696,6 +720,38 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ── Classification log ─────────────────────────────────────────────────
+
+    /// Log a classification decision from the intent cascade for traceability.
+    pub async fn save_classification(
+        &self,
+        session_id: &str,
+        utterance_id: i64,
+        transcript: &str,
+        intent: &str,
+        confidence: f32,
+        level: &str,
+        classifier: &str,
+        matched_keyword: Option<&str>,
+    ) -> Result<i64> {
+        let row = sqlx::query(
+            "INSERT INTO classification_log
+                (session_id, utterance_id, transcript, intent, confidence, level, classifier, matched_keyword)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(session_id)
+        .bind(utterance_id)
+        .bind(transcript)
+        .bind(intent)
+        .bind(confidence)
+        .bind(level)
+        .bind(classifier)
+        .bind(matched_keyword)
+        .execute(&self.pool)
+        .await?;
+        Ok(row.last_insert_rowid())
     }
 
     // ── User profile ──────────────────────────────────────────────────────────
