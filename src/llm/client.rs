@@ -825,7 +825,10 @@ mod tests {
             .await;
 
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
-        let (mut rx, _handle) = client.stream(&[], &[], None, RequestOptions::default()).await.unwrap();
+        let (mut rx, _handle) = client
+            .stream(&[], &[], None, RequestOptions::default())
+            .await
+            .unwrap();
 
         let token = rx.recv().await.expect("should receive a token");
         match token {

@@ -90,11 +90,11 @@ pub fn classify(text: &str, complex_keywords: &[String]) -> super::ClassifyResul
     }
 }
 
-use std::sync::Arc;
-use std::sync::Mutex;
-use async_trait::async_trait;
 use super::pipeline::ClassifierStage;
 use super::{ClassifierLevel, ClassifyResult};
+use async_trait::async_trait;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Wraps the heuristic classifier as a cascade stage.
 pub struct HeuristicStage {

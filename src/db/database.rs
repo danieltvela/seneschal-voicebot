@@ -255,8 +255,8 @@ impl Database {
                 VALUES (new.id, new.role, new.content);
             END",
         )
-            .execute(&self.pool)
-            .await?;
+        .execute(&self.pool)
+        .await?;
 
         // ── Classification log for intent cascade tracing ─────────────────
         sqlx::query(
@@ -725,6 +725,7 @@ impl Database {
     // ── Classification log ─────────────────────────────────────────────────
 
     /// Log a classification decision from the intent cascade for traceability.
+    #[allow(clippy::too_many_arguments)]
     pub async fn save_classification(
         &self,
         session_id: &str,

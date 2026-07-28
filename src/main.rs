@@ -44,10 +44,9 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::agent_session::VisibleSessionManager;
-use crate::agents::{
-    AcpSessionManager, AgentRegistry, OpenCodeHttpTransport, ProactiveEvent,
-    create_session_event_channel,
-};
+#[cfg(feature = "tui")]
+use crate::agents::create_session_event_channel;
+use crate::agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport, ProactiveEvent};
 use crate::analysis::ContextLens;
 use crate::analysis::identity::IdentityAnalyzer;
 use crate::audio::ambient_buffer::AmbientBuffer;

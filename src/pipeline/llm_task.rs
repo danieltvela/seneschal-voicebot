@@ -210,8 +210,7 @@ pub async fn llm_task(
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
                 // ── Classify intent before LLM call ─────────────────────────────
                 let (request_options, tools_enabled, result) = if iter == 0 {
-                    let is_complex_turn =
-                        tool_continuation || is_system_notification;
+                    let is_complex_turn = tool_continuation || is_system_notification;
                     let res = if is_complex_turn {
                         ClassifyResult {
                             intent: Intent::Complex,
@@ -241,24 +240,26 @@ pub async fn llm_task(
                         pipeline_id, intent, res.level, res.confidence,
                         res.matched_keyword, tools_on);
                     // Persist classification for analysis
-                    let db_log = db.save_classification(
-                        &session_id.to_string(),
-                        pipeline_id as i64,
-                        &text,
-                        match intent {
-                            Intent::Simple => "SIMPLE",
-                            Intent::Complex => "COMPLEX",
-                        },
-                        res.confidence,
-                        match res.level {
-                            ClassifierLevel::Heuristic => "Heuristic",
-                            ClassifierLevel::Embedding => "Embedding",
-                            ClassifierLevel::Logistic => "Logistic",
-                            ClassifierLevel::Fallback => "Fallback",
-                        },
-                        "cascade",
-                        res.matched_keyword.as_deref(),
-                    ).await;
+                    let db_log = db
+                        .save_classification(
+                            &session_id.to_string(),
+                            pipeline_id as i64,
+                            &text,
+                            match intent {
+                                Intent::Simple => "SIMPLE",
+                                Intent::Complex => "COMPLEX",
+                            },
+                            res.confidence,
+                            match res.level {
+                                ClassifierLevel::Heuristic => "Heuristic",
+                                ClassifierLevel::Embedding => "Embedding",
+                                ClassifierLevel::Logistic => "Logistic",
+                                ClassifierLevel::Fallback => "Fallback",
+                            },
+                            "cascade",
+                            res.matched_keyword.as_deref(),
+                        )
+                        .await;
                     if let Err(e) = db_log {
                         warn!(target: "classifier",
                             "[pipe={}] failed to save classification: {e}",
@@ -267,12 +268,16 @@ pub async fn llm_task(
                     (opts, tools_on, res)
                 } else {
                     // On tool-continuation iterations, keep the same options
-                    (RequestOptions::new(), true, ClassifyResult {
-                        intent: Intent::Complex,
-                        level: ClassifierLevel::Heuristic,
-                        confidence: 1.0,
-                        matched_keyword: None,
-                    })
+                    (
+                        RequestOptions::new(),
+                        true,
+                        ClassifyResult {
+                            intent: Intent::Complex,
+                            level: ClassifierLevel::Heuristic,
+                            confidence: 1.0,
+                            matched_keyword: None,
+                        },
+                    )
                 };
 
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
@@ -292,8 +297,11 @@ pub async fn llm_task(
                 if let Some(ref name) = forced_tool {
                     info!(target: "pipeline", "Forcing tool '{}' for explicit request", name);
                 }
-                let active_tools: Vec<serde_json::Value> =
-                    if tools_enabled { tool_defs.clone() } else { Vec::new() };
+                let active_tools: Vec<serde_json::Value> = if tools_enabled {
+                    tool_defs.clone()
+                } else {
+                    Vec::new()
+                };
                 let (token_rx, stream_handle) = match llm_client
                     .stream(
                         &messages,

@@ -139,6 +139,8 @@ avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-au
 tui = ["dep:ratatui", "dep:crossterm"]
 remote = ["dep:axum", "dep:tower"]
 control = ["dep:axum", "dep:tower"]
+# Placeholder — deps added in Phase 5
+classifier-embedding = []
 
 [[bin]]
 name = "seneschal"

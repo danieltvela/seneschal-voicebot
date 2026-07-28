@@ -53,7 +53,10 @@ mod tests {
 
     #[test]
     fn complex_by_keyword() {
-        let r = keyword::classify("Investiga la API de OpenAI", &kw_list(&["investiga", "lanza"]));
+        let r = keyword::classify(
+            "Investiga la API de OpenAI",
+            &kw_list(&["investiga", "lanza"]),
+        );
         assert_eq!(r.intent, Intent::Complex);
         assert_eq!(r.confidence, 1.0);
         assert_eq!(r.matched_keyword.as_deref(), Some("investiga"));
@@ -114,8 +117,14 @@ mod tests {
     fn real_sentences_with_defaults() {
         let kw = kw_list(crate::classifier::DEFAULT_COMPLEX_KEYWORDS);
         assert_eq!(keyword::classify("Buenos días", &kw).intent, Intent::Simple);
-        assert_eq!(keyword::classify("Hola ¿cómo estás?", &kw).intent, Intent::Simple);
-        assert_eq!(keyword::classify("Gracias, muy amable", &kw).intent, Intent::Simple);
+        assert_eq!(
+            keyword::classify("Hola ¿cómo estás?", &kw).intent,
+            Intent::Simple
+        );
+        assert_eq!(
+            keyword::classify("Gracias, muy amable", &kw).intent,
+            Intent::Simple
+        );
         assert_eq!(
             keyword::classify("Ejecuta el script de backup", &kw).intent,
             Intent::Complex

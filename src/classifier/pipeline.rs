@@ -61,10 +61,7 @@ impl ClassifierPipeline {
         let mut last_result: Option<ClassifyResult> = None;
 
         for stage in &self.stages {
-            match stage
-                .try_classify(text, &shared_emb, self.threshold)
-                .await
-            {
+            match stage.try_classify(text, &shared_emb, self.threshold).await {
                 Some(r) => return r,
                 None => {
                     // Re-run with threshold = 1.0 to ensure `last_result`
@@ -108,16 +105,15 @@ pub fn build_classifier(config: &crate::config::Config) -> ClassifierPipeline {
     let mut pipeline = ClassifierPipeline::new(config.classifier_confidence_threshold);
 
     // Nivel 1 – heuristic (always active)
-    pipeline = pipeline.with_stage(Box::new(
-        super::heuristic::HeuristicStage::new(resolved_keywords),
-    ));
+    pipeline = pipeline.with_stage(Box::new(super::heuristic::HeuristicStage::new(
+        resolved_keywords,
+    )));
 
     #[cfg(feature = "classifier-embedding")]
     if config.classifier_enable_embedding {
         // Nivel 2 – embeddings (Phase 5)
         use tracing::warn;
-        if !config.classifier_model_path.is_empty()
-            && !config.classifier_centroids_path.is_empty()
+        if !config.classifier_model_path.is_empty() && !config.classifier_centroids_path.is_empty()
         {
             match super::embedding::EmbeddingClassifier::load(
                 &config.classifier_model_path,
@@ -142,9 +138,7 @@ pub fn build_classifier(config: &crate::config::Config) -> ClassifierPipeline {
 
         // Nivel 3 – logistic regression (Phase 6)
         if !config.classifier_weights_path.is_empty() {
-            match super::logistic::LogisticClassifier::load(
-                &config.classifier_weights_path,
-            ) {
+            match super::logistic::LogisticClassifier::load(&config.classifier_weights_path) {
                 Ok(lc) => {
                     pipeline = pipeline.with_stage(Box::new(lc));
                 }
@@ -163,17 +157,13 @@ pub fn build_classifier(config: &crate::config::Config) -> ClassifierPipeline {
         && !config.classifier_fallback_url.is_empty()
         && !config.classifier_fallback_model.is_empty()
     {
-        let fc =
-            super::fallback::FallbackClassifier::new(
-                &config.classifier_fallback_url,
-                &config.classifier_fallback_model,
-                &config.classifier_fallback_api_key,
-                config.classifier_fallback_timeout_ms,
-            );
-        let stage = super::fallback::FallbackStage::new(
-            fc,
-            config.classifier_enable_fallback,
+        let fc = super::fallback::FallbackClassifier::new(
+            &config.classifier_fallback_url,
+            &config.classifier_fallback_model,
+            &config.classifier_fallback_api_key,
+            config.classifier_fallback_timeout_ms,
         );
+        let stage = super::fallback::FallbackStage::new(fc, config.classifier_enable_fallback);
         pipeline = pipeline.with_stage(Box::new(stage));
     }
 

@@ -743,12 +743,10 @@ impl Config {
             self.llm_thinking = v == "1" || v.to_lowercase() == "true";
         }
         if let Ok(v) = env::var("LLM_TEMPERATURE_SIMPLE") {
-            self.llm_temperature_simple =
-                v.parse().context("Invalid LLM_TEMPERATURE_SIMPLE")?;
+            self.llm_temperature_simple = v.parse().context("Invalid LLM_TEMPERATURE_SIMPLE")?;
         }
         if let Ok(v) = env::var("LLM_TEMPERATURE_COMPLEX") {
-            self.llm_temperature_complex =
-                v.parse().context("Invalid LLM_TEMPERATURE_COMPLEX")?;
+            self.llm_temperature_complex = v.parse().context("Invalid LLM_TEMPERATURE_COMPLEX")?;
         }
         if let Ok(v) = env::var("LLM_THINKING_SIMPLE") {
             self.llm_thinking_simple = v == "1" || v.to_lowercase() == "true";
@@ -765,9 +763,9 @@ impl Config {
         }
         // ── Classifier cascade (C01) ──────────────────────────────────────────
         if let Ok(v) = env::var("CLASSIFIER_CONFIDENCE_THRESHOLD") {
-            self.classifier_confidence_threshold =
-                v.parse()
-                    .context("Invalid CLASSIFIER_CONFIDENCE_THRESHOLD")?;
+            self.classifier_confidence_threshold = v
+                .parse()
+                .context("Invalid CLASSIFIER_CONFIDENCE_THRESHOLD")?;
         }
         if let Ok(v) = env::var("CLASSIFIER_ENABLE_EMBEDDING") {
             self.classifier_enable_embedding = v == "1" || v.to_lowercase() == "true";
@@ -794,9 +792,9 @@ impl Config {
             self.classifier_fallback_api_key = v;
         }
         if let Ok(v) = env::var("CLASSIFIER_FALLBACK_TIMEOUT_MS") {
-            self.classifier_fallback_timeout_ms =
-                v.parse()
-                    .context("Invalid CLASSIFIER_FALLBACK_TIMEOUT_MS")?;
+            self.classifier_fallback_timeout_ms = v
+                .parse()
+                .context("Invalid CLASSIFIER_FALLBACK_TIMEOUT_MS")?;
         }
         if let Ok(v) = env::var("LLM_TOOLS_STRICT") {
             self.llm_tools_strict = v == "1" || v.to_lowercase() == "true";

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use super::{ClassifierLevel, ClassifyResult, Intent};
 use super::pipeline::ClassifierStage;
+use super::{ClassifierLevel, ClassifyResult, Intent};
+use async_trait::async_trait;
 
 /// Calls a second LLM endpoint (SLM) to classify the request as SIMPLE or COMPLEX.
 pub struct FallbackClassifier {
@@ -47,10 +47,7 @@ impl FallbackClassifier {
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        let resp = req
-            .send()
-            .await
-            .context("fallback SLM request failed")?;
+        let resp = req.send().await.context("fallback SLM request failed")?;
         if !resp.status().is_success() {
             anyhow::bail!("fallback SLM status {}", resp.status());
         }
