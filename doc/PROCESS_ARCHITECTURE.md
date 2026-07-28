@@ -232,8 +232,8 @@ TTS is unified behind the `TtsEngine` enum. Backend selected via
 
 | Backend | Feature | Config | Details |
 |---------|---------|--------|---------|
-| `avspeech` | `--features avspeech` | `AVSPEECH_VOICE`, `AVSPEECH_RATE` | Native macOS `AVSpeechSynthesizer` (default) |
-| `kokoro` | `--features kokoro` | `KOKORO_MODEL`, `KOKORO_VOICE`, `KOKORO_LANGUAGE` | Kokoro ONNX model |
+| `avspeech` | `--features avspeech` | `AVSPEECH_VOICE`, `AVSPEECH_RATE` | Native macOS `AVSpeechSynthesizer` |
+| `kokoro` | `--features kokoro` | `KOKORO_MODEL`, `KOKORO_VOICE`, `KOKORO_LANGUAGE` | Kokoro ONNX model (default) |
 
 All variants expose the same `synthesize(&str) -> Result<Vec<f32>>` interface
 so the pipeline is backend-agnostic.

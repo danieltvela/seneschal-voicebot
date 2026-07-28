@@ -427,11 +427,11 @@ Most configuration is done via environment variables (or `.env` file):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **Voice & Language** | | |
-| `SENECHAL_LANGUAGE` | `es` | Language for STT and TTS |
-| `VAD_SILENCE_MS` | `200` | Silence threshold (ms) before processing speech |
+| `SENECHAL_LANGUAGE` | `en` | Language for STT and TTS |
+| `VAD_SILENCE_MS` | `300` | Silence threshold (ms) before processing speech |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model file |
 | **STT Provider** | | |
-| `STT_PROVIDER` | `speech` | STT backend: `speech` (default on macOS, SFSpeechRecognizer, requires `--features speech`), `whisper` (whisper-cpp-plus), or `parakeet` (requires `--features parakeet`) |
+| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), or `parakeet` (requires `--features parakeet`) |
 | `PARAKEET_MODEL_DIR` | - | Path to Parakeet ONNX model directory (required when `STT_PROVIDER=parakeet`) |
 | **STT (Whisper)** | | |
 | `WHISPER_MODEL` | *required* | Path to Whisper `.bin` model |
@@ -444,12 +444,12 @@ Most configuration is done via environment variables (or `.env` file):
 | `LLM_COMMAND` | - | Full shell command to launch the LLM server. Required when `LLM_SELF_MANAGED=1`. |
 | `LLM_MODEL` | `local-model` | Model name or path |
 | `LLM_SYSTEM_PROMPT` | - | System prompt for the LLM |
-| `LLM_MAX_TOKENS` | `1024` | Max response tokens |
-| `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
-| `LLM_CONTEXT_TOKENS` | `4096` | Context window size in tokens. Set to match your model's context length. |
-| `LLM_CONSOLIDATION_THRESHOLD_PCT` | `90` | Percentage of context window that triggers memory consolidation (see below). |
-| `LLM_IDLE_CONSOLIDATION_SECS` | `1800` | Seconds of user inactivity before a silent consolidation runs (0 = disabled). |
-| `LLM_IDLE_MIN_CONTEXT_PCT` | `50` | Context fill % threshold used by idle-triggered consolidation. Consolidates proactively while idle to stay below the hard limit (0 = disabled). |
+| `LLM_MAX_TOKENS` | `400` | Max response tokens |
+| `LLM_TEMPERATURE` | `0.3` | Sampling temperature |
+| `LLM_CONTEXT_TOKENS` | `8192` | Context window size in tokens. Set to match your model's context length. |
+| `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | Percentage of context window that triggers memory consolidation (see below). |
+| `LLM_IDLE_CONSOLIDATION_SECS` | `900` | Seconds of user inactivity before a silent consolidation runs (0 = disabled). |
+| `LLM_IDLE_MIN_CONTEXT_PCT` | `20` | Context fill % threshold used by idle-triggered consolidation. Consolidates proactively while idle to stay below the hard limit (0 = disabled). |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Number of most-recent conversation turns to keep verbatim after summarization. |
 | `LLM_HISTORY_LOAD_LIMIT` | `0` (unlimited) | Maximum messages loaded from DB on startup (0 = all). Recommended: 40-60 to prevent restart compaction. |
 | **Audio** | | |
@@ -459,8 +459,8 @@ Most configuration is done via environment variables (or `.env` file):
 | `AUDIO_INPUT_DEVICE` | - | Substring match of input device name; unset = system default |
 | `AUDIO_OUTPUT_DEVICE` | - | Substring match of output device name; unset = system default |
 | **TTS** | | |
-| `TTS_PROVIDER` | `avspeech` | Provider: `avspeech` (macOS AVSpeechSynthesizer, default) or `kokoro` (ONNX, requires `--features kokoro`) |
-| `AVSPEECH_VOICE` | `Jorge (Enhanced)` | AVSpeechSynthesizer voice display name |
+| `TTS_PROVIDER` | `kokoro` | Provider: `kokoro` (default, ONNX cross-platform) or `avspeech` (macOS AVSpeechSynthesizer) |
+| `AVSPEECH_VOICE` | `""` | AVSpeechSynthesizer voice display name. Empty string = auto-select first available system voice. |
 | `AVSPEECH_RATE` | `0.55` | Normalized speech rate 0.0-1.0 (0.5 = 180 wpm, 0.55 = 215 wpm) |
 | `KOKORO_MODEL` | `models/kokoro-v1.0.onnx` | Kokoro ONNX model path |
 | `KOKORO_VOICES` | `models/voices-v1.0.bin` | Kokoro voice embeddings file |
@@ -477,14 +477,14 @@ Most configuration is done via environment variables (or `.env` file):
 
 | **Inference Daemon** | | |
 | `DAEMON_ENABLED` | `0` | Set to `1` to enable the background "is there anything worth saying?" proactive reasoning loop |
-| `DAEMON_INTERVAL_SECS` | `1800` | Seconds between daemon proactive-check cycles |
+| `DAEMON_INTERVAL_SECS` | `300` | Seconds between daemon proactive-check cycles |
 | **Shell Tool** | | |
 | `SHELL_ENABLED` | `0` | Set to `1` to enable the `run_shell` tool (off by default for safety) |
 | `SHELL_TIMEOUT_SECS` | `30` | Hard timeout per shell command in seconds |
 | **Secondary LLM** | | |
 | `SECONDARY_LLM_URL` | - | Base URL of secondary LLM. Enables `take_screenshot` tool, EYES visual awareness, and routes summarization + profile extraction to this model. |
 | `SECONDARY_LLM_MODEL` | `local-model` | Model name for secondary LLM requests. |
-| `SECONDARY_LLM_MAX_TOKENS` | `512` | Max tokens for secondary LLM responses (vision). |
+| `SECONDARY_LLM_MAX_TOKENS` | `1024` | Max tokens for secondary LLM responses (vision). |
 | `SECONDARY_LLM_API_KEY` | - | Bearer token for secondary LLM API. |
 | `SECONDARY_LLM_PROVIDER` | `mlx` | Backend for secondary LLM (mlx-lm or omlx). |
 | `LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the main LLM. Strips thinking tags from streamed output. |
@@ -505,7 +505,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `SPEAKER_AMBIENT_TRIGGER` | `3` | Consecutive non-main-user segments before auto-switching to Ambient mode. |
 | `SPEAKER_MAX_PROFILES` | `5` | Maximum number of speaker profiles to auto-enroll. The first speaker (id=0) is always the main user. |
 | **Conversation Modes** | | |
-| `WAKE_WORD` | `jarvis` | Case-insensitive substring match triggering a response in Ambient mode. |
+| `WAKE_WORD` | `seneschal` | Case-insensitive substring match triggering a response in Ambient mode. |
 | `AMBIENT_CLEAR_SECS` | `300` | Seconds of silence before auto-switching from Active to Ambient mode. |
 | **Ambient Context Buffer** | | |
 | `AMBIENT_BUFFER_MINUTES` | `3` | Rolling window duration for the ambient context buffer. |
@@ -704,7 +704,7 @@ AUDIO_INPUT_DEVICE="Poly Sync 20-M#1"   # second match (Bluetooth)
 
 - AVSpeech: Check voices are installed with `say -v ?`
 - Kokoro: Ensure models exist in `./models/` directory and `espeak-ng` is installed via `brew install espeak-ng`
-- Check feature flag: `--features avspeech` for AVSpeech (macOS default), `--features kokoro` for Kokoro
+- Check feature flag: `--features kokoro` for Kokoro (default), `--features avspeech` for AVSpeech (macOS)
 
 ### High latency
 

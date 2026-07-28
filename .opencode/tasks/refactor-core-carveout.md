@@ -74,19 +74,19 @@
 
 ## Phase 1 — Reconciliar contradicciones de doc (G8)
 
-- [ ] Step 1.1: Fijar ground-truth de env vars leyendo `seneschal.pro.toml` y `src/config.rs`.
+- [x] Step 1.1: Fijar ground-truth de env vars leyendo `seneschal.pro.toml` y `src/config.rs`.
   - File(s): `doc/env-vars.md`
   - Change: Recorrer los 6 conflictos detectados: `SENECHAL_LANGUAGE`, `VAD_SILENCE_MS`, `LLM_CONTEXT_TOKENS`, `TTS_PROVIDER`, `AVSPEECH_VOICE`, `LLM_MAX_TOKENS`. Para cada uno, mostrar **un** valor canónico (el de `seneschal.pro.toml`/`config.rs` como verdad) y marcar como nota las fuentes que discrepaban. Añadir un párrafo "Single source of truth: `seneschal.pro.toml` + `src/config.rs::Default`".
   - Acceptance: `rg -n "VAD_SILENCE_MS" doc/` devuelve un único valor numérico.
-- [ ] Step 1.2: Unificar nombres de endpoints del Control API.
+- [x] Step 1.2: Unificar nombres de endpoints del Control API.
   - File(s): `doc/ARCHITECTURE.md`, `doc/MAIN_PROCESS.md`, `readme.md`
   - Change: Elegir el prefijo `/control/` y la forma `snake_case` (`/control/barge_in`, `/control/events`, etc.). Verificar contra `src/control/api.rs` cuál es el canónico y dejar todas las doc consistentes.
   - Acceptance: `rg -n "/barge-in\b|/barge_in|/events\b" doc/` es coherente (sin `/barge-in` sin prefijo).
-- [ ] Step 1.3: Alinear nombres del FSM.
+- [x] Step 1.3: Alinear nombres del FSM.
   - File(s): `doc/PROCESS_ARCHITECTURE.md`
   - Change: Reemplazar `Idle → Stt → Llm → Responding` por `Idle, Listening, Thinking, Speaking, Paused` (los de `src/pipeline/fsm.rs` y `doc/CONSTITUTION.md`).
   - Acceptance: `rag` de FSM states en doc converge con `enum PipelineState` real.
-- [ ] Step 1.4: Revisar `readme.md` y `doc/doc.md` referencias a "Jarvis" / `VOICEBOT_LANGUAGE` y renombrar a "Seneschal" / `SENECHAL_LANGUAGE` según `AGENTS.md`.
+- [x] Step 1.4: Revisar `readme.md` y `doc/doc.md` referencias a "Jarvis" / `VOICEBOT_LANGUAGE` y renombrar a "Seneschal" / `SENECHAL_LANGUAGE` según `AGENTS.md`.
   - File(s): `readme.md`, `doc/doc.md`
   - Change: Reemplazar tokens obsoletos.
   - Acceptance: `rg -n "Jarvis|VOICEBOT_" doc/ readme.md` sin matches en contexto técnico.

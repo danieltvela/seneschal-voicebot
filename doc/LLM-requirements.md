@@ -424,7 +424,7 @@ Daemon en background:
 
 ### 9.1 Idioma
 
-- `VOICEBOT_LANGUAGE` (default `"en"`, recomendado `"es"`).
+- `SENECHAL_LANGUAGE` (default `"en"`, recomendado `"es"`).
 - Afecta: system prompt (config), notificaciones, whisper hint.
 
 ### 9.2 Notificaciones bilingues

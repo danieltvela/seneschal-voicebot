@@ -293,12 +293,13 @@ Both daemons emit `ProactiveEvent` via `proactive_tx`. The main loop drains `pro
 The `PipelineState` machine (via `tokio::sync::watch` channel) tracks pipeline state:
 
 ```
-Idle → Stt → Llm → Responding → (back to Idle)
-                ↓
-         Consolidating → Idle
+Idle → Listening { utterance_id } → Thinking { utterance_id }
+→ Speaking { utterance_id } → Idle
+            ↓
+      Paused { reason: Consolidation } → Idle
 ```
 
-FSM observer logs every transition. Under the `control` feature, state changes are broadcast as SSE events to connected clients.
+States match `src/pipeline/fsm.rs::PipelineState` enum. FSM observer logs every transition. Under the `control` feature, state changes are broadcast as SSE events to connected clients.
 
 ---
 
@@ -308,11 +309,15 @@ Available when compiled with `--features control`. Served on port from `CONTROL_
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/events` | GET | SSE stream of pipeline events (state changes, speech detected, etc.) |
-| `/barge-in` | POST | Trigger barge-in from external client |
-| `/tts/mute` | POST | Toggle TTS mute state |
-| `/transcript` | POST | Submit a text transcript to the pipeline |
-| `/history` | GET | Retrieve conversation history |
+| `/control/events` | GET | SSE stream of pipeline events (state changes, speech detected, etc.) |
+| `/control/state` | GET | Current pipeline state, utterance ID, mute status |
+| `/control/history` | GET | Retrieve conversation history |
+| `/control/sessions` | GET | List conversation sessions |
+| `/control/sessions/{id}/messages` | GET | Messages for a specific session |
+| `/control/health` | GET | Health check endpoint (returns 200) |
+| `/control/barge_in` | POST | Trigger barge-in from external client |
+| `/control/mute` | POST | Toggle TTS mute state |
+| `/control/input` | POST | Submit a text transcript to the pipeline (JSON: `{"text": "..."}`) |
 
 ---
 
@@ -325,7 +330,7 @@ Two backends available via `TtsEngine` enum:
 | `avspeech` | `avspeech` | `AVSPEECH_VOICE`, `AVSPEECH_RATE` | macOS native AVSpeechSynthesizer (requires main thread CFRunLoop) |
 | `kokoro` | `kokoro` | `KOKORO_MODEL`, `KOKORO_VOICE`, `KOKORO_LANGUAGE` | Kokoro ONNX TTS (cross-platform) |
 
-Selected via `TTS_PROVIDER` env var (default: `avspeech` on macOS).
+Selected via `TTS_PROVIDER` env var (default: `kokoro`; `avspeech` also available on macOS).
 
 ## Tools
 

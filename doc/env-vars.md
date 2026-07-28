@@ -1,5 +1,9 @@
 # Environment Variables
 
+> **Single source of truth**: the canonical defaults are defined in `seneschal.pro.toml`
+> (embedded into the binary at compile time) and in `src/config.rs::SeneschalConfig` (serde `Default` trait).
+> Where this document or `readme.md` disagrees, trust `seneschal.pro.toml`.
+
 Read from `.env` (dotenvy loads automatically):
 
 | Variable | Default | Description |
@@ -10,17 +14,17 @@ Read from `.env` (dotenvy loads automatically):
 | `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
 | `AUDIO_CHANNELS` | `1` | Audio channels |
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `speech` | `speech` (default on macOS), `whisper`, or `parakeet` |
+| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), or `parakeet` (requires `--features parakeet`) |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
-| `VAD_SILENCE_MS` | `500` | ms of continuous silence before SpeechEnd. Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. |
+| `VAD_SILENCE_MS` | `300` | ms of continuous silence before SpeechEnd. Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |
 | `VAD_END_THRESHOLD` | `0.45` | Speech probability floor to keep a segment open. |
 | `VAD_CONFIRM_PROBES` | `2` | Consecutive speech probes (100ms each with `STT_PROVIDER=speech`) required before the VAD *commits* to STT. `SpeechStart` (LISTENING + barge-in) fires at commit time (~200ms) or on the short-utterance fallback after `VAD_SILENCE_MS` of silence — not on a single noisy probe. Short words that never reach the confirm count are still transcribed via the short-utterance fallback. Coughs/noise are rejected by `NoSpeechGate`. |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
-| `LLM_MAX_TOKENS` | `1024` | Max tokens per response |
+| `LLM_MAX_TOKENS` | `400` | Max tokens per response |
 | `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |
@@ -40,7 +44,8 @@ Read from `.env` (dotenvy loads automatically):
 | `CLASSIFIER_FALLBACK_MODEL` | — | Model name for the fallback SLM |
 | `CLASSIFIER_FALLBACK_API_KEY` | — | API key for the fallback SLM endpoint |
 | `CLASSIFIER_FALLBACK_TIMEOUT_MS` | `800` | Timeout in milliseconds for the fallback SLM request |
-| `AVSPEECH_VOICE` | `"Jorge (Enhanced)"` | macOS AVSpeech voice name |
+| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform) or `avspeech` (macOS AVSpeechSynthesizer) |
+| `AVSPEECH_VOICE` | `""` | macOS AVSpeech voice name. Empty string = auto-select first available system voice. At runtime, `avspeech.rs` picks the first voice on the system when this is empty or whitespace-only. |
 | `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |
 | `SEARXNG_URL` | — | SearXNG base URL (enables web_search) |
 | `SEARXNG_SECRET` | — | SearXNG bearer token |

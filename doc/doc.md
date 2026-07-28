@@ -188,8 +188,8 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | STT + VAD | `src/stt/mod.rs` | `WhisperSTTVAD` integrates whisper-cpp-plus STT with Silero VAD, pre-roll buffer, state machine |
 | LLM client | `src/llm/client.rs` | Streaming SSE + one-shot completion (OpenAI-compatible; mlx-lm and oMLX) |
 | LLM session | `src/llm/session.rs` | Accumulated prompt, turn tracking, summarization |
-| TTS AVSpeech | `src/tts/avspeech.rs` | macOS AVSpeechSynthesizer (default on macOS, `--features avspeech`) |
-| TTS Kokoro | `src/tts/kokoro.rs` | Kokoro ONNX TTS (`--features kokoro`) |
+| TTS AVSpeech | `src/tts/avspeech.rs` | macOS AVSpeechSynthesizer (`--features avspeech`) |
+| TTS Kokoro | `src/tts/kokoro.rs` | Kokoro ONNX TTS (default, `--features kokoro`) |
 | Sentence splitter | `src/tts/sentence.rs` | Buffers tokens, emits complete sentences |
 | Tools | `src/tools/` | `Tool` trait + `ToolRegistry`; 10+ built-in tools plus dynamic MCP proxy |
 | MCP Client | `src/mcp/mod.rs` | JSON-RPC 2.0 stdio client; discovers + proxies tools from MCP servers |
@@ -208,7 +208,7 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `VOICEBOT_LANGUAGE` | `es` | Language for STT and TTS voice selection |
+| `SENECHAL_LANGUAGE` | `en` | Language for STT and TTS voice selection |
 | `VAD_SILENCE_MS` | `500` | Silence duration (ms) before SpeechEnd fires. Lower = faster response; higher = safer for mid-sentence pauses. Range: 400–1500. This is the largest single contributor to perceived latency after your last word. |
 | `WHISPER_MODEL` | — | Path to `.bin` Whisper model (and `.mlmodelc` for CoreML encoder) |
 | `WHISPER_COREML` | `0` | Set to `1` to use CoreML encoder (Neural Engine); requires `.mlmodelc` alongside the `.bin` |
@@ -227,8 +227,8 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | `AGENT_MODE` | `cli` | Agent communication mode: `cli` (subprocess) or `acp` (persistent ACP JSON-RPC stdio) |
 | `AGENT_ACP_COMMAND` | `hermes acp` | Command to start the ACP process (used when `AGENT_MODE=acp`) |
 | `AGENT_TIMEOUT_SECS` | `120` | Hard timeout in seconds for synchronous agent calls |
-| `TTS_PROVIDER` | `avspeech` | TTS backend: `avspeech` (native AVSpeechSynthesizer, requires `--features avspeech`, default) or `kokoro` (requires `--features kokoro`) |
-| `AVSPEECH_VOICE` | `Jorge (Enhanced)` | Voice display name for AVSpeechSynthesizer (used when `TTS_PROVIDER=avspeech`). List voices: `say -v ?` |
+| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX cross-platform, requires `--features kokoro`) or `avspeech` (native macOS AVSpeechSynthesizer, requires `--features avspeech`) |
+| `AVSPEECH_VOICE` | `""` | Voice display name for AVSpeechSynthesizer (used when `TTS_PROVIDER=avspeech`). Empty string = auto-select first available system voice. List voices: `say -v ?` |
 | `AVSPEECH_RATE` | `0.55` | Normalized speech rate 0.0–1.0 for AVSpeechSynthesizer (`0.5` = default ≈ 180 wpm, `0.55` ≈ 215 wpm) |
 | `KOKORO_MODEL` | `models/kokoro-v1.0.onnx` | Path to Kokoro ONNX model file |
 | `KOKORO_VOICES` | `models/voices-v1.0.bin` | Path to Kokoro voice embeddings file |
@@ -1468,8 +1468,8 @@ For Spanish phonemisation: `KOKORO_LANGUAGE=es`. Note that the base model is pri
 ### Architecture
 
 - `TtsEngine` enum with variants `AvSpeech(AvSpeechTts)` and `Kokoro(KokoroTts)`, compiled conditionally with `#[cfg(feature = "kokoro")]` and `#[cfg(feature = "avspeech")]`
-- `TTS_PROVIDER=avspeech` (default) — requires `--features avspeech`; macOS native AVSpeechSynthesizer
-- `TTS_PROVIDER=kokoro` + `--features kokoro` — enables Kokoro; fails with a clear message at runtime if the feature flag is missing
+- `TTS_PROVIDER=kokoro` (default) — requires `--features kokoro`; Kokoro ONNX, high quality, cross-platform
+- `TTS_PROVIDER=avspeech` + `--features avspeech` — macOS native AVSpeechSynthesizer
 - The rest of the pipeline (`stream_and_tts`, `run_pipeline`, `run_proactive_pipeline`) is backend-agnostic
 
 ---

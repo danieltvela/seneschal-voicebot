@@ -140,8 +140,8 @@ All its public methods are marked `#[allow(dead_code)]`. It is kept for referenc
 
 | Backend | Provider key | Feature flag | Notes |
 |---------|-------------|--------------|-------|
-| AvSpeech | `avspeech` | `avspeech` | default; macOS native AVSpeechSynthesizer |
-| Kokoro ONNX | `kokoro` | `kokoro` | offline, high quality |
+| AvSpeech | `avspeech` | `avspeech` | macOS native AVSpeechSynthesizer |
+| Kokoro ONNX | `kokoro` | `kokoro` | default; offline, high quality, cross-platform |
 | Piper | — | — | `piper.rs` exists but is not integrated |
 
 ---
