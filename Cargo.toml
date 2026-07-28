@@ -73,6 +73,11 @@ version = "0.1.4"
 [dependencies.regex]
 version = "1"
 
+# Embedding model runtime (optional, for intent classifier cascada Nivel 2/3).
+# Enable with: `cargo build --features classifier-embedding`.
+# Requires ONNX Runtime installed on the system + ort, tokenizers, ndarray crates.
+# Placeholder: the EmbeddingClassifier stub always returns an error until these deps are added.
+
 # TTS — Kokoro (optional, enable with: cargo build --features kokoro)
 # Requires: brew install espeak-ng
 # Models: kokoro-v1.0.onnx + voices-v1.0.bin (download from HuggingFace)
@@ -139,7 +144,8 @@ avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-au
 tui = ["dep:ratatui", "dep:crossterm"]
 remote = ["dep:axum", "dep:tower"]
 control = ["dep:axum", "dep:tower"]
-# Placeholder — deps added in Phase 5
+# Placeholder — ort/tokenizers/ndarray added when ONNX Runtime is available.
+# To enable: `cargo build --features classifier-embedding` after installing `ort` deps.
 classifier-embedding = []
 
 [[bin]]

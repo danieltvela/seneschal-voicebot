@@ -3,6 +3,11 @@ pub mod heuristic;
 pub mod keyword;
 pub mod pipeline;
 
+#[cfg(feature = "classifier-embedding")]
+pub mod embedding;
+#[cfg(feature = "classifier-embedding")]
+pub mod logistic;
+
 pub use pipeline::ClassifierPipeline;
 pub use pipeline::build_classifier;
 
