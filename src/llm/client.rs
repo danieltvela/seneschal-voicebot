@@ -519,6 +519,48 @@ impl OpenAIClient {
             .map(|r| r.status().is_success())
             .unwrap_or(false)
     }
+
+    /// Expose the composed payload for testing purposes.
+    #[cfg(test)]
+    pub fn build_stream_payload(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        forced_tool: Option<&str>,
+        options: RequestOptions,
+    ) -> serde_json::Value {
+        let effective_thinking = options.thinking.unwrap_or(self.thinking);
+        let mut payload = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "temperature": options.temperature.unwrap_or(self.temperature),
+            "top_p": 0.90,
+            "stream": true,
+            "repetition_penalty": 1.1,
+            "top_k": 40,
+        });
+        let tool_choice_override = options.tool_choice.unwrap_or(match forced_tool {
+            Some(_) => ToolChoice::Required,
+            None => ToolChoice::Auto,
+        });
+
+        if tool_choice_override == ToolChoice::None || tools.is_empty() {
+            if tool_choice_override == ToolChoice::None {
+                payload["tool_choice"] = serde_json::json!("none");
+            }
+            payload["chat_template_kwargs"] =
+                serde_json::json!({"enable_thinking": effective_thinking});
+        } else {
+            payload["tools"] = serde_json::json!(tools);
+            payload["tool_choice"] = match tool_choice_override {
+                ToolChoice::Required => serde_json::json!("required"),
+                ToolChoice::Auto => serde_json::json!("auto"),
+                ToolChoice::None => serde_json::json!("none"),
+            };
+        }
+        payload
+    }
 }
 
 #[cfg(test)]
@@ -887,5 +929,33 @@ mod tests {
         assert!(all[2].content.contains("Respuesta 3"));
         assert!(all[3].content.contains("Pregunta 4"));
         assert!(all[4].content.contains("Respuesta 4"));
+    }
+
+    #[tokio::test]
+    async fn tool_choice_none_in_payload() {
+        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.3);
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": "hello"
+        })];
+        let payload = client.build_stream_payload(
+            &messages,
+            &[],
+            None,
+            RequestOptions::new().with_tool_choice(ToolChoice::None),
+        );
+        assert_eq!(payload["tool_choice"], serde_json::json!("none"));
+    }
+
+    #[test]
+    fn tool_choice_required_when_forced_tool() {
+        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.3);
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {"name": "my_tool", "description": "desc", "parameters": {}}
+        })];
+        let payload =
+            client.build_stream_payload(&[], &tools, Some("my_tool"), RequestOptions::new());
+        assert_eq!(payload["tool_choice"], serde_json::json!("required"));
     }
 }

@@ -169,3 +169,90 @@ pub fn build_classifier(config: &crate::config::Config) -> ClassifierPipeline {
 
     pipeline
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::classifier::{ClassifierLevel, Intent, heuristic::HeuristicStage};
+
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    /// A test stage that always returns Simple with given confidence.
+    struct AlwaysSimple {
+        conf: f32,
+    }
+
+    #[async_trait::async_trait]
+    impl ClassifierStage for AlwaysSimple {
+        fn name(&self) -> &'static str {
+            "test-simple"
+        }
+        fn level(&self) -> ClassifierLevel {
+            ClassifierLevel::Heuristic
+        }
+        async fn try_classify(
+            &self,
+            _text: &str,
+            _emb: &Arc<Mutex<Option<Vec<f32>>>>,
+            thresh: f32,
+        ) -> Option<ClassifyResult> {
+            if self.conf >= thresh {
+                Some(ClassifyResult {
+                    intent: Intent::Simple,
+                    level: ClassifierLevel::Heuristic,
+                    confidence: self.conf,
+                    matched_keyword: None,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cascade_first_match_wins() {
+        let p = ClassifierPipeline::new(0.6)
+            .with_stage(Box::new(AlwaysSimple { conf: 1.0 }))
+            .with_stage(Box::new(HeuristicStage::new(vec![])));
+        let r = p.classify("anything").await;
+        assert_eq!(r.intent, Intent::Simple);
+        assert_eq!(r.confidence, 1.0);
+    }
+
+    #[tokio::test]
+    async fn cascade_falls_through_when_no_confidence() {
+        let p = ClassifierPipeline::new(0.6).with_stage(Box::new(AlwaysSimple { conf: 0.3 }));
+        // conf 0.3 < 0.6 → None → no stages resolve
+        let r = p.classify("anything").await;
+        // Safety bias: Complex
+        assert_eq!(r.intent, Intent::Complex);
+        assert_eq!(r.confidence, 0.0);
+    }
+
+    #[tokio::test]
+    async fn heuristic_resolves_greeting() {
+        let kw: Vec<String> = crate::classifier::DEFAULT_COMPLEX_KEYWORDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let p = ClassifierPipeline::new(0.6).with_stage(Box::new(HeuristicStage::new(kw)));
+        let r = p.classify("hola").await;
+        assert_eq!(r.intent, Intent::Simple);
+        assert_eq!(r.confidence, 1.0);
+        assert_eq!(r.level, ClassifierLevel::Heuristic);
+    }
+
+    #[tokio::test]
+    async fn heuristic_resolves_complex_keyword() {
+        let kw: Vec<String> = crate::classifier::DEFAULT_COMPLEX_KEYWORDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let p = ClassifierPipeline::new(0.6).with_stage(Box::new(HeuristicStage::new(kw)));
+        let r = p.classify("Investiga la API de OpenAI").await;
+        assert_eq!(r.intent, Intent::Complex);
+        assert_eq!(r.confidence, 1.0);
+        assert!(r.matched_keyword.is_some());
+    }
+}
