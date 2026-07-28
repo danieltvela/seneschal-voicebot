@@ -22,10 +22,10 @@ servers:
       vllm-gemma:
         port: 8006
         token: ""
-        models:
+        models: []
           # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
-          - gemma-4-31B-it-NVFP4
+          # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
           # - Qwen3.6-27B-NVFP4
@@ -86,11 +86,11 @@ servers:
       lm-studio:
         port: 1234
         token: ""
-        models: []
+        models:
           # - google/gemma-4-12b
           # - gemma-4-12b-it-mlx
           # - google/gemma-4-12b-qat
-          # - google/gemma-4-26b-a4b
+          - google/gemma-4-26b-a4b
           # - gemma-4-26b-a4b-it-qat-nvfp4
           # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
           # - gemma-4-26b-a4b-it-nvfp4
