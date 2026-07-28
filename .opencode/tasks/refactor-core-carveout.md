@@ -129,11 +129,11 @@ Cada paso produce una doc **espec-nivel** (interfaces, tipos, dataflow), leyendo
 
 ## Phase 3 — Spec del layout workspace (doc-only, antes de mover código)
 
-- [ ] Step 3.1: Definir `doc/CARVEOUT-LAYOUT.md` con el `Cargo.toml` workspace raíz objetivo y un `crates/<name>/Cargo.toml` template (features, deps, `edition`).
+- [x] Step 3.1: Definir `doc/CARVEOUT-LAYOUT.md` con el `Cargo.toml` workspace raíz objetivo y un `crates/<name>/Cargo.toml` template (features, deps, `edition`).
   - File(s): `doc/CARVEOUT-LAYOUT.md` (nuevo)
   - Change: Listar cada crate con su `path`, su `[features]` propuesto, sus deps internas y la feature flag que lo activa desde el binario principal.
   - Acceptance: Cada crate del inventario tiene su sección; `seneschal-core` no declara dependencias hacia otros crates del workspace.
-- [ ] Step 3.2: Definir el map "archivo `src/X` → `crates/.../src/X`" como tabla exhaustiva. Incluir `main.rs` (qué importa de qué crate) y `lib.rs` (re-exports que sobreviven).
+- [x] Step 3.2: Definir el map "archivo `src/X` → `crates/.../src/X`" como tabla exhaustiva. Incluir `main.rs` (qué importa de qué crate) y `lib.rs` (re-exports que sobreviven).
   - File(s): `doc/CARVEOUT-LAYOUT.md`
   - Change: Tabla 2 columnas `origen → destino` con todos los `.rs` listados por el explore agent.
   - Acceptance: Todos los ~110 `.rs` aparecen una sola vez en la tabla.
