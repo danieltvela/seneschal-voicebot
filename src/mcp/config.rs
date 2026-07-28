@@ -49,20 +49,7 @@ pub struct McpConfig {
 /// Both `command` (stdio) and `url` (HTTP) are optional so the config file
 /// can declare a server by either transport. When both are set, URL is preferred
 /// (matching the env-var behaviour).
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct McpServerTomlConfig {
-    pub name: String,
-    #[serde(default)]
-    pub command: Option<String>,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default = "default_tool_timeout_secs")]
-    pub tool_timeout_secs: u64,
-}
-
-fn default_tool_timeout_secs() -> u64 {
-    30
-}
+pub use seneschal_common::config::McpServerTomlConfig;
 
 impl From<McpServerTomlConfig> for McpConfig {
     fn from(toml: McpServerTomlConfig) -> Self {

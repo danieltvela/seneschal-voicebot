@@ -3,47 +3,7 @@ use std::env;
 /// Single external agent definition loaded from TOML config (`[[agents]]` array).
 ///
 /// This is the TOML-deserializable form. Convert to `AgentConfig` via `From`.
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct AgentTomlConfig {
-    /// Unique name (e.g. "hermes").
-    pub name: String,
-    /// Communication mode: "cli", "acp", "remote", or "visible".
-    pub mode: String,
-    /// CLI command. Used only when mode = "cli".
-    #[serde(default)]
-    pub command: Option<String>,
-    /// ACP command. Used only when mode = "acp".
-    #[serde(default)]
-    pub acp_command: Option<String>,
-    /// Send warmup prompt at startup.
-    #[serde(default)]
-    pub acp_warmup: bool,
-    /// OpenCode remote URL (e.g. "http://localhost:4096"). Used only when mode = "remote".
-    #[serde(default)]
-    pub remote_url: String,
-    /// Working directory for the remote OpenCode session.
-    #[serde(default)]
-    pub remote_dir: String,
-    /// Custom path for creating a remote session (default: "/session" for OpenCode).
-    #[serde(default)]
-    pub remote_session_path: String,
-    /// Custom path for submitting a message (default: "/session/{id}/message" for OpenCode).
-    /// The "{id}" placeholder is replaced with the session ID.
-    #[serde(default)]
-    pub remote_message_path: String,
-    /// Custom path for the SSE event stream (default: "/event" for OpenCode).
-    /// The "{id}" placeholder is replaced with the session ID.
-    #[serde(default)]
-    pub remote_event_path: String,
-    /// Hermes API key for Bearer auth. When set, the transport uses Hermes protocol
-    /// (POST /v1/runs with {"input": …}, per-run events, run_id field).
-    #[serde(default)]
-    pub remote_api_key: String,
-    /// LLM-facing text: when to delegate to this agent.
-    pub when_to_use: String,
-    /// Agent-facing instructions.
-    pub instructions: String,
-}
+pub use seneschal_common::config::AgentTomlConfig;
 
 impl From<AgentTomlConfig> for AgentConfig {
     fn from(src: AgentTomlConfig) -> Self {

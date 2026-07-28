@@ -3883,6 +3883,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rubato",
  "scraper",
+ "seneschal-common",
  "serde",
  "serde_json",
  "sherpa-rs",
@@ -3901,6 +3902,110 @@ dependencies = [
  "whisper-cpp-plus",
  "wiremock",
 ]
+
+[[package]]
+name = "seneschal-agents"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-classifier"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "dotenvy",
+ "libc",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "seneschal-control"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "block2",
+ "chrono",
+ "cpal",
+ "dashmap",
+ "dotenvy",
+ "futures-util",
+ "kokorox",
+ "libc",
+ "objc2",
+ "objc2-avf-audio",
+ "objc2-foundation",
+ "parakeet-rs",
+ "regex",
+ "reqwest 0.12.28",
+ "rubato",
+ "serde",
+ "serde_json",
+ "sherpa-rs",
+ "speech",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "whisper-cpp-plus",
+]
+
+[[package]]
+name = "seneschal-extras"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-mcp"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-memory"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-plugins"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-remote"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-search"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-tools-core"
+version = "0.1.0"
+
+[[package]]
+name = "seneschal-tui"
+version = "0.1.0"
 
 [[package]]
 name = "serde"
