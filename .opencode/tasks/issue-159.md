@@ -37,7 +37,7 @@
 - Tests e2e: `src/e2e_tests.rs` con `wiremock` (MockServer en `:29`), patrón SSE helper `make_sse` en `:44-59`.
 
 ## Phase 1: Refactor del módulo `src/classifier/` a arquitectura de cascada (sin nuevas dependencias)
-- [ ] Step 1.1: Estructurar submódulos del clasificador
+- [x] Step 1.1: Estructurar submódulos del clasificador
   - File(s): `src/classifier/mod.rs` (refactor), `src/classifier/keyword.rs` (nuevo), `src/classifier/heuristic.rs` (nuevo)
   - Change:
     1. Mantener en `src/classifier/mod.rs` los tipos públicos y **añadir** campos:
@@ -73,13 +73,13 @@
     4. Añadir en `src/classifier/mod.rs` un wrapper de compatibilidad temporal `pub fn classify(text: &str, complex_keywords: &[String]) -> ClassifyResult` que delegue en `heuristic::classify`. **Mantiene el API público** para no romper `llm_task.rs` en este paso. Usar `#[allow(dead_code)]` donde el compilador marque los nuevos items hasta su uso en fases posteriores.
   - Acceptance criteria: `cargo build` compila. `cargo test classifier` pasa (tests existentes de `keyword` siguen en verde; adaptarlos a `ClassifyResult`). Añadir en `heuristic.rs` tests: saludo trivial → Simple conf 1.0; "ok" → Simple; "Investiga X" → Complex; "" → Simple; frase larga sin keyword → Simple conf 0.0.
 
-- [ ] Step 1.2: Declarar el submódulo
+- [x] Step 1.2: Declarar el submódulo
   - File(s): `src/lib.rs` (sin cambios en `pub mod classifier;` que ya existe), `src/classifier/mod.rs`
   - Change: En `src/classifier/mod.rs` añadir `pub mod heuristic; pub mod keyword;` (alfabético). Los archivos `heuristic.rs`/`keyword.rs` ya exportan `classify` como `pub`.
   - Acceptance criteria: `cargo build` compila. `cargo test` pasa.
 
 ## Phase 2: Configuración del clasificador + trazabilidad DB
-- [ ] Step 2.1: Añadir campos de config del clasificador
+- [x] Step 2.1: Añadir campos de config del clasificador
   - File(s): `src/config.rs`
   - Change: Tras el campo `pub llm_complex_keywords: Vec<String>;` (línea 175) añadir:
     ```rust
@@ -110,7 +110,7 @@
     Default de `Config::default()`/TOML embebido: ver Step 2.2.
   - Acceptance criteria: `cargo build` falla hasta Step 2.2 (campos sin inicializar en TOML). Esperado.
 
-- [ ] Step 2.2: Defaults en TOML de entorno
+- [x] Step 2.2: Defaults en TOML de entorno
   - File(s): `seneschal.pro.toml`, `seneschal.dev.toml`
   - Change: Tras `llm_complex_keywords = []` añadir (idéntico en ambos salvo nota):
     ```toml
@@ -129,7 +129,7 @@
     Sin diferencias entre `pro` y `dev` en estos campos.
   - Acceptance criteria: `cargo build` compila (todos los campos cubiertos por deserialize del TOML embebido). `cargo run -- --help` no rompe.
 
-- [ ] Step 2.3: Cargar overrides por env var
+- [x] Step 2.3: Cargar overrides por env var
   - File(s): `src/config.rs`
   - Change: En `apply_env_overrides()`, junto al bloque de `LLM_COMPLEX_KEYWORDS` (alrededor de `:735`), añadir:
     ```rust
@@ -157,12 +157,12 @@
     ```
   - Acceptance criteria: `cargo test` pasa. Añadir un test `config.rs` que fija `LLM_TOOLS_STRICT=1` y `CLASSIFIER_CONFIDENCE_THRESHOLD=0.8` y verifica los campos (usando `temp-env` como hacen los tests existentes).
 
-- [ ] Step 2.4: Documentar variables en `doc/env-vars.md`
+- [x] Step 2.4: Documentar variables en `doc/env-vars.md`
   - File(s): `doc/env-vars.md`
   - Change: Tras las filas existentes de `LLM_*` (cerca de `:27-31`) añadir una sección "Intent Classifier (cascada C01)" con una fila por cada nueva env var (name, default, descripción), según los defaults del Step 2.2.
   - Acceptance criteria: `cargo test` sigue pasando. La doc refleja defaults reales del TOML.
 
-- [ ] Step 2.5: Migración DB de trazabilidad `classification_log`
+- [x] Step 2.5: Migración DB de trazabilidad `classification_log`
   - File(s): `src/db/database.rs`
   - Change:
     1. En `run_migrations()`, tras el bloque FTS5/triggers (justo antes de `Ok(())` en `:261`) añadir:
@@ -189,7 +189,7 @@
   - Acceptance criteria: `cargo build` compila. Un test `database.rs` (patrón temp dir + `Database::new`) crea una sesión, llama `save_classification`, y verifica la fila presente con un `SELECT`.
 
 ## Phase 3: Cascada dispatcher (`ClassifierPipeline`) + integración en el pipeline
-- [ ] Step 3.1: Definir trait `ClassifierStage` y enum `ClassifierPipeline`
+- [x] Step 3.1: Definir trait `ClassifierStage` y enum `ClassifierPipeline`
   - File(s): `src/classifier/pipeline.rs` (nuevo), `src/classifier/mod.rs`
   - Change:
     1. En `mod.rs` añadir `pub mod pipeline;` y re-exportar `pub use pipeline::ClassifierPipeline;`.
@@ -229,12 +229,12 @@
     3. NOTA: el `Box<dyn ClassifierStage>` con `async_trait` exige que el tipo sea `Send`. Los stages de Nivel 2 (ort) y Nivel 4 (reqwest) lo son.
   - Acceptance criteria: `cargo build` compila. Test `classifier::pipeline` con dos stages mock (uno siempre `None`, uno siempre `Some(Simple)`) verifica orden y que sin resolución → `Complex`.
 
-- [ ] Step 3.2: Stage del Nivel 1 (Heuristic) como `ClassifierStage`
+- [x] Step 3.2: Stage del Nivel 1 (Heuristic) como `ClassifierStage`
   - File(s): `src/classifier/heuristic.rs`
   - Change: Añadir un `pub struct HeuristicStage { keywords: Vec<String> }` con `impl HeuristicStage { pub fn new(keywords: Vec<String>) -> Self }` y `#[async_trait] impl ClassifierStage for HeuristicStage` donde `name()="heuristic"`, `level()=Heuristic`, y `try_classify` llama a `classify(text, &self.keywords)` y devuelve `Some(r)` si `r.confidence >= threshold` (1.0 siempre), `None` si `confidence == 0.0` (no resuelto). Importar `use async_trait::async_trait; use super::pipeline::ClassifierStage;`.
   - Acceptance criteria: `cargo build` compila. Test: con `threshold=0.6`, `"hola"` → `Some` Simple; `"dime algo largo sin keyword"` → `None`.
 
-- [ ] Step 3.3: Factory `build_classifier` desde `Config`
+- [x] Step 3.3: Factory `build_classifier` desde `Config`
   - File(s): `src/classifier/pipeline.rs`, `src/classifier/mod.rs`
   - Change: Añadir:
     ```rust
@@ -255,7 +255,7 @@
     Dejar TODOs comentados para las fases 5-7. `pub use pipeline::build_classifier;` en `mod.rs`.
   - Acceptance criteria: `cargo build` (default features) compila con solo el stage heurístico.
 
-- [ ] Step 3.4: Integrar `ClassifierPipeline` en `llm_task`
+- [x] Step 3.4: Integrar `ClassifierPipeline` en `llm_task`
   - File(s): `src/pipeline/llm_task.rs`, `src/main.rs`, `src/e2e_tests.rs`
   - Change:
     1. Firma de `llm_task`: **sustituir** los args `llm_temperature_simple/complex, llm_thinking_simple/complex, llm_complex_keywords` por:
@@ -289,7 +289,7 @@
     4. En `src/e2e_tests.rs:222-251`: sustituir args actuales por `Arc::new(crate::classifier::build_classifier(&config))` (usar `config` del test; si el test no tiene `config` accesible, construir un `ClassifierPipeline::new(0.6).with_stage(Box::new(HeuristicStage::new(vec![])))` directamente) y el flag `false` (llm_tools_strict). **No** romper la firma en los tests: pasar 5 args (classifier + 4 escalares/flag) en el nuevo orden.
   - Acceptance criteria: `cargo build` compila (default features). `cargo test` pasa. `cargo build --features tui,remote,control` compila (test-ci). Logs del e2e muestran `level=Heuristic`.
 
-- [ ] Step 3.5: Ampliar trazabilidad DB en el pipeline
+- [x] Step 3.5: Ampliar trazabilidad DB en el pipeline
   - File(s): `src/pipeline/llm_task.rs`, `src/main.rs`, `src/e2e_tests.rs`
   - Change:
     1. En `llm_task`, tras el `info!` de clasificación (Step 3.4) añadir (no awaiting de forma bloqueante: fire-and-forget con `tokio::spawn` O `let _ =` directo, ya que `db` es `Clone`). Construir `utterance_id` como `pipeline_id as i64` (si no hay mejor id del turno, usar ese). Insertar:
@@ -310,7 +310,7 @@
   - Acceptance criteria: `cargo test e2e -- --ignored` (test `basic_conversation` u otro que inyecte transcripción) deja filas en `classification_log` (verificar con un `SELECT` en el test o manual). En la no-opt no se testea, basta compilar.
 
 ## Phase 4: "Tools Strict" en `RequestOptions` y payload
-- [ ] Step 4.1: Añadir `tool_choice` a `RequestOptions`
+- [x] Step 4.1: Añadir `tool_choice` a `RequestOptions`
   - File(s): `src/llm/provider.rs`
   - Change:
     1. Añadir enum:
@@ -322,7 +322,7 @@
     3. Re-exportar `ToolChoice` desde `src/llm/mod.rs` (`pub use provider::ToolChoice;`).
   - Acceptance criteria: `cargo build` falla solo si `client.rs` no lo consume (esperado hasta 4.2).
 
-- [ ] Step 4.2: Honrar `tool_choice` en `OpenAIClient::stream()`
+- [x] Step 4.2: Honrar `tool_choice` en `OpenAIClient::stream()`
   - File(s): `src/llm/client.rs`
   - Change: En el payload `:236-263`:
     - Mantener la rama `!tools.is_empty()` actual pero, al calcular `tool_choice`, calcular primero `let choice = options.tool_choice.unwrap_or(match forced_tool { Some(_) => ToolChoice::Required, None => ToolChoice::Auto });` y serializar como `"required" | "auto" | "none"`. Cuando `choice == ToolChoice::None`, aunque `tools` no esté vacío, **omitir** el campo `tools` y `tool_choice` (igual que la rama `tools.is_empty()`): usar `else` con `chat_template_kwargs`. En la práctica, la mecánica de `llm_task` pasa `&[]` en SIMPLE, por lo que la rama vacía ya cobra; el `tool_choice: None` explícito se agrega **solo si** se envían tools (caso defensa). Cubrir también el caso `tools.is_empty() && options.tool_choice == Some(ToolChoice::None)` añadiendo `"tool_choice": "none"` al payload (en la rama else) **únicamente cuando `llm_tools_strict` lo pida** — pero el flag vive en `llm_task`; para no pasar el flag por aquí, se interpreta así: si `options.tool_choice == Some(ToolChoice::None)` → añadir `"tool_choice":"none"` al payload (en la rama `tools.is_empty()` también).
@@ -330,7 +330,7 @@
     - No romper `build_stream_payload` (`#[cfg(test)]`) existente: sincronizar el cambio ahí.
   - Acceptance criteria: `cargo build` compila. Test `client.rs` existente `build_stream_payload` se actualiza; nuevo test: con `RequestOptions::new().with_tool_choice(ToolChoice::None)` y `tools=&[]`, el payload contiene `"tool_choice":"none"`.
 
-- [ ] Step 4.3: Aplicar `tools_strict` desde `llm_task`
+- [x] Step 4.3: Aplicar `tools_strict` desde `llm_task`
   - File(s): `src/pipeline/llm_task.rs`
   - Change: En la construcción de `options` (Step 3.4), cuando `llm_tools_strict && !tools_enabled` (Simple), añadir `.with_tool_choice(crate::llm::ToolChoice::None)`:
     ```rust
@@ -343,7 +343,7 @@
 > Antes de continuar con los Niveles 2/3/4 (que requieren dependencias pesadas y modelos externos), ejecutar `make qa` y verificar verde. Esta es la línea base funcional (cascada con solo Nivel 1 + trazabilidad + tools_strict). Commit "verify: cascada Nivel 1 + DBQA" antes de Phase 5.
 
 ## Phase 5: Nivel 2 — Embeddings (feature flag `classifier-embedding`)
-- [ ] Step 5.1: Añadir dependencias gated y feature
+- [x] Step 5.1: Añadir dependencias gated y feature
   - File(s): `Cargo.toml`
   - Change:
     1. En `[dependencies]` añadir (todos optional):
@@ -357,7 +357,7 @@
     3. **No** añadir el feature a los perfiles de CI por defecto (`make qa` no lo activa); se testea con `cargo test --features classifier-embedding ...` solo en pasos explícitos del plan.
   - Acceptance criteria: `cargo build` (default) sigue compilando. `cargo build --features classifier-embedding` descarga/compila `ort` (puede tardar la primera vez).
 
-- [ ] Step 5.2: Script de descarga del modelo de embeddings
+- [x] Step 5.2: Script de descarga del modelo de embeddings
   - File(s): `scripts/download-embedding-model.sh` (nuevo), `models/bge-small-onnx/.gitignore` (opcional)
   - Change: Script bash idempotente que:
     1. Crea `models/bge-small-onnx/` si no existe.
@@ -367,7 +367,7 @@
     Usar `curl -fsSL` y `set -euo pipefail`. Documentar al inicio del script qué descarga y dónde.
   - Acceptance criteria: Ejecutar `bash scripts/download-embedding-model.sh` deja `models/bge-small-onnx/{model.onnx,tokenizer.json}`. Re-ejecutar es no-op si los ficheros ya existen. Si no hay red, el script falla de forma clara (no corrompe rien).
 
-- [ ] Step 5.3: Stage `EmbeddingClassifier`
+- [x] Step 5.3: Stage `EmbeddingClassifier`
   - File(s): `src/classifier/embedding.rs` (nuevo, todo `#[cfg(feature = "classifier-embedding")]`), `src/classifier/mod.rs`, `src/classifier/pipeline.rs`
   - Change:
     1. En `mod.rs` añadir `#[cfg(feature = "classifier-embedding")] pub mod embedding;`.
@@ -388,14 +388,14 @@
        ```
   - Acceptance criteria: `cargo build --features classifier-embedding` compila. Tests `#[cfg(feature="classifier-embedding")] #[ignore]` en `embedding.rs`: si `models/bge-small-onnx/` existe (tras correr el script), `embed("Hola")` devuelve un `Vec<f32>` de la dimensión esperada y `cosine` ∈ [0,1]; si no existe el modelo, los tests se skipan (`#[ignore]`). Sin el feature, `cargo build` no incluye `ort`/`tokenizers` (`cargo build` default sigue verde).
 
-- [ ] Step 5.4: Centroides por defecto shippeados
+- [x] Step 5.4: Centroides por defecto shippeados
   - File(s): `models/classifier_centroids.json` (nuevo)
   - Change: JSON con dos vectores de la dimensión del modelo elegido (p.ej. MiniLM L6 → 384 dims) rellenos con `0.0` (placeholder). Documentar: el usuario debe regenerarlos con frases de referencia reales (script futuro fuera de scope). El placeholder produce `cosine≈0` → confianza baja → cae a Nivel 3/4, no rompe.
     Formato: `{ "dim": 384, "simple": [0.0,...], "complex": [0.0,...] }`. Al cargar, si todos los centroides son `0.0`, normalizar es NaN → tratar centroides `0.0` como **no válidos** y skipar el Nivel 2 con `warn!`.
   - Acceptance criteria: `.json` parseable por la deserialización de `embedding.rs`. Si todos ceros, `build_classifier` loguea `warn` y no añade el stage.
 
 ## Phase 6: Nivel 3 — Regresión logística (stub, sobre embeddings)
-- [ ] Step 6.1: Stage `LogisticClassifier`
+- [x] Step 6.1: Stage `LogisticClassifier`
   - File(s): `src/classifier/logistic.rs` (nuevo, todo `#[cfg(feature = "classifier-embedding")]`), `src/classifier/mod.rs`, `src/classifier/pipeline.rs`
   - Change:
     1. En `mod.rs` añadir `#[cfg(feature = "classifier-embedding")] pub mod logistic;`.
@@ -408,13 +408,13 @@
     3. En `build_classifier`, tras añadir `EmbeddingClassifier`, añadir `LogisticClassifier::load(&config.classifier_weights_path)` si el path no está vacío (con `match` + `warn!`).
   - Acceptance criteria: `cargo build --features classifier-embedding` compila. Con pesos stub `[0;N],0`, `score=0.5` → confianza 0 → `None` → cascada continúa a Nivel 4 (o finaliza en Complex). Test unit de `logistic.rs` con pesos conocidos (`w=[1,...], bias=-N/2`) verifica que un embedding cerca del "complejo" da `p>0.5`.
 
-- [ ] Step 6.2: Re-exportar y ordenar stages en la cascada
+- [x] Step 6.2: Re-exportar y ordenar stages en la cascada
   - File(s): `src/classifier/pipeline.rs`
   - Change: Confirmar el orden de inserción en `build_classifier`: Heuristic → Embedding → Logistic → Fallback. El `shared_emb` se pasa a cada `try_classify`. `EmbeddingClassifier` escribe `shared_emb`; `LogisticClassifier` lee. `Heuristic` y `Fallback` ignoran `shared_emb`.
   - Acceptance criteria: `cargo build --features classifier-embedding` compila. `cargo test --features classifier-embedding` (con modelo presente) pasa.
 
 ## Phase 7: Nivel 4 — SLM Fallback (segundo endpoint LLM dedicado)
-- [ ] Step 7.1: Cliente del fallback SLM
+- [x] Step 7.1: Cliente del fallback SLM
   - File(s): `src/classifier/fallback.rs` (nuevo), `src/classifier/mod.rs`
   - Change:
     1. En `mod.rs` añadir `pub mod fallback;` (sin `cfg`, porque solo usa `reqwest`, ya disponible).
@@ -462,7 +462,7 @@
        Nota: `logit_bias`/gramática omitido en esta fase (TODO en doc); el `max_tokens=1` + `temperature=0` + prompt restrictivo basta para la v0.
   - Acceptance criteria: `cargo build` compila. Test unit con wiremock: mock `/v1/chat/completions` responde `content:"SIMPLE"` → `classify()` devuelve `Intent::Simple`; responde `content:"COMPLEX"` → `Complex`; responde basura → `Err`. Test con timeout simulado (wiremock `.set_delay`) → `Err` tras `timeout_ms`.
 
-- [ ] Step 7.2: Stage `FallbackStage`
+- [x] Step 7.2: Stage `FallbackStage`
   - File(s): `src/classifier/fallback.rs`, `src/classifier/pipeline.rs`
   - Change:
     1. En `fallback.rs` añadir `pub struct FallbackStage { inner: FallbackClassifier, enabled: bool }` con `#[async_trait] impl ClassifierStage for FallbackStage`: `name()="fallback"`, `level()=Fallback`, `try_classify` (sin usar `shared_emb`): si `!enabled` → `None`; si no, llama `inner.classify(text).await`, on `Ok` devolver `Some(ClassifyResult { intent, level: Fallback, confidence: 1.0, matched_keyword: None })`; on `Err(e)` → `warn!(target:"classifier","fallback failed: {e}")` y `None` (la cascada resolverá Complex por sesgo de seguridad en `pipeline.classify`).
@@ -479,7 +479,7 @@
   - Acceptance criteria: `cargo build` (default features) compila. `cargo build --features classifier-embedding` compila. Con `CLASSIFIER_ENABLE_FALLBACK=false` (default), el stage no se añade y `pipeline.classify` termina resolviendo por sesgo de seguridad en `Complex` si ningún nivel previo resolvió.
 
 ## Phase 8: Tests de integración + QA
-- [ ] Step 8.1: Test e2e de la cascada con fallback mock
+- [x] Step 8.1: Test e2e de la cascada con fallback mock
   - File(s): `src/e2e_tests.rs`
   - Change: Añadir test `#[ignore]` `e2e::intent_cascade_fallback` que:
     1. Levanta `wiremock::MockServer` mockeando `/v1/chat/completions` del fallback SLM → responde `content:"COMPLEX"` y del LLM principal → responde SSE.
@@ -488,22 +488,22 @@
     4. Verifica filas en `classification_log` con `level` correcto.
   - Acceptance criteria: `cargo test e2e::intent_cascade_fallback -- --ignored --nocapture` pasa.
 
-- [ ] Step 8.2: Test de trazabilidad y sesgo de seguridad
+- [x] Step 8.2: Test de trazabilidad y sesgo de seguridad
   - File(s): `src/e2e_tests.rs`
   - Change: Test que construye un `ClassifierPipeline` con **ningún stage que resuelva** (todos devuelven `None` — p.ej. solo `HeuristicStage` con keywords=[] y frase sin patrón trivial) y verifica `pipeline.classify(...)` → `Intent::Complex` (sesgo de seguridad) con `level` del último stage y `confidence=0.0`.
   - Acceptance criteria: pasa.
 
-- [ ] Step 8.3: Test de "tools_strict" en payload
+- [x] Step 8.3: Test de "tools_strict" en payload
   - File(s): `src/llm/client.rs` (tests)
   - Change: Extender el test existente de `build_stream_payload` con un caso `RequestOptions::new().with_tool_choice(ToolChoice::None)` + `tools=&[]` → asertar `payload["tool_choice"] == "none"`. Un caso `ToolChoice::Required` con `forced_tool=None` + `tools` no vacío → `"required"`.
   - Acceptance criteria: `cargo test --features tui,remote,control` pasa el nuevo test.
 
-- [ ] Step 8.4: QA completo local (sin feature embedding)
+- [x] Step 8.4: QA completo local (sin feature embedding)
   - File(s): ninguno
   - Change: `make qa`. Corregir warnings de clippy del nuevo código. Verificar `RUST_LOG=classifier=info cargo run` muestra `level=Heuristic confidence=...`.
   - Acceptance criteria: `make qa` verde (`fmt`, `lint`, `test`, `test-ci`, `test-e2e`, `build`).
 
-- [ ] Step 8.5: QA con feature `classifier-embedding` (mejor-effort)
+- [x] Step 8.5: QA con feature `classifier-embedding` (mejor-effort)
   - File(s): ninguno
   - Change: `cargo build --features classifier-embedding` (verifica que compila). `bash scripts/download-embedding-model.sh` y `cargo test --features classifier-embedding -- --ignored` (skipan si no hay modelo/centroides válidos). Documentar en `doc/env-vars.md` cómo activar el Nivel 2/3.
   - Acceptance criteria: Build compila. Los tests se skipan limpiamente sin modelo. No se exige verde total en CI base por el peso de `ort`.
