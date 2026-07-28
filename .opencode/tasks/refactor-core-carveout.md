@@ -98,28 +98,28 @@
 
 Cada paso produce una doc **espec-nivel** (interfaces, tipos, dataflow), leyendo el código fuente correspondiente.
 
-- [ ] Step 2.1: `doc/classifier.md` (G1) — cascada `heuristic → keyword → fallback`. Firmas del `Intent` enum, `ClassifierPipeline`, niveles, env vars (`CLASSIFIER_*` de `seneschal.pro.toml`); marcar `embedding.rs`/`logistic.rs` como **descartables (placeholders vacíos)**.
+- [x] Step 2.1: `doc/classifier.md` (G1) — cascada `heuristic → keyword → fallback`. Firmas del `Intent` enum, `ClassifierPipeline`, niveles, env vars (`CLASSIFIER_*` de `seneschal.pro.toml`); marcar `embedding.rs`/`logistic.rs` como **descartables (placeholders vacíos)**.
   - File(s): `doc/classifier.md` (nuevo)
   - Acceptance: Un reader puede replicar la cascada sin mirar el `.rs`.
-- [ ] Step 2.2: `doc/plugins-internal.md` (G2) — lifecycle del `PluginManager`, `PluginSwitchEvent`, formato `Manifest`, revert de `config_overrides`, inyección de prompts, relación con `mcp_spawner` y `agent_bridge`.
+- [x] Step 2.2: `doc/plugins-internal.md` (G2) — lifecycle del `PluginManager`, `PluginSwitchEvent`, formato `Manifest`, revert de `config_overrides`, inyección de prompts, relación con `mcp_spawner` y `agent_bridge`.
   - File(s): `doc/plugins-internal.md` (nuevo)
   - Acceptance: Diagrama de lifecycle activar→modificar-config→spawn-mcp→register-tools→deactivate→revert.
-- [ ] Step 2.3: `doc/agents-internal.md` (G3) — `AcpSessionManager`, `AcpWriter`, state machine de sesión, dual Hermes/OpenCode (`hermes_events.rs`, `opencode_events.rs`, `opencode_transport.rs`), `ProactiveEvent`.
+- [x] Step 2.3: `doc/agents-internal.md` (G3) — `AcpSessionManager`, `AcpWriter`, state machine de sesión, dual Hermes/OpenCode (`hermes_events.rs`, `opencode_events.rs`, `opencode_transport.rs`), `ProactiveEvent`.
   - File(s): `doc/agents-internal.md` (nuevo)
   - Acceptance: Estados de sesión y transiciones listados; diferencias Hermes vs OpenCode en tabla.
-- [ ] Step 2.4: `doc/search-providers.md` (G4) — `SearchProvider` trait (métodos), factory, credenciales/env vars por provider (`BRAVE_*`, `TAVILY_*`, etc.), configuración de rate-limit si aplica.
+- [x] Step 2.4: `doc/search-providers.md` (G4) — `SearchProvider` trait (métodos), factory, credenciales/env vars por provider (`BRAVE_*`, `TAVILY_*`, etc.), configuración de rate-limit si aplica.
   - File(s): `doc/search-providers.md` (nuevo)
   - Acceptance: Firma del trait en bloque Rust idéntica a `src/search/mod.rs`.
-- [ ] Step 2.5: `doc/llm-provider.md` (G5) — `LlmProvider` trait, relación con `OpenAIClient` y `LlmSession`, cómo se selecciona provider, ThinkFilter (patrón real de tags — verificar en `src/llm/` antes de escribir).
+- [x] Step 2.5: `doc/llm-provider.md` (G5) — `LlmProvider` trait, relación con `OpenAIClient` y `LlmSession`, cómo se selecciona provider, ThinkFilter (patrón real de tags — verificar en `src/llm/` antes de escribir).
   - File(s): `doc/llm-provider.md` (nuevo)
   - Acceptance: Indica el tag exacto de reasoning que se stripa (leer código para confirmar `<antThinking>` vs otro).
-- [ ] Step 2.6: `doc/audio-internals.md` (G6) — `AudioOutput` (incl. `null()`), resampling rubato (`audio_transform.rs`), ring buffer (`buffer.rs`), `filler.rs` (qué inyecta y cuándo), `ambient_buffer.rs` (política de eviction).
+- [x] Step 2.6: `doc/audio-internals.md` (G6) — `AudioOutput` (incl. `null()`), resampling rubato (`audio_transform.rs`), ring buffer (`buffer.rs`), `filler.rs` (qué inyecta y cuándo), `ambient_buffer.rs` (política de eviction).
   - File(s): `doc/audio-internals.md` (nuevo)
   - Acceptance: Esquemas de datos y ventanas temporales documentados.
-- [ ] Step 2.7: `doc/s-dream-format.md` (G7) — formato JSONL de L2, schema FTS5 existente, triggers L1→L2 (idle 600s, interval 3600s, 3 AM), algoritmo de compaction de hechos de baja confianza, `recover_historical_context`.
+- [x] Step 2.7: `doc/s-dream-format.md` (G7) — formato JSONL de L2, schema FTS5 existente, triggers L1→L2 (idle 600s, interval 3600s, 3 AM), algoritmo de compaction de hechos de baja confianza, `recover_historical_context`.
   - File(s): `doc/s-dream-format.md` (nuevo)
   - Acceptance: Ejemplo JSONL completo y ejemplo query FTS5.
-- [ ] Step 2.8: Actualizar `doc/modules.md` para marcar los módulos recién documentados y los descartados (piper.rs, classifier embedding/logistic, .bak).
+- [x] Step 2.8: Actualizar `doc/modules.md` para marcar los módulos recién documentados y los descartados (piper.rs, classifier embedding/logistic, .bak).
   - File(s): `doc/modules.md`
   - Change: Tabla con columna "estado" (salvar/aislar/descartar) que enlace a la nueva doc.
   - Acceptance: `doc/modules.md` no contiene entradas vivas para archivos descartados.
