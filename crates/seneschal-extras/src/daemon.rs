@@ -12,9 +12,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use seneschal_common::events::ProactiveEvent;
 use seneschal_agents::config::AgentConfig;
 use seneschal_agents::session_manager::AcpSessionManager;
+use seneschal_common::events::ProactiveEvent;
 
 use seneschal_core::llm::{LlmProvider, LlmSession, Message};
 

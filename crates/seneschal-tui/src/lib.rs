@@ -22,11 +22,11 @@ use crossterm::{
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
 use tokio::sync::mpsc;
 
-use seneschal_core::pipeline::PipelineFrame;
-use seneschal_common::tools::{ConversationMode, PromptBuildState};
 use app::{Action, App};
 use events::{TuiEvent, TuiEventRx};
 use input::KeyReader;
+use seneschal_common::tools::{ConversationMode, PromptBuildState};
+use seneschal_core::pipeline::PipelineFrame;
 
 const TICK_MS: u64 = 33; // ~30fps
 

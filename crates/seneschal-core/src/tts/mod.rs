@@ -37,7 +37,6 @@ impl TtsEngine {
             Self::AvSpeech(t) => t.synthesize(text),
             #[cfg(feature = "kokoro")]
             Self::Kokoro(t) => t.synthesize(text),
-            #[cfg(test)]
             Self::Mock(t) => t.synthesize(text),
             _ => unreachable!("no TTS backend enabled"),
         }
@@ -51,7 +50,6 @@ impl TtsEngine {
             Self::AvSpeech(t) => t.sample_rate(),
             #[cfg(feature = "kokoro")]
             Self::Kokoro(t) => t.sample_rate(),
-            #[cfg(test)]
             Self::Mock(t) => t.sample_rate(),
             _ => unreachable!("no TTS backend enabled"),
         }

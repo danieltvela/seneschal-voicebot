@@ -117,8 +117,12 @@ stage_test_ci() {
 }
 
 stage_test_e2e() {
-    banner "Stage: test-e2e  (cargo test e2e -- --ignored, wiremock-based)"
-    if (cd "$PROJECT_ROOT" && $CARGO test --features "full" --quiet e2e -- --ignored 2>&1 | tail -n 80); then
+    _e2e_features="full"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        _e2e_features="$_e2e_features,avspeech"
+    fi
+    banner "Stage: test-e2e  (cargo test e2e --features $_e2e_features -- --ignored, wiremock-based)"
+    if (cd "$PROJECT_ROOT" && $CARGO test --features "$_e2e_features" --quiet e2e -- --ignored 2>&1 | tail -n 80); then
         stage_ok "test-e2e"
     else
         stage_fail "test-e2e" "e2e tests failed"

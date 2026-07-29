@@ -3,11 +3,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use seneschal_common::events::ProactiveEvent;
-use seneschal_mcp::mcp::{ForwardingNotificationHandler, McpClient, McpNotificationHandler};
 use crate::manifest::McpServerConfig;
+use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ToolRegistry;
 use seneschal_mcp::mcp::McpToolProxy;
+use seneschal_mcp::mcp::{ForwardingNotificationHandler, McpClient, McpNotificationHandler};
 
 /// Tracks spawned MCP clients and their registered tool names for cleanup.
 pub struct SpawnedMcpServers {

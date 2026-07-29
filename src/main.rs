@@ -24,6 +24,7 @@ mod db;
 
 use anyhow::{Context, Result};
 use async_channel::bounded;
+use seneschal_common::tools::PromptBuildState;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -31,43 +32,38 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-use seneschal_common::tools::PromptBuildState;
 
+use crate::config::{Config, SeneschalEnv};
+use crate::db::{Database, Memory};
 use seneschal_agents::agent_session::VisibleSessionManager;
 #[cfg(feature = "tui")]
 use seneschal_agents::create_session_event_channel;
 use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
-use seneschal_extras::analysis::ContextLens;
-use seneschal_extras::analysis::identity::IdentityAnalyzer;
+use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
+use seneschal_common::tools::{ConversationMode, ToolRegistry};
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
 use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
 use seneschal_core::audio::audio_transform::resample_nearest;
 use seneschal_core::audio::buffer::AudioBuffer;
 use seneschal_core::audio::output::AudioOutput;
 use seneschal_core::audio::speaker::SpeakerVerifier;
-use crate::config::{Config, SeneschalEnv};
-use crate::db::{Database, Memory};
-use seneschal_memory::{SDreamConfig, SDreamDaemon};
 use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use seneschal_core::pipeline::{
     PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,
     check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
     sen_task, tts_task,
 };
-use seneschal_plugins::{
-    OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
-};
-use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
-use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
 use seneschal_core::profile::ProfileFact;
 use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
-use seneschal_tools_core::{
-    AppleEventsTool, CurrentTimeTool, NoopTool, OpenAppTool, QuickSearchTool,
-    ReadClipboardTool, ReadFileTool, RunShellTool, SetClipboardTool, WebSearchTool,
-};
-#[cfg(target_os = "macos")]
-use seneschal_tools_core::OpenTerminalTool;
+#[cfg(feature = "avspeech")]
+use seneschal_core::tts::AvSpeechTts;
+#[cfg(feature = "kokoro")]
+use seneschal_core::tts::KokoroTts;
+use seneschal_core::tts::TtsEngine;
+use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
+use seneschal_extras::analysis::ContextLens;
+use seneschal_extras::analysis::identity::IdentityAnalyzer;
 use seneschal_extras::{
     DeepResearchTool, RecoverHistoricalContextTool, RunAgentTool, SwitchPluginTool,
     TakeScreenshotTool,
@@ -75,13 +71,17 @@ use seneschal_extras::{
     prompt_build::SetPromptBuildTool,
     run_agent::{ActiveTask, PendingInteractionEntry},
 };
-use seneschal_common::tools::{ConversationMode, ToolRegistry};
 use seneschal_mcp::mcp::McpToolProxy;
-#[cfg(feature = "avspeech")]
-use seneschal_core::tts::AvSpeechTts;
-#[cfg(feature = "kokoro")]
-use seneschal_core::tts::KokoroTts;
-use seneschal_core::tts::TtsEngine;
+use seneschal_memory::{SDreamConfig, SDreamDaemon};
+use seneschal_plugins::{
+    OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
+};
+#[cfg(target_os = "macos")]
+use seneschal_tools_core::OpenTerminalTool;
+use seneschal_tools_core::{
+    AppleEventsTool, CurrentTimeTool, NoopTool, OpenAppTool, QuickSearchTool, ReadClipboardTool,
+    ReadFileTool, RunShellTool, SetClipboardTool, WebSearchTool,
+};
 
 #[cfg(test)]
 mod e2e_tests;
@@ -431,7 +431,8 @@ async fn async_main() -> Result<()> {
     }
 
     // ── MCP tools (multi-server) ──────────────────────────────────────────────
-    let mcp_registry = seneschal_mcp::mcp::McpRegistry::from_config_and_env(config.mcp_servers.clone());
+    let mcp_registry =
+        seneschal_mcp::mcp::McpRegistry::from_config_and_env(config.mcp_servers.clone());
     for server in &mcp_registry.servers {
         info!(target: "mcp", "Spawning MCP server '{}': {}", server.name, server.command);
 
@@ -540,9 +541,7 @@ async fn async_main() -> Result<()> {
                 let prompt = &activated_prompt_configs;
                 plugin_sections = PluginPromptSections {
                     replace: match prompt.mode {
-                        seneschal_plugins::PromptMode::Replace => {
-                            prompt.content.clone() + "\n"
-                        }
+                        seneschal_plugins::PromptMode::Replace => prompt.content.clone() + "\n",
                         _ => String::new(),
                     },
                     prepend: match prompt.mode {
@@ -705,11 +704,13 @@ async fn async_main() -> Result<()> {
         .get_immutable_rules()
         .await?
         .into_iter()
-        .map(|(key, value, confidence)| seneschal_core::profile::Correction {
-            topic: key,
-            correction_text: value,
-            confidence,
-        })
+        .map(
+            |(key, value, confidence)| seneschal_core::profile::Correction {
+                topic: key,
+                correction_text: value,
+                confidence,
+            },
+        )
         .collect();
 
     let tool_section = tools.lock().unwrap().system_prompt_section();
@@ -747,7 +748,9 @@ async fn async_main() -> Result<()> {
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(1);
         let cmd = command.to_string();
         let url = config.llm_url.clone();
-        tokio::spawn(seneschal_core::llm::manager::supervise(child, cmd, url, notify_tx));
+        tokio::spawn(seneschal_core::llm::manager::supervise(
+            child, cmd, url, notify_tx,
+        ));
         tokio::spawn(async move {
             if let Some(msg) = notify_rx.recv().await {
                 error!(target: "llm_manager", "{}", msg);
@@ -1005,10 +1008,12 @@ async fn async_main() -> Result<()> {
                 let state = rx.borrow().clone();
                 tracing::debug!(target: "fsm", "Pipeline state → {:?}", state);
                 #[cfg(feature = "control")]
-                ctrl.send(seneschal_control::control::broadcast::ControlEvent::StateChanged {
-                    state: format!("{state:?}"),
-                    utterance_id: state.utterance_id(),
-                });
+                ctrl.send(
+                    seneschal_control::control::broadcast::ControlEvent::StateChanged {
+                        state: format!("{state:?}"),
+                        utterance_id: state.utterance_id(),
+                    },
+                );
             }
         });
     }
@@ -1048,11 +1053,14 @@ async fn async_main() -> Result<()> {
 
     #[cfg(feature = "remote")]
     let remote_tts_tx: Arc<
-        tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<seneschal_remote::remote::protocol::TtsAudioPacket>>>,
+        tokio::sync::Mutex<
+            Option<tokio::sync::mpsc::Sender<seneschal_remote::remote::protocol::TtsAudioPacket>>,
+        >,
     > = Arc::new(tokio::sync::Mutex::new(None));
 
     #[cfg(feature = "tui")]
-    let (tui_tx, tui_rx) = tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
+    let (tui_tx, tui_rx) =
+        tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
 
     let mut pending_agent_results: std::collections::VecDeque<(String, String)> =
         std::collections::VecDeque::new();
@@ -1294,7 +1302,9 @@ async fn async_main() -> Result<()> {
             control_broadcast_tx: control_broadcast.tx.clone(),
         });
         tokio::spawn(async move {
-            if let Err(e) = seneschal_remote::remote::server::start_server(ws_port, remote_state).await {
+            if let Err(e) =
+                seneschal_remote::remote::server::start_server(ws_port, remote_state).await
+            {
                 error!(target: "remote", "WebSocket server error: {e}");
             }
         });
@@ -1314,7 +1324,9 @@ async fn async_main() -> Result<()> {
             db: db.clone(),
         });
         tokio::spawn(async move {
-            if let Err(e) = seneschal_control::control::api::start_control_server(ctrl_port, ctrl_state).await {
+            if let Err(e) =
+                seneschal_control::control::api::start_control_server(ctrl_port, ctrl_state).await
+            {
                 error!(target: "control", "Control API error: {e}");
             }
         });

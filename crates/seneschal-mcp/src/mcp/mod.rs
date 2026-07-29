@@ -29,13 +29,13 @@ use tracing::{debug, info, warn};
 use seneschal_common::events::ProactiveEvent;
 
 pub mod config;
-pub mod transport;
 pub mod tool_proxy;
+pub mod transport;
 
 #[allow(unused_imports)]
 pub use config::{McpConfig, McpRegistry, McpServerTomlConfig, McpTransportKind};
-pub use transport::McpTransport;
 pub use tool_proxy::McpToolProxy;
+pub use transport::McpTransport;
 
 // ── Notification handler trait ───────────────────────────────────────────────
 

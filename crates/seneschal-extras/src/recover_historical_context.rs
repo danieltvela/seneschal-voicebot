@@ -3,8 +3,8 @@ use serde_json::json;
 use tracing::info;
 use uuid::Uuid;
 
-use seneschal_common::tools::Tool;
 use seneschal_common::Database;
+use seneschal_common::tools::Tool;
 
 /// Searches the L2 (long-term) message archive using FTS5 full-text search.
 ///

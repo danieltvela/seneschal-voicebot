@@ -7,10 +7,10 @@ use tracing::{error, info, warn};
 use super::frames::PipelineFrame;
 use super::fsm::PipelineState;
 use super::state::PipelineEvents;
-use seneschal_common::events::ProactiveEvent;
+use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken, ToolChoice};
 use seneschal_common::classifier::{ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent};
 use seneschal_common::db::Database;
-use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken, ToolChoice};
+use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ToolRegistry;
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.

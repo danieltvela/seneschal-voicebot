@@ -7,8 +7,8 @@ use dashmap::DashMap;
 use tokio::sync::{Mutex, mpsc};
 
 use super::config::AgentConfig;
-use seneschal_common::config::{Config, HermesSessionViewerMode};
 use seneschal_common::acp_writer::{AcpWriter, JsonRpcMessage};
+use seneschal_common::config::{Config, HermesSessionViewerMode};
 
 // ── Session events ─────────────────────────────────────────────────────────────
 

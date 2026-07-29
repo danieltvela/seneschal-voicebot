@@ -3,8 +3,8 @@
 // Catch-all crate for daemons, visual awareness, advanced tools, and
 // agent bridging that are not part of the core voice pipeline.
 
-pub mod analysis;
 pub mod agent_bridge;
+pub mod analysis;
 pub mod conversation_mode;
 pub mod daemon;
 pub mod deep_research;
@@ -24,7 +24,6 @@ pub use seneschal_common::tools::Tool;
 // Commonly used types
 pub use agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
 pub use conversation_mode::SetConversationModeTool;
-pub use seneschal_common::tools::ConversationMode;
 pub use daemon::{AcpKeepAliveDaemon, InferenceDaemon};
 pub use deep_research::DeepResearchTool;
 pub use eyes::EyesDaemon;
@@ -33,6 +32,7 @@ pub use recover_historical_context::RecoverHistoricalContextTool;
 pub use run_agent::{
     ActiveTask, AgentTaskHandle, PendingInteractionEntry, RunAgentTool, TaskState, format_history,
 };
+pub use seneschal_common::tools::ConversationMode;
 pub use subtask::{ListTasksTool, SubtaskTracker};
 pub use switch_plugin::SwitchPluginTool;
 pub use take_screenshot::TakeScreenshotTool;

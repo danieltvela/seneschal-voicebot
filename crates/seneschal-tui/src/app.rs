@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use super::acp_panel::AcpSessionState;
 use super::acp_panel::AcpSessionView;
 use super::events::{InputSource, PipelineState, TuiEvent};
-use seneschal_common::tools::{ConversationMode, PromptBuildState};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use seneschal_common::tools::{ConversationMode, PromptBuildState};
 
 /// Action returned by key event handling.
 #[derive(Debug)]

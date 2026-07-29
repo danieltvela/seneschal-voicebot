@@ -13,14 +13,14 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use seneschal_common::tools::Tool;
 use seneschal_agents::agent_session::VisibleSessionManager;
 use seneschal_agents::{
-    AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport,
-    SessionEvent, SessionEventTx,
+    AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, SessionEvent,
+    SessionEventTx,
 };
-use seneschal_common::events::ProactiveEvent;
 use seneschal_common::config::{Config, HermesSessionViewerMode};
+use seneschal_common::events::ProactiveEvent;
+use seneschal_common::tools::Tool;
 
 use seneschal_core::llm::{LlmProvider, Message};
 
@@ -129,9 +129,7 @@ fn strip_hermes_cli_noise(raw: &str) -> String {
 }
 
 // ── JSON-RPC 2.0 helpers (now in seneschal-common) ──────────────────────────
-use seneschal_common::acp_writer::{
-    jsonrpc_notification, jsonrpc_request, parse_jsonrpc,
-};
+use seneschal_common::acp_writer::{jsonrpc_notification, jsonrpc_request, parse_jsonrpc};
 
 // ── Result synthesis ─────────────────────────────────────────────────────────
 

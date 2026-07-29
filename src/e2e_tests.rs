@@ -28,14 +28,14 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use seneschal_common::events::ProactiveEvent;
-use seneschal_core::audio::output::AudioOutput;
 use crate::config::Config;
 use crate::db::Database;
+use seneschal_common::events::ProactiveEvent;
+use seneschal_common::tools::ConversationMode;
+use seneschal_common::tools::ToolRegistry;
+use seneschal_core::audio::output::AudioOutput;
 use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use seneschal_core::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
-use seneschal_common::tools::ToolRegistry;
-use seneschal_common::tools::ConversationMode;
 use seneschal_core::tts::{TtsEngine, mock_tts::MockTts};
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -189,7 +189,8 @@ impl E2eHarness {
         let state_rx = self.state_rx.clone();
         let (sentences_tx, sentences_rx) =
             tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(64);
-        let (llm_tx, llm_rx) = tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(256);
+        let (llm_tx, llm_rx) =
+            tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(256);
         let (transcript_tx, transcript_rx) =
             tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(16);
 

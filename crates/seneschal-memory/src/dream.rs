@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use seneschal_common::events::ProactiveEvent;
 use seneschal_common::Database;
+use seneschal_common::events::ProactiveEvent;
 use seneschal_core::llm::{LlmProvider, Message};
 use seneschal_core::memory::extract_memories;
 use seneschal_core::profile::extract_facts;
@@ -235,8 +235,12 @@ impl SDreamDaemon {
             let existing_memories = self.db.load_active_memories().await?;
             info!(target: "dream", count = existing_memories.len(), "Active memories loaded");
 
-            let extraction =
-                extract_memories(client.as_ref(), &conversation_text, existing_memories.as_slice()).await;
+            let extraction = extract_memories(
+                client.as_ref(),
+                &conversation_text,
+                existing_memories.as_slice(),
+            )
+            .await;
             info!(
                 target: "dream",
                 new = extraction.new_memories.len(),

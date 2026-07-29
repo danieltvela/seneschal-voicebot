@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tracing::{info, warn};
 
-use seneschal_core::llm::LlmProvider;
 use crate::screen_capture;
+use seneschal_core::llm::LlmProvider;
 
 use seneschal_common::tools::Tool;
 

@@ -1040,4 +1040,3 @@ impl Config {
         (self.sample_rate as usize * self.chunk_ms as usize) / 1000
     }
 }
-

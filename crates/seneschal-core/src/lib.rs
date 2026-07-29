@@ -5,9 +5,9 @@
 // Depends only on seneschal-common for shared types.
 
 pub mod audio;
-pub mod stt;
 pub mod llm;
-pub mod tts;
-pub mod pipeline;
 pub mod memory;
+pub mod pipeline;
 pub mod profile;
+pub mod stt;
+pub mod tts;

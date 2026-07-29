@@ -17,9 +17,9 @@ use tracing::{debug, info, warn};
 
 use std::sync::Arc;
 
+use crate::screen_capture;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_core::llm::LlmProvider;
-use crate::screen_capture;
 
 const EYES_PROMPT: &str = "\
 You are a background visual monitor for a voice assistant called seneschal. \

@@ -7,13 +7,13 @@ use tracing::{debug, info, warn};
 use super::frames::PipelineFrame;
 use super::fsm::{PauseReason, PipelineState};
 use super::state::PipelineEvents;
-use seneschal_common::events::ProactiveEvent;
-use seneschal_common::db::{Database, Memory};
-use seneschal_common::i18n;
 use crate::llm::{LlmProvider, LlmSession};
 use crate::memory::{build_memory_context, extract_memories};
-use seneschal_common::events::PluginPromptSections;
 use crate::profile::{ProfileFact, build_profile_context, extract_facts};
+use seneschal_common::db::{Database, Memory};
+use seneschal_common::events::PluginPromptSections;
+use seneschal_common::events::ProactiveEvent;
+use seneschal_common::i18n;
 use seneschal_common::tools::PromptBuildState;
 
 /// Character threshold for L1 saturation detection.
@@ -444,8 +444,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::mpsc;
 
-    use seneschal_common::db::Memory;
     use crate::profile::ProfileFact;
+    use seneschal_common::db::Memory;
 
     /// Helper: build a profile fact with a long value.
     fn long_fact(value: &str) -> ProfileFact {

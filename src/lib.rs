@@ -18,7 +18,6 @@ pub mod control_client {
     };
 }
 
-
 // Re-export core pipeline types from seneschal-core for backward compatibility.
 pub use seneschal_core::audio::buffer::AudioBuffer;
 pub use seneschal_core::audio::output::AudioOutput;

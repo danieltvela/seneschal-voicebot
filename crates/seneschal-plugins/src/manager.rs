@@ -6,9 +6,7 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::config_overrides::{OriginalConfigSnapshot, PluginConfigOverrides};
-use crate::manifest::{
-    McpServerConfig, PluginAgentConfig, PluginManifest, PluginPromptConfig,
-};
+use crate::manifest::{McpServerConfig, PluginAgentConfig, PluginManifest, PluginPromptConfig};
 
 /// Metadata for a plugin loaded from disk.
 #[derive(Debug, Clone)]
@@ -611,8 +609,8 @@ language = "en""#,
 
     #[test]
     fn integration_switch_plugin_changes_tools_in_registry() {
-        use seneschal_common::tools::{Tool, ToolRegistry};
         use async_trait::async_trait;
+        use seneschal_common::tools::{Tool, ToolRegistry};
 
         struct NamedTool {
             name: String,
@@ -695,8 +693,8 @@ language = "en""#,
 
     #[test]
     fn integration_config_override_apply_revert() {
-        use seneschal_common::config::Config;
         use crate::config_overrides::OriginalConfigSnapshot;
+        use seneschal_common::config::Config;
 
         let config_toml = r#"
 llm_temperature = 0.95

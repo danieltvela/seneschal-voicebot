@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tracing;
 
-use seneschal_common::tools::Tool;
 use crate::mcp::McpClient;
+use seneschal_common::tools::Tool;
 
 /// Proxy that exposes one MCP tool through the `Tool` trait.
 pub struct McpToolProxy {

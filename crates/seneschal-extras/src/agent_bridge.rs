@@ -5,12 +5,12 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use seneschal_agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
-use seneschal_common::events::ProactiveEvent;
-use seneschal_common::config::HermesSessionViewerMode;
-use seneschal_core::llm::LlmProvider;
-use seneschal_common::tools::{Tool, ToolRegistry};
 use crate::run_agent::{ActiveTask, RunAgentTool};
+use seneschal_agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
+use seneschal_common::config::HermesSessionViewerMode;
+use seneschal_common::events::ProactiveEvent;
+use seneschal_common::tools::{Tool, ToolRegistry};
+use seneschal_core::llm::LlmProvider;
 
 use seneschal_plugins::PluginAgentConfig;
 

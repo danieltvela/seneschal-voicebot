@@ -171,12 +171,12 @@ tower = { version = "0.5", optional = true }
 [features]
 default = ["memory", "tools-core", "search", "mcp", "agents", "plugins", "extras"]
 # TTS backends
-kokoro = ["dep:kokorox"]
-avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio"]
+kokoro = ["dep:kokorox", "seneschal-core/kokoro", "seneschal-common/kokoro"]
+avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio", "seneschal-core/avspeech", "seneschal-common/avspeech"]
 # STT backends
-speaker = ["dep:sherpa-rs"]
-parakeet = ["dep:parakeet-rs"]
-speech = ["dep:speech"]
+speaker = ["dep:sherpa-rs", "seneschal-core/speaker", "seneschal-common/speaker"]
+parakeet = ["dep:parakeet-rs", "seneschal-core/parakeet", "seneschal-common/parakeet"]
+speech = ["dep:speech", "seneschal-core/speech", "seneschal-common/speech"]
 # Workspace crates (opt-in via feature flags)
 memory = ["dep:seneschal-memory"]
 tools-core = ["dep:seneschal-tools-core"]
@@ -200,6 +200,18 @@ path = "src/main.rs"
 [[bin]]
 name = "acp_agent_chat"
 path = "src/bin/acp_agent_chat.rs"
+
+[[example]]
+name = "control_client_example"
+required-features = ["control"]
+
+[[example]]
+name = "test_formula1_search"
+required-features = ["control"]
+
+[[example]]
+name = "test_formula1_demo"
+required-features = ["control"]
 
 [dependencies.hound]
 version = "3"

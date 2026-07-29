@@ -42,10 +42,29 @@ impl ClassifyResult {
 
 /// Default keywords that mark a request as Complex.
 pub const DEFAULT_COMPLEX_KEYWORDS: &[&str] = &[
-    "investiga", "lanza", "ejecuta", "analiza", "crea", "busca",
-    "abre", "calcula", "resume", "resumen", "traduce", "compara",
-    "lee", "escribe", "instala", "configura", "diagnostica",
-    "muestra", "lista", "diseña", "planifica", "busca en", "buscame",
+    "investiga",
+    "lanza",
+    "ejecuta",
+    "analiza",
+    "crea",
+    "busca",
+    "abre",
+    "calcula",
+    "resume",
+    "resumen",
+    "traduce",
+    "compara",
+    "lee",
+    "escribe",
+    "instala",
+    "configura",
+    "diagnostica",
+    "muestra",
+    "lista",
+    "diseña",
+    "planifica",
+    "busca en",
+    "buscame",
 ];
 
 /// Compatibility wrapper: classifies text using the heuristic (Nivel 1) rules.

@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-use seneschal_common::db::{Memory, NewMemory};
 use crate::llm::{LlmProvider, Message};
+use seneschal_common::db::{Memory, NewMemory};
 
 /// Maximum number of memories injected into the system prompt.
 const MAX_MEMORIES_IN_PROMPT: usize = 50;

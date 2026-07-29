@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use seneschal_common::events::PluginSwitchEvent;
 use seneschal_common::tools::Tool;
 use seneschal_plugins::PluginManager;
-use seneschal_common::events::PluginSwitchEvent;
 
 pub struct SwitchPluginTool {
     manager: PluginManager,
