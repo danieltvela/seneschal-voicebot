@@ -275,8 +275,9 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | 7.1 | `517e85d` | `seneschal-search` — search providers |
 | 7.2-7.4 | `1137547` | `seneschal-mcp`, `seneschal-control`, `seneschal-remote` |
 | 7.10+7.8 | `ea82a50` | `seneschal-classifier` + `seneschal-memory` — classifier wrapper + S-DREAM daemon |
+| 7.6 | `d0e69a7` | `seneschal-agents` — multi-agent session management (AcpWriter extracted to common) |
 
-### Crates done (8/13)
+### Crates done (9/13)
 
 | Crate | Files | Dependencies |
 |-------|-------|-------------|
@@ -288,13 +289,13 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | `seneschal-remote` | WebSocket server | common, core, control |
 | `seneschal-classifier` | thin wrapper re-exporting from common | common |
 | `seneschal-memory` | dream (S-DREAM daemon) | common, core |
+| `seneschal-agents` | agents, agent_session, acp_writer | common |
 
-### Pending (5 crates + Phase 8-9)
+### Pending (4 crates + Phase 8-9)
 
 | Step | Crate / Task | Blocker / Notes |
 |------|-------------|-----------------|
-| 7.5 | `seneschal-tui` | Needs `SessionEvent`/`SessionStatus` from agents extracted to common |
-| 7.6 | `seneschal-agents` | `src/agents/*` + `agent_session.rs`; complex OpenCode/Hermes deps |
+| 7.5 | `seneschal-tui` | SessionEvent/SessionStatus now in agents crate; ready to carve out |
 | 7.7 | `seneschal-plugins` | Depends on agents + mcp |
 | 7.9 | `seneschal-tools-core` | 8 essential tools; depends on search, agents, mcp |
 | 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools |
