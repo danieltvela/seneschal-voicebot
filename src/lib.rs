@@ -7,7 +7,6 @@ pub mod i18n;
 pub mod mcp;
 pub mod plugins;
 pub mod screen_capture;
-pub mod search;
 pub mod tools;
 
 pub mod control_client {

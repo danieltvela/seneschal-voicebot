@@ -2,3 +2,14 @@
 name = "seneschal-search"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+seneschal-common = { path = "../seneschal-common" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
+scraper = "0.20"
+anyhow = "1"
+tracing = "0.1"

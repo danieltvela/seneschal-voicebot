@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::Config;
+use seneschal_common::config::Config;
 use crate::search::{exa, searxng, tavily};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};

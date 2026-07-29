@@ -24,7 +24,7 @@ mod plugins;
 // profile → seneschal_core::profile
 mod remote;
 mod screen_capture;
-mod search;
+// search → seneschal_search
 // stt → seneschal_core::stt
 mod tools;
 // tts → seneschal_core::tts
@@ -325,7 +325,7 @@ async fn async_main() -> Result<()> {
     > = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
     // ── Search provider (fast path) ───────────────────────────────────────────
-    if let Some(provider) = crate::search::from_config(&config) {
+    if let Some(provider) = seneschal_search::from_config(&config) {
         let provider = Arc::from(provider);
         tool_registry.register(QuickSearchTool::new(Arc::clone(&provider)));
         info!(target: "seneschal", "quick_search tool enabled (provider={})", provider.name());

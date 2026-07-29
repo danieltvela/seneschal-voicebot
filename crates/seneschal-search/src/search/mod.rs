@@ -69,7 +69,7 @@ pub fn format_results(results: &[SearchResult], max: usize) -> String {
 /// 2. **Tavily** (API key) — low-latency, LLM-optimised.
 /// 3. **Exa** (API key) — semantic search with content extraction.
 /// 4. **SearXNG** (self-hosted) — fallback for self-hosted deployments.
-pub fn from_config(config: &crate::config::Config) -> Option<Box<dyn SearchProvider>> {
+pub fn from_config(config: &seneschal_common::config::Config) -> Option<Box<dyn SearchProvider>> {
     // 1. Brave public search — always available, no key required.
     if config.brave_public_search_enabled {
         let prov = brave::BraveProvider::new();

@@ -3885,6 +3885,7 @@ dependencies = [
  "scraper",
  "seneschal-common",
  "seneschal-core",
+ "seneschal-search",
  "serde",
  "serde_json",
  "sherpa-rs",
@@ -4000,6 +4001,17 @@ version = "0.1.0"
 [[package]]
 name = "seneschal-search"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "reqwest 0.12.28",
+ "scraper",
+ "seneschal-common",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "seneschal-tools-core"

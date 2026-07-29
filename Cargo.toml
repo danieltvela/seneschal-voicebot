@@ -28,6 +28,7 @@ documentation = "https://github.com/danieltvela/seneschal-voicebot"
 # Workspace shared types (Config, Database, Tool trait, i18n)
 seneschal-common = { path = "crates/seneschal-common" }
 seneschal-core = { path = "crates/seneschal-core" }
+seneschal-search = { path = "crates/seneschal-search" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

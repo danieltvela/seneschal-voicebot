@@ -5,7 +5,7 @@ use serde_json::json;
 use tracing::info;
 
 use super::Tool;
-use crate::search::SearchProvider;
+use seneschal_search::SearchProvider;
 
 /// Fast-path web search tool.
 ///
