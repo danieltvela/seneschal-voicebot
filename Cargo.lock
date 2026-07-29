@@ -3892,6 +3892,7 @@ dependencies = [
  "seneschal-plugins",
  "seneschal-remote",
  "seneschal-search",
+ "seneschal-tools-core",
  "seneschal-tui",
  "serde",
  "serde_json",
@@ -4113,6 +4114,21 @@ dependencies = [
 [[package]]
 name = "seneschal-tools-core"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "regex",
+ "reqwest 0.12.28",
+ "seneschal-common",
+ "seneschal-core",
+ "seneschal-search",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "seneschal-tui"
