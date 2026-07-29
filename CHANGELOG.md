@@ -4,6 +4,40 @@ All notable changes to Seneschal will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Modular Workspace Carve-Out
+
+### Breaking Changes
+- **Workspace restructured**: Monolithic `src/` (~25k LOC) split into 13 crates under `crates/`
+- **Feature flags**: All accreted crates are now opt-in via `[features]` in Cargo.toml
+- **Default profile**: `memory`, `tools-core`, `search`, `mcp`, `agents`, `plugins`, `extras`
+- **Meta-feature `full`**: Enables everything (control, remote, tui, classifier)
+
+### Architecture
+- `seneschal-common`: Shared types (Config, Database, Tool trait, Classifier, i18n, AcpWriter)
+- `seneschal-core`: Voice pipeline (audio, stt, llm, tts, pipeline, memory, profile)
+- `seneschal-search`: Search providers (Brave, Tavily, Exa, SearXNG)
+- `seneschal-mcp`: MCP client (JSON-RPC 2.0) + McpToolProxy
+- `seneschal-control`: HTTP REST + SSE Control API
+- `seneschal-remote`: WebSocket server (Apple Watch client)
+- `seneschal-classifier`: Intent classifier (thin wrapper)
+- `seneschal-memory`: S-DREAM cold-path memory consolidation daemon
+- `seneschal-agents`: Multi-agent session management + ACP protocol
+- `seneschal-tui`: Terminal UI (status-only)
+- `seneschal-plugins`: Plugin lifecycle management
+- `seneschal-tools-core`: 10 essential LLM tools (shell, clipboard, file, search, etc.)
+- `seneschal-extras`: Advanced tools, daemons, visual awareness, device monitor
+
+### Removed
+- `classifier/embedding.rs`, `classifier/logistic.rs` (empty stubs)
+- `tts/piper.rs` (dead code, not in mod.rs)
+- `bin/bench_pipeline.rs.bak` (stale backup)
+
+### Infrastructure
+- `make qa` updated: uses `--features full` for test-ci, build, and e2e stages
+- Feature flags propagate correctly to workspace crates (avspeech, kokoro, etc.)
+- MockTts available without `#[cfg(test)]` in seneschal-core for cross-crate testing
+- QA pipeline verified: 6/6 stages green (fmt, lint, test, test-ci, test-e2e, build)
+
 ## v0.1.0-alpha.7 (2026-07-22)
 
 ### Features

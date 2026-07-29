@@ -145,4 +145,5 @@ seneschal-voicebot/                  # Cargo workspace root
 | 2026-07-28 | Keep extended vision with strict boundaries | Voice nucleus + agents + plugins + MCP are all useful; separate into feature-flag-gated crates. |
 | 2026-07-28 | `seneschal-core` as leaf crate | Prevents circular dependency hell; core exposes types that other crates consume via their own `Cargo.toml` dep. |
 | 2026-07-28 | `tools-core` separate from `tools/mod.rs` | Only essential tools (shell, clipboard, time, read_file, screenshot, open_app, quick_search). Rest stay with their respective crates or grab-bag extras. |
+| 2026-07-29 | Carve-out complete — 13/13 crates | All modules moved to workspace crates. QA pipeline green. See `CHANGELOG.md`: [Unreleased] — Modular Workspace Carve-Out. |
 | 2026-07-28 | Dead code removed before crate moves (Phase 6) | Clean removal avoids `git mv` noise on files we know are unused. |
