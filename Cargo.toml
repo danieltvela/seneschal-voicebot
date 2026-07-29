@@ -25,19 +25,21 @@ homepage = "https://seneschal.veladan.org/"
 documentation = "https://github.com/danieltvela/seneschal-voicebot"
 
 [dependencies]
-# Workspace shared types (Config, Database, Tool trait, i18n)
+# Always-present workspace crates (core voice pipeline)
 seneschal-common = { path = "crates/seneschal-common" }
 seneschal-core = { path = "crates/seneschal-core" }
-seneschal-search = { path = "crates/seneschal-search" }
-seneschal-mcp = { path = "crates/seneschal-mcp" }
-seneschal-control = { path = "crates/seneschal-control" }
-seneschal-remote = { path = "crates/seneschal-remote" }
-seneschal-memory = { path = "crates/seneschal-memory" }
-seneschal-agents = { path = "crates/seneschal-agents" }
-seneschal-tui = { path = "crates/seneschal-tui" }
-seneschal-plugins = { path = "crates/seneschal-plugins" }
-seneschal-tools-core = { path = "crates/seneschal-tools-core" }
-seneschal-extras = { path = "crates/seneschal-extras" }
+# Opt-in workspace crates (each gated by a feature flag)
+seneschal-search = { path = "crates/seneschal-search", optional = true }
+seneschal-mcp = { path = "crates/seneschal-mcp", optional = true }
+seneschal-control = { path = "crates/seneschal-control", optional = true }
+seneschal-remote = { path = "crates/seneschal-remote", optional = true }
+seneschal-memory = { path = "crates/seneschal-memory", optional = true }
+seneschal-agents = { path = "crates/seneschal-agents", optional = true }
+seneschal-tui = { path = "crates/seneschal-tui", optional = true }
+seneschal-plugins = { path = "crates/seneschal-plugins", optional = true }
+seneschal-tools-core = { path = "crates/seneschal-tools-core", optional = true }
+seneschal-extras = { path = "crates/seneschal-extras", optional = true }
+seneschal-classifier = { path = "crates/seneschal-classifier", optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -167,15 +169,29 @@ axum = { version = "0.8", features = ["ws"], optional = true }
 tower = { version = "0.5", optional = true }
 
 [features]
+default = ["memory", "tools-core", "search", "mcp", "agents", "plugins", "extras"]
+# TTS backends
 kokoro = ["dep:kokorox"]
+avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio"]
+# STT backends
 speaker = ["dep:sherpa-rs"]
 parakeet = ["dep:parakeet-rs"]
 speech = ["dep:speech"]
-avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio"]
-tui = ["dep:ratatui", "dep:crossterm"]
-remote = ["dep:axum", "dep:tower"]
-control = ["dep:axum", "dep:tower"]
-# Placeholder — ort/tokenizers/ndarray added when ONNX Runtime is available.
+# Workspace crates (opt-in via feature flags)
+memory = ["dep:seneschal-memory"]
+tools-core = ["dep:seneschal-tools-core"]
+search = ["dep:seneschal-search"]
+mcp = ["dep:seneschal-mcp"]
+agents = ["dep:seneschal-agents"]
+classifier = ["dep:seneschal-classifier"]
+# Higher-level features (imply their dependencies)
+plugins = ["dep:seneschal-plugins", "agents", "mcp"]
+control = ["dep:seneschal-control", "dep:axum", "dep:tower"]
+remote = ["dep:seneschal-remote", "control"]
+tui = ["dep:seneschal-tui", "dep:ratatui", "dep:crossterm", "agents"]
+extras = ["dep:seneschal-extras", "agents", "plugins", "search", "mcp"]
+# Meta-feature: enable everything
+full = ["memory", "tools-core", "search", "mcp", "agents", "classifier", "plugins", "control", "remote", "tui", "extras"]
 
 [[bin]]
 name = "seneschal"

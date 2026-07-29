@@ -106,8 +106,8 @@ stage_test() {
 }
 
 stage_test_ci() {
-    banner "Stage: test-ci  (cargo test --features tui,remote,control)"
-    if (cd "$PROJECT_ROOT" && $CARGO test --features "tui,remote,control" --quiet 2>&1 \
+    banner "Stage: test-ci  (cargo test --features full)"
+    if (cd "$PROJECT_ROOT" && $CARGO test --features "full" --quiet 2>&1 \
             | tail -n 50); then
         stage_ok "test-ci"
     else
@@ -118,7 +118,7 @@ stage_test_ci() {
 
 stage_test_e2e() {
     banner "Stage: test-e2e  (cargo test e2e -- --ignored, wiremock-based)"
-    if (cd "$PROJECT_ROOT" && $CARGO test --features "tui,remote,control" --quiet e2e -- --ignored 2>&1 | tail -n 80); then
+    if (cd "$PROJECT_ROOT" && $CARGO test --features "full" --quiet e2e -- --ignored 2>&1 | tail -n 80); then
         stage_ok "test-e2e"
     else
         stage_fail "test-e2e" "e2e tests failed"
@@ -155,7 +155,7 @@ stage_test_llm() {
 }
 
 stage_build() {
-    _build_features="tui,remote,control"
+    _build_features="full"
     if [ "$(uname -s)" = "Darwin" ]; then
         _build_features="$_build_features,speech,avspeech"
     fi

@@ -9,6 +9,7 @@ pub mod plugins;
 // screen_capture → seneschal_extras::screen_capture
 pub mod tools;
 
+#[cfg(feature = "control")]
 pub mod control_client {
     pub use seneschal_control::control::broadcast::ControlEvent;
     pub use seneschal_control::control::client::{

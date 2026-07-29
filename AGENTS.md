@@ -37,11 +37,11 @@ QA_SKIP=audit,coverage make qa
 | `fmt` | `cargo fmt --check` | code is unformatted |
 | `lint` | `cargo clippy --all-targets --no-deps -- -D warnings` | any clippy warning |
 | `test` | `cargo test` | any default-features test fails |
-| `test-ci` | `cargo test --features tui,remote,control` | any feature test fails |
+| `test-ci` | `cargo test --features full` | any feature test fails |
 | `test-e2e` | `cargo test e2e -- --ignored` | wiremock e2e harness fails |
 | `test-stt` | `cargo test -- --ignored stt` | real-Whisper STT fails (skipped if no model) |
 | `test-llm` | `cargo test -- --ignored llm` | real-LLM test fails (skipped if no LLM server) |
-| `build` | `cargo build --features tui,remote,control` | release/feature build breaks |
+| `build` | `cargo build --features full` | release/feature build breaks |
 
 ---
 

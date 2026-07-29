@@ -3884,6 +3884,7 @@ dependencies = [
  "rubato",
  "scraper",
  "seneschal-agents",
+ "seneschal-classifier",
  "seneschal-common",
  "seneschal-control",
  "seneschal-core",
