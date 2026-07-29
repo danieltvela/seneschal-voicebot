@@ -67,5 +67,10 @@ parakeet = ["dep:parakeet-rs"]
 speech = ["dep:speech"]
 avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio"]
 
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3.27.0"
+temp-env = "0.3"
+
 [patch.crates-io]
 kokorox = { path = "../../patches/kokorox" }
