@@ -274,8 +274,9 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | 6 | `3d07c0b` | Dead code removed (piper, classifier stubs, .bak) |
 | 7.1 | `517e85d` | `seneschal-search` — search providers |
 | 7.2-7.4 | `1137547` | `seneschal-mcp`, `seneschal-control`, `seneschal-remote` |
+| 7.10+7.8 | `ea82a50` | `seneschal-classifier` + `seneschal-memory` — classifier wrapper + S-DREAM daemon |
 
-### Crates done (6/13)
+### Crates done (8/13)
 
 | Crate | Files | Dependencies |
 |-------|-------|-------------|
@@ -285,17 +286,17 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | `seneschal-mcp` | mcp client (JSON-RPC 2.0) | common |
 | `seneschal-control` | HTTP REST + SSE API | common, core |
 | `seneschal-remote` | WebSocket server | common, core, control |
+| `seneschal-classifier` | thin wrapper re-exporting from common | common |
+| `seneschal-memory` | dream (S-DREAM daemon) | common, core |
 
-### Pending (7 crates + Phase 8-9)
+### Pending (5 crates + Phase 8-9)
 
 | Step | Crate / Task | Blocker / Notes |
 |------|-------------|-----------------|
 | 7.5 | `seneschal-tui` | Needs `SessionEvent`/`SessionStatus` from agents extracted to common |
 | 7.6 | `seneschal-agents` | `src/agents/*` + `agent_session.rs`; complex OpenCode/Hermes deps |
 | 7.7 | `seneschal-plugins` | Depends on agents + mcp |
-| 7.8 | `seneschal-memory` | `src/db/` already in common; `dream/` uses core + secondary LLM |
 | 7.9 | `seneschal-tools-core` | 8 essential tools; depends on search, agents, mcp |
-| 7.10 | `seneschal-classifier` | Already fully in common; just needs thin wrapper crate |
 | 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools |
 | 8 | Feature flags | `Cargo.toml` [features], `main.rs` conditional compilation |
 | 9 | QA final | `make qa-full`, CHANGELOG |
@@ -305,8 +306,8 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 1. Read this file (`.opencode/tasks/refactor-core-carveout.md`)
 2. Read `doc/CARVEOUT-DECISIONS.md` and `doc/CARVEOUT-LAYOUT.md`
 3. `cargo build --features tui,remote,control` — should be green
-4. `cargo test --features tui,remote,control` — should be 715 passed, 0 failed
-5. Continue from Step 7.5 (seneschal-tui) or skip to easier crates (7.9 classifier, 7.10 extras)
+4. `cargo test --features tui,remote,control` — should be 695 passed, 0 failed
+5. Continue from Step 7.6 (seneschal-agents) — unblocks tui and plugins. Or do 7.9 (tools-core) or 7.11 (extras) if feeling adventurous.
 6. Key pattern for each crate:
    a. `mkdir -p crates/<name>/src/<module>` + `git mv src/<module>/*` (preserve directory structure)
    b. Write `Cargo.toml` with proper deps + `lib.rs` with `pub mod <module>;`
