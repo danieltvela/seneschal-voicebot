@@ -299,13 +299,10 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | `seneschal-tools-core` | 10 essential tools | common, core, search |
 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, analysis, agent_bridge + 8 tools | common, core, agents, plugins, search, mcp |
 
-### Remaining: Phase 8-9 (feature flags + QA)
+### Remaining: Phase 9 (QA final + doc cleanup)
 
 | Step | Task | Notes |
 |------|------|-------|
-| 8.1 | Feature flags in Cargo.toml | cada crate acretado opt-in via [features] |
-| 8.2 | Conditional compilation in main.rs | #[cfg(feature=...)] para cada crate |
-| 8.3 | Update Makefile + AGENTS.md | QA targets con nuevos feature sets |
 | 9.1 | make qa-full | end-to-end validation |
 | 9.2 | CHANGELOG.md | breaking change de arch |
 | 9.3 | Update CARVEOUT-DECISIONS.md | marcar done |
