@@ -192,7 +192,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
 
     // Task: TTS audio → WS binary frames.
     let play_cancel_sink = Arc::clone(&state.play_cancel);
-    let ws_write_events = Arc::clone(&ws_write);
+    let _ws_write_events = Arc::clone(&ws_write);
     let ws_write_sink = ws_write;
     let sink_handle = tokio::spawn(async move {
         // We need to send binary frames from tts_rx through ws_write_sink.

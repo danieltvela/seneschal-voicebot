@@ -104,6 +104,7 @@ impl AcpSessionView {
     }
 
     /// Backward-compatible helper used by older call sites/tests.
+    #[allow(dead_code)]
     pub fn push_line(&mut self, line: impl Into<String>) {
         self.push_entry(AcpEntryKind::Agent, line);
     }
@@ -236,6 +237,7 @@ pub fn state_style(state: AcpSessionState) -> (char, ratatui::style::Color) {
 }
 
 /// Layout helper: ACP column width percent when sessions exist.
+#[allow(dead_code)]
 pub fn acp_column_percent(has_sessions: bool) -> Option<u16> {
     if has_sessions { Some(42) } else { None }
 }

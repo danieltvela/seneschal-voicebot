@@ -12,6 +12,7 @@ kokoro = []
 parakeet = []
 speech = []
 speaker = []
+classifier-embedding = []
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

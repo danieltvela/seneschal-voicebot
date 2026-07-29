@@ -70,7 +70,7 @@ pub async fn llm_task(
         };
 
         // Decode the incoming frame into (text, tool_continuation, is_text_input, is_system_notification).
-        let (text, tool_continuation, is_text_input, is_system_notification) = match frame {
+        let (text, tool_continuation, _is_text_input, is_system_notification) = match frame {
             PipelineFrame::TranscriptReady { text, .. } => (text, false, false, false),
             PipelineFrame::TextInput { text } => (text, false, true, false),
             PipelineFrame::SystemNotification { text } => (text, false, false, true),
@@ -209,7 +209,7 @@ pub async fn llm_task(
         'pipeline: {
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
                 // ── Classify intent before LLM call ─────────────────────────────
-                let (request_options, tools_enabled, result) = if iter == 0 {
+                let (request_options, tools_enabled, _result) = if iter == 0 {
                     let is_complex_turn = tool_continuation || is_system_notification;
                     let res = if is_complex_turn {
                         ClassifyResult {

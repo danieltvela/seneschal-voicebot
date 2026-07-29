@@ -17,6 +17,7 @@ const MAX_INPUT_ROWS: u16 = 4;
 ///
 /// Returns `(history, streaming, prompt)`. Values sum to `main_h`.
 /// Input and status are laid out outside this function (full width).
+#[allow(dead_code)]
 fn compute_layout_heights(
     total_h: u16,
     input_h: u16,
@@ -335,6 +336,7 @@ fn render_splash(text: &str, width: usize) -> Vec<Line<'static>> {
 }
 
 /// Build display lines for streaming buffer.
+#[allow(dead_code)]
 fn render_streaming_lines(buffer: &str, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
         Span::raw("┌ "),

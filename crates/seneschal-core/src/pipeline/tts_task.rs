@@ -69,7 +69,7 @@ pub async fn tts_task(
                         continue;
                     }
                     _ = playback_done.notified() => {
-                        if let Some(mut h) = play_handle.take() {
+                        if let Some(h) = play_handle.take() {
                             match h.await {
                                 Ok(Ok(())) => {}
                                 Ok(Err(e)) => error!(target: "audio", "Playback error: {}", e),

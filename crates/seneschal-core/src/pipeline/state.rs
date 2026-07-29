@@ -11,6 +11,12 @@ pub struct PipelineEvents {
     pub llm_post_finished: Arc<Notify>,
 }
 
+impl Default for PipelineEvents {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipelineEvents {
     pub fn new() -> Self {
         let (barge_in_tx, _) = broadcast::channel(16);

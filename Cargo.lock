@@ -3930,6 +3930,7 @@ dependencies = [
  "seneschal-common",
  "serde",
  "serde_json",
+ "temp-env",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -3960,6 +3961,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml",
@@ -4016,6 +4018,8 @@ dependencies = [
  "sherpa-rs",
  "speech",
  "sqlx",
+ "temp-env",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -4024,6 +4028,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "whisper-cpp-plus",
+ "wiremock",
 ]
 
 [[package]]
@@ -4067,8 +4072,10 @@ dependencies = [
  "seneschal-common",
  "serde",
  "serde_json",
+ "temp-env",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -4137,6 +4144,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

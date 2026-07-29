@@ -16,3 +16,6 @@ anyhow = "1"
 futures-util = "0.3"
 rubato = "0.15"
 async-channel = "2"
+
+[features]
+control = []

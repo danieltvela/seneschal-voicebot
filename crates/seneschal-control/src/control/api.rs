@@ -49,7 +49,7 @@ async fn sse_events(
     State(state): State<Arc<ControlState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.broadcast.subscribe();
-    let mut total_bytes_sent = 0usize;
+    let total_bytes_sent = 0usize;
     let stream = futures_util::stream::unfold(
         (rx, total_bytes_sent),
         |(mut rx, mut total_bytes)| async move {

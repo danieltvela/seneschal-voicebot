@@ -1,15 +1,13 @@
-use std::fs::File;
-use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+// Imports used only in test code (AcpWriter was extracted to common).
+// Suppress warnings in non-test builds.
+#![cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, OnceLock, RwLock};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -18,11 +16,14 @@ use seneschal_agents::{
     AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, SessionEvent,
     SessionEventTx,
 };
-use seneschal_common::config::{Config, HermesSessionViewerMode};
+use seneschal_common::config::HermesSessionViewerMode;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::Tool;
 
 use seneschal_core::llm::{LlmProvider, Message};
+
+// Re-imported for test code (AcpWriter was extracted to common)
+use seneschal_common::acp_writer::{jsonrpc_notification, jsonrpc_request, parse_jsonrpc};
 
 // ── History formatting ────────────────────────────────────────────────────────
 
@@ -129,7 +130,6 @@ fn strip_hermes_cli_noise(raw: &str) -> String {
 }
 
 // ── JSON-RPC 2.0 helpers (now in seneschal-common) ──────────────────────────
-use seneschal_common::acp_writer::{jsonrpc_notification, jsonrpc_request, parse_jsonrpc};
 
 // ── Result synthesis ─────────────────────────────────────────────────────────
 
