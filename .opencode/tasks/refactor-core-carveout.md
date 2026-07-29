@@ -279,29 +279,36 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | 7.5 | `83e53c1` | `seneschal-tui` — terminal UI (ConversationMode extracted to common) |
 | 7.7 | `c7f8a86` | `seneschal-plugins` — plugin lifecycle (McpToolProxy extracted to mcp) |
 | 7.9 | `c009b3b` | `seneschal-tools-core` — 10 essential tools |
+| 7.11 | `813ff09` | `seneschal-extras` — daemon, eyes, screen_capture, device_monitor, analysis, agent_bridge, 8 remaining tools |
 
-### Crates done (12/13)
+### Crates done (13/13) 🎉
 
 | Crate | Files | Dependencies |
 |-------|-------|-------------|
-| `seneschal-common` | config, db, tools, events, classifier, i18n | leaf |
+| `seneschal-common` | config, db, tools, events, classifier, i18n, acp_writer | leaf |
 | `seneschal-core` | audio, stt, llm, tts, pipeline, memory, profile | common |
 | `seneschal-search` | brave, tavily, exa, searxng | common |
-| `seneschal-mcp` | mcp client (JSON-RPC 2.0) | common |
+| `seneschal-mcp` | mcp client + McpToolProxy | common |
 | `seneschal-control` | HTTP REST + SSE API | common, core |
 | `seneschal-remote` | WebSocket server | common, core, control |
 | `seneschal-classifier` | thin wrapper re-exporting from common | common |
 | `seneschal-memory` | dream (S-DREAM daemon) | common, core |
 | `seneschal-agents` | agents, agent_session, acp_writer | common |
 | `seneschal-tui` | tui (status-only) | common, agents, core |
-| `seneschal-plugins` | plugins (5/6 files; agent_bridge stays in src/) | common, agents, mcp |
-| `seneschal-tools-core` | apple_events, clipboard, current_time, noop, open_app, open_terminal, quick_search, read_file, run_shell, web_search | common, core, search |
+| `seneschal-plugins` | plugin lifecycle (McpToolProxy extracted to mcp) | common, agents, mcp |
+| `seneschal-tools-core` | 10 essential tools | common, core, search |
+| `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, analysis, agent_bridge + 8 tools | common, core, agents, plugins, search, mcp |
 
-### Pending (1 crate + Phase 8-9)
+### Remaining: Phase 8-9 (feature flags + QA)
 
-| Step | Crate / Task | Blocker / Notes |
-|------|-------------|-----------------|
-| 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools (take_screenshot, deep_research, run_agent, recover_historical_context, switch_plugin, prompt_build, conversation_mode, subtask) + agent_bridge.rs |
+| Step | Task | Notes |
+|------|------|-------|
+| 8.1 | Feature flags in Cargo.toml | cada crate acretado opt-in via [features] |
+| 8.2 | Conditional compilation in main.rs | #[cfg(feature=...)] para cada crate |
+| 8.3 | Update Makefile + AGENTS.md | QA targets con nuevos feature sets |
+| 9.1 | make qa-full | end-to-end validation |
+| 9.2 | CHANGELOG.md | breaking change de arch |
+| 9.3 | Update CARVEOUT-DECISIONS.md | marcar done |
 | 8 | Feature flags | `Cargo.toml` [features], `main.rs` conditional compilation |
 | 9 | QA final | `make qa-full`, CHANGELOG |
 
