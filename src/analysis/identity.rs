@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
 use super::{ContextEntry, ContextLens};
-use crate::audio::speaker::{SpeakerVerdict, SpeakerVerifier};
+use seneschal_core::audio::speaker::{SpeakerVerdict, SpeakerVerifier};
 
 /// How long an identity entry stays fresh in the ContextLens.
 const IDENTITY_TTL: Duration = Duration::from_secs(120);

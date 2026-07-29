@@ -4,9 +4,9 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 use super::broadcast::ControlBroadcast;
 use crate::db::Database;
-use crate::llm::LlmSession;
-use crate::pipeline::frames::PipelineFrame;
-use crate::pipeline::fsm::PipelineState;
+use seneschal_core::llm::LlmSession;
+use seneschal_core::pipeline::frames::PipelineFrame;
+use seneschal_core::pipeline::fsm::PipelineState;
 
 pub struct ControlState {
     pub broadcast: ControlBroadcast,

@@ -25,9 +25,7 @@ pub enum TtsEngine {
     #[cfg(feature = "kokoro")]
     Kokoro(KokoroTts),
     /// Test-only variant: captures synthesized text instead of producing audio.
-    /// Returns a single silent sample so AudioOutput.play_blocking() returns instantly.
-    #[cfg(test)]
-    Mock(mock_tts::MockTts),
+    Mock(self::mock_tts::MockTts),
 }
 
 impl TtsEngine {
@@ -60,10 +58,7 @@ impl TtsEngine {
     }
 }
 
-/// Test-only TTS backend. Captures sentence text to a shared Vec instead of
-/// synthesizing audio. Returns a single silent sample so AudioOutput returns
-/// instantly without requiring real audio synthesis.
-#[cfg(test)]
+/// Test-only TTS backend.
 pub mod mock_tts {
     use std::sync::{Arc, Mutex};
 

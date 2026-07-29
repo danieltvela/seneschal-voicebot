@@ -1,4 +1,2 @@
-pub mod database;
-
-#[allow(unused_imports)]
-pub use database::{Database, Memory, NewMemory, SearchResult};
+// Re-export from seneschal-common.
+pub use seneschal_common::db::*;

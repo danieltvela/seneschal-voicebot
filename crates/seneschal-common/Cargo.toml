@@ -3,6 +3,16 @@ name = "seneschal-common"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+control = []
+remote = []
+tui = []
+avspeech = []
+kokoro = []
+parakeet = []
+speech = []
+speaker = []
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"

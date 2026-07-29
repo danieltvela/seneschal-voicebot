@@ -6,7 +6,7 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use super::Tool;
-use crate::llm::{LlmProvider, Message};
+use seneschal_core::llm::{LlmProvider, Message};
 
 /// Hard timeout for SearXNG HTTP requests.
 const SEARCH_TIMEOUT_SECS: u64 = 10;

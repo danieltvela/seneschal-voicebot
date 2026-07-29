@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::broadcast::ControlEvent;
 use super::state::ControlState;
-use crate::pipeline::frames::PipelineFrame;
+use seneschal_core::pipeline::frames::PipelineFrame;
 
 const MAX_SSE_BUFFER_SIZE: usize = 1024 * 1024;
 

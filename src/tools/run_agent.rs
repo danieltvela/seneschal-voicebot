@@ -16,12 +16,13 @@ use uuid::Uuid;
 use super::Tool;
 use crate::agent_session::VisibleSessionManager;
 use crate::agents::{
-    AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, ProactiveEvent,
+    AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport,
     SessionEvent, SessionEventTx,
 };
+use seneschal_common::events::ProactiveEvent;
 use crate::config::{Config, HermesSessionViewerMode};
 
-use crate::llm::{LlmProvider, Message};
+use seneschal_core::llm::{LlmProvider, Message};
 
 // ── History formatting ────────────────────────────────────────────────────────
 

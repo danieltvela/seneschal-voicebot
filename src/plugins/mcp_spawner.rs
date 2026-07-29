@@ -3,10 +3,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::agents::ProactiveEvent;
+use seneschal_common::events::ProactiveEvent;
 use crate::mcp::{ForwardingNotificationHandler, McpClient, McpNotificationHandler};
 use crate::plugins::manifest::McpServerConfig;
-use crate::tools::ToolRegistry;
+use seneschal_common::tools::ToolRegistry;
 use crate::tools::mcp_tool::McpToolProxy;
 
 /// Tracks spawned MCP clients and their registered tool names for cleanup.

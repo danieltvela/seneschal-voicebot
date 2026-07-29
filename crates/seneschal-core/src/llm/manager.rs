@@ -3,7 +3,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::config::Config;
+use seneschal_common::config::Config;
 
 const MAX_RESTARTS: u32 = 3;
 const READY_POLL_INTERVAL_MS: u64 = 1000;

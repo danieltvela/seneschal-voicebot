@@ -5,9 +5,10 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport, ProactiveEvent};
+use crate::agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
+use seneschal_common::events::ProactiveEvent;
 use crate::config::HermesSessionViewerMode;
-use crate::llm::LlmProvider;
+use seneschal_core::llm::LlmProvider;
 use crate::tools::{ActiveTask, RunAgentTool, Tool, ToolRegistry};
 
 use super::manifest::PluginAgentConfig;

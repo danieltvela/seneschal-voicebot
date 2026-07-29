@@ -12,11 +12,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::agents::ProactiveEvent;
+use seneschal_common::events::ProactiveEvent;
 use crate::agents::config::AgentConfig;
 use crate::agents::session_manager::AcpSessionManager;
 
-use crate::llm::{LlmProvider, LlmSession, Message};
+use seneschal_core::llm::{LlmProvider, LlmSession, Message};
 
 /// Sentinel the LLM must return when it decides there is nothing to say.
 const NOTHING: &str = "NOTHING";

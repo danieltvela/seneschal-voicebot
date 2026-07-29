@@ -3,7 +3,7 @@ use rubato::{FftFixedIn, Resampler};
 use tracing::{debug, info};
 
 use crate::audio::audio_capture::AudioChunk;
-use crate::config::Config;
+use seneschal_common::config::Config;
 
 /// Transformed audio ready to be sent to services
 #[derive(Debug, Clone)]

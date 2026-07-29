@@ -2,27 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::tools::Tool;
+use seneschal_common::tools::Tool;
 
-/// Whether prompt-build mode is active and what the current prompt text is.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PromptBuildState {
-    Inactive,
-    Active { prompt: String },
-}
-
-impl PromptBuildState {
-    pub fn is_active(&self) -> bool {
-        matches!(self, PromptBuildState::Active { .. })
-    }
-
-    pub fn prompt_text(&self) -> Option<&str> {
-        match self {
-            PromptBuildState::Active { prompt } => Some(prompt),
-            _ => None,
-        }
-    }
-}
+pub use seneschal_common::tools::PromptBuildState;
 
 /// Tool that lets the LLM activate, update, and deactivate prompt-build mode.
 pub struct SetPromptBuildTool {

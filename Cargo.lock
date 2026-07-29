@@ -3884,6 +3884,7 @@ dependencies = [
  "rubato",
  "scraper",
  "seneschal-common",
+ "seneschal-core",
  "serde",
  "serde_json",
  "sherpa-rs",

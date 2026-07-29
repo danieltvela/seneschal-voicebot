@@ -28,15 +28,15 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::agents::ProactiveEvent;
-use crate::audio::output::AudioOutput;
+use seneschal_common::events::ProactiveEvent;
+use seneschal_core::audio::output::AudioOutput;
 use crate::config::Config;
 use crate::db::Database;
-use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
-use crate::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
-use crate::tools::ToolRegistry;
+use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
+use seneschal_core::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
+use seneschal_common::tools::ToolRegistry;
 use crate::tools::conversation_mode::ConversationMode;
-use crate::tts::{TtsEngine, mock_tts::MockTts};
+use seneschal_core::tts::{TtsEngine, mock_tts::MockTts};
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────
 
@@ -188,10 +188,10 @@ impl E2eHarness {
         let state_tx = Arc::clone(&self.state_tx);
         let state_rx = self.state_rx.clone();
         let (sentences_tx, sentences_rx) =
-            tokio::sync::mpsc::channel::<crate::pipeline::PipelineFrame>(64);
-        let (llm_tx, llm_rx) = tokio::sync::mpsc::channel::<crate::pipeline::PipelineFrame>(256);
+            tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(64);
+        let (llm_tx, llm_rx) = tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(256);
         let (transcript_tx, transcript_rx) =
-            tokio::sync::mpsc::channel::<crate::pipeline::PipelineFrame>(16);
+            tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(16);
 
         let events = Arc::clone(&self.events);
         let cancel = Arc::clone(&self.play_cancel);
@@ -211,14 +211,10 @@ impl E2eHarness {
             let history_c = Arc::clone(&self.shared_history);
             let turn_c = Arc::clone(&turn_commit);
             let sid = self.session_id;
-            let filler_c = Arc::new(crate::audio::filler::FillerController::new(
+            let filler_c = Arc::new(seneschal_core::audio::filler::FillerController::new(
                 Arc::clone(&self.audio_output),
                 sample_rate,
             ));
-            #[cfg(feature = "tui")]
-            let tui_tx_c = tokio::sync::mpsc::unbounded_channel::<crate::tui::events::TuiEvent>().0;
-            #[cfg(feature = "control")]
-            let control_broadcast_c = crate::control::broadcast::ControlBroadcast::new(16);
             tokio::spawn(async move {
                 let c = crate::classifier::ClassifierPipeline::new(0.6);
                 llm_task(
@@ -244,10 +240,6 @@ impl E2eHarness {
                     false, // llm_thinking_simple
                     true,  // llm_thinking_complex
                     false, // llm_tools_strict
-                    #[cfg(feature = "tui")]
-                    tui_tx_c,
-                    #[cfg(feature = "control")]
-                    control_broadcast_c,
                 )
                 .await;
             })
@@ -273,12 +265,6 @@ impl E2eHarness {
             let out_c = Arc::clone(&self.audio_output);
             let cancel_c = Arc::clone(&cancel);
             let muted_c = Arc::clone(&tts_muted);
-            #[cfg(feature = "tui")]
-            let tui_tx_c = tokio::sync::mpsc::unbounded_channel::<crate::tui::events::TuiEvent>().0;
-            #[cfg(feature = "remote")]
-            let remote_tts_tx_c = Arc::new(tokio::sync::Mutex::new(None));
-            #[cfg(feature = "control")]
-            let control_broadcast_c = crate::control::broadcast::ControlBroadcast::new(16);
             tokio::spawn(async move {
                 tts_task(
                     events_c,
@@ -290,12 +276,6 @@ impl E2eHarness {
                     sample_rate,
                     cancel_c,
                     muted_c,
-                    #[cfg(feature = "tui")]
-                    tui_tx_c,
-                    #[cfg(feature = "remote")]
-                    remote_tts_tx_c,
-                    #[cfg(feature = "control")]
-                    control_broadcast_c,
                 )
                 .await
             })
@@ -303,7 +283,7 @@ impl E2eHarness {
 
         // Send transcript.
         transcript_tx
-            .send(crate::pipeline::PipelineFrame::TranscriptReady {
+            .send(seneschal_core::pipeline::PipelineFrame::TranscriptReady {
                 utterance_id: 0,
                 text: transcript.to_string(),
             })
@@ -522,7 +502,7 @@ impl E2eHarness {
     /// Pause the pipeline by setting state to Paused via the watch channel.
     pub fn pause_pipeline(&self) {
         let _ = self.state_tx.send(PipelineState::Paused {
-            reason: crate::pipeline::PauseReason::Consolidation,
+            reason: seneschal_core::pipeline::PauseReason::Consolidation,
         });
     }
 
@@ -874,7 +854,7 @@ async fn barge_in_clean_state_reset() {
 #[tokio::test]
 #[ignore = "requires Whisper + VAD models"]
 async fn stt_transcribes_wav_file() {
-    use crate::stt::{WhisperSTTVADConfig, WhisperSttProvider};
+    use seneschal_core::stt::{WhisperSTTVADConfig, WhisperSttProvider};
 
     let model_path = std::env::var("WHISPER_MODEL")
         .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string());
@@ -922,7 +902,7 @@ async fn stt_transcribes_wav_file() {
 #[tokio::test]
 #[ignore = "requires Whisper + VAD models"]
 async fn full_pipeline_wav_to_db() {
-    use crate::stt::{WhisperSTTVADConfig, WhisperSttProvider};
+    use seneschal_core::stt::{WhisperSTTVADConfig, WhisperSttProvider};
 
     let model_path = std::env::var("WHISPER_MODEL")
         .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string());

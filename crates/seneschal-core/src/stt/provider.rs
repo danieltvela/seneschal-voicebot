@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::config::Config;
+use seneschal_common::config::Config;
 
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;

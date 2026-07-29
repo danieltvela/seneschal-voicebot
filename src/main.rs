@@ -6,10 +6,9 @@
 mod agent_session;
 mod agents;
 mod analysis;
-mod audio;
+// audio → seneschal_core::audio
 mod classifier;
 mod config;
-#[cfg(feature = "control")]
 mod control;
 mod daemon;
 mod db;
@@ -17,20 +16,18 @@ mod device_monitor;
 mod dream;
 mod eyes;
 mod i18n;
-mod llm;
+// llm → seneschal_core::llm
 mod mcp;
-mod memory;
-mod pipeline;
+// memory → seneschal_core::memory
+// pipeline → seneschal_core::pipeline
 mod plugins;
-mod profile;
-#[cfg(feature = "remote")]
+// profile → seneschal_core::profile
 mod remote;
 mod screen_capture;
 mod search;
-mod stt;
+// stt → seneschal_core::stt
 mod tools;
-mod tts;
-#[cfg(feature = "tui")]
+// tts → seneschal_core::tts
 mod tui;
 
 use anyhow::{Context, Result};
@@ -42,24 +39,26 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
+use seneschal_common::tools::PromptBuildState;
 
 use crate::agent_session::VisibleSessionManager;
 #[cfg(feature = "tui")]
 use crate::agents::create_session_event_channel;
-use crate::agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport, ProactiveEvent};
+use crate::agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
+use seneschal_common::events::ProactiveEvent;
 use crate::analysis::ContextLens;
 use crate::analysis::identity::IdentityAnalyzer;
-use crate::audio::ambient_buffer::AmbientBuffer;
-use crate::audio::audio_capture::{AudioCapture, AudioChunk};
-use crate::audio::audio_transform::resample_nearest;
-use crate::audio::buffer::AudioBuffer;
-use crate::audio::output::AudioOutput;
-use crate::audio::speaker::SpeakerVerifier;
+use seneschal_core::audio::ambient_buffer::AmbientBuffer;
+use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
+use seneschal_core::audio::audio_transform::resample_nearest;
+use seneschal_core::audio::buffer::AudioBuffer;
+use seneschal_core::audio::output::AudioOutput;
+use seneschal_core::audio::speaker::SpeakerVerifier;
 use crate::config::{Config, SeneschalEnv};
 use crate::db::{Database, Memory};
 use crate::dream::{SDreamConfig, SDreamDaemon};
-use crate::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
-use crate::pipeline::{
+use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
+use seneschal_core::pipeline::{
     PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,
     check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
     sen_task, tts_task,
@@ -70,22 +69,22 @@ use crate::plugins::{
     agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents},
     build_plugin_prompt_section,
 };
-use crate::profile::ProfileFact;
-use crate::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
+use seneschal_core::profile::ProfileFact;
+use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
 #[cfg(target_os = "macos")]
 use crate::tools::OpenTerminalTool;
 use crate::tools::{
     ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy,
-    NoopTool, OpenAppTool, PendingInteractionEntry, PromptBuildState, QuickSearchTool,
+    NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool,
     ReadClipboardTool, ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool,
     SetClipboardTool, SetConversationModeTool, SetPromptBuildTool, SwitchPluginTool,
     TakeScreenshotTool, ToolRegistry, WebSearchTool,
 };
 #[cfg(feature = "avspeech")]
-use crate::tts::AvSpeechTts;
+use seneschal_core::tts::AvSpeechTts;
 #[cfg(feature = "kokoro")]
-use crate::tts::KokoroTts;
-use crate::tts::TtsEngine;
+use seneschal_core::tts::KokoroTts;
+use seneschal_core::tts::TtsEngine;
 
 #[cfg(test)]
 mod e2e_tests;
@@ -705,11 +704,11 @@ async fn async_main() -> Result<()> {
     let tools = Arc::new(std::sync::Mutex::new(tool_registry));
 
     // ── LLM session ───────────────────────────────────────────────────────────
-    let immutable_rules: Vec<crate::profile::Correction> = db
+    let immutable_rules: Vec<seneschal_core::profile::Correction> = db
         .get_immutable_rules()
         .await?
         .into_iter()
-        .map(|(key, value, confidence)| crate::profile::Correction {
+        .map(|(key, value, confidence)| seneschal_core::profile::Correction {
             topic: key,
             correction_text: value,
             confidence,
@@ -745,13 +744,13 @@ async fn async_main() -> Result<()> {
     // ── Self-managed LLM process ──────────────────────────────────────────────
     if config.llm_self_managed {
         let command = config.llm_command.as_deref().unwrap();
-        let child = llm::manager::start_and_wait_ready(command, &config.llm_url)
+        let child = seneschal_core::llm::manager::start_and_wait_ready(command, &config.llm_url)
             .await
             .context("Failed to start self-managed LLM server")?;
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(1);
         let cmd = command.to_string();
         let url = config.llm_url.clone();
-        tokio::spawn(llm::manager::supervise(child, cmd, url, notify_tx));
+        tokio::spawn(seneschal_core::llm::manager::supervise(child, cmd, url, notify_tx));
         tokio::spawn(async move {
             if let Some(msg) = notify_rx.recv().await {
                 error!(target: "llm_manager", "{}", msg);
@@ -760,7 +759,7 @@ async fn async_main() -> Result<()> {
     }
 
     // ── LLM client ────────────────────────────────────────────────────────────
-    let llm_client = crate::llm::create_provider(&config)?;
+    let llm_client = seneschal_core::llm::create_provider(&config)?;
     info!(target: "llm", "LLM endpoint: {}", config.llm_url);
 
     let background_client = secondary_llm_client
@@ -938,7 +937,7 @@ async fn async_main() -> Result<()> {
     );
 
     // ── Filler controller (background sound during tool calls) ─────────────────
-    let filler_controller = Arc::new(crate::audio::filler::FillerController::new(
+    let filler_controller = Arc::new(seneschal_core::audio::filler::FillerController::new(
         Arc::clone(&audio_output),
         tts_sample_rate,
     ));
@@ -1096,10 +1095,6 @@ async fn async_main() -> Result<()> {
         let llm_think_simple = config.llm_thinking_simple;
         let llm_think_complex = config.llm_thinking_complex;
         let llm_strict = config.llm_tools_strict;
-        #[cfg(feature = "tui")]
-        let tui_tx_c = tui_tx.clone();
-        #[cfg(feature = "control")]
-        let control_broadcast_c = control_broadcast.clone();
         tokio::spawn(async move {
             llm_task(
                 events_c,
@@ -1124,10 +1119,6 @@ async fn async_main() -> Result<()> {
                 llm_think_simple,
                 llm_think_complex,
                 llm_strict,
-                #[cfg(feature = "tui")]
-                tui_tx_c,
-                #[cfg(feature = "control")]
-                control_broadcast_c,
             )
             .await;
         });
@@ -1156,12 +1147,6 @@ async fn async_main() -> Result<()> {
         let audio_out_c = Arc::clone(&audio_output);
         let play_cancel_c = Arc::clone(&play_cancel);
         let tts_muted_c = Arc::clone(&tts_muted);
-        #[cfg(feature = "tui")]
-        let tui_tx_c = tui_tx.clone();
-        #[cfg(feature = "remote")]
-        let remote_tts_tx_c = Arc::clone(&remote_tts_tx);
-        #[cfg(feature = "control")]
-        let control_broadcast_c = control_broadcast.clone();
         tokio::spawn(async move {
             tts_task(
                 events_c,
@@ -1173,12 +1158,6 @@ async fn async_main() -> Result<()> {
                 tts_sample_rate,
                 play_cancel_c,
                 tts_muted_c,
-                #[cfg(feature = "tui")]
-                tui_tx_c,
-                #[cfg(feature = "remote")]
-                remote_tts_tx_c,
-                #[cfg(feature = "control")]
-                control_broadcast_c,
             )
             .await;
         });
@@ -1930,7 +1909,7 @@ async fn async_main() -> Result<()> {
                                 let mut final_text = segment_text;
                                 final_text = {
                                     let buf = ambient_buffer.lock().unwrap();
-                                    if crate::audio::ambient_buffer::has_referential(&final_text) {
+                                    if seneschal_core::audio::ambient_buffer::has_referential(&final_text) {
                                         if let Some(ctx) = buf.format_context() {
                                             format!("{ctx}\n---\n{final_text}")
                                         } else {
@@ -2050,7 +2029,7 @@ fn map_answer_to_outcome(transcript: &str) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use crate::llm::LlmProvider;
+    use seneschal_core::llm::LlmProvider;
 
     /// Integration test for summarization using a real LLM server.
     ///
@@ -2077,12 +2056,12 @@ mod tests {
         let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
         let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
         let llm_client: Arc<dyn LlmProvider> = Arc::new(
-            crate::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
+            seneschal_core::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
                 .with_api_key(&llm_api_key),
         );
 
         let system_prompt = "You are a helpful assistant.";
-        let mut session = crate::llm::LlmSession::new(system_prompt);
+        let mut session = seneschal_core::llm::LlmSession::new(system_prompt);
 
         let turns = vec![
             (
@@ -2179,7 +2158,7 @@ mod tests {
         let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
         let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
         let llm_client: Arc<dyn LlmProvider> = Arc::new(
-            crate::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
+            seneschal_core::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
                 .with_api_key(&llm_api_key),
         );
 
@@ -2191,7 +2170,7 @@ mod tests {
         let session_id = db.get_or_create_session().await.unwrap();
 
         let system_prompt = "You are a helpful assistant. Answer briefly.";
-        let mut session = crate::llm::LlmSession::new(system_prompt);
+        let mut session = seneschal_core::llm::LlmSession::new(system_prompt);
 
         println!("\n✓ kv_cache test setup complete (extend as needed)");
     }

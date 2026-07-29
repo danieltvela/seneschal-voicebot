@@ -9,10 +9,6 @@ pub use config_overrides::OriginalConfigSnapshot;
 pub use manager::PluginManager;
 pub use manifest::{PluginPromptConfig, PromptMode};
 pub use mcp_spawner::SpawnedMcpServers;
-pub use prompt_injection::{PluginPromptSections, build_plugin_prompt_section};
+pub use prompt_injection::build_plugin_prompt_section;
 
-#[derive(Clone, Debug)]
-pub enum PluginSwitchEvent {
-    Activate { plugin_id: String },
-    Deactivate,
-}
+pub use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};

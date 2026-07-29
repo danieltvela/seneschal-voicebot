@@ -26,7 +26,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
-use crate::agents::ProactiveEvent;
+use seneschal_common::events::ProactiveEvent;
 
 pub mod config;
 pub mod transport;

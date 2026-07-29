@@ -3,6 +3,26 @@
 pub mod subtask;
 
 use std::collections::HashMap;
+
+/// Whether prompt-build mode is active and what the current prompt text is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PromptBuildState {
+    Inactive,
+    Active { prompt: String },
+}
+
+impl PromptBuildState {
+    pub fn is_active(&self) -> bool {
+        matches!(self, PromptBuildState::Active { .. })
+    }
+
+    pub fn prompt_text(&self) -> Option<&str> {
+        match self {
+            PromptBuildState::Active { prompt } => Some(prompt),
+            _ => None,
+        }
+    }
+}
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -56,6 +76,12 @@ impl ToolRegistry {
             cached_tool_defs: Mutex::new(None),
             subtask_tracker: Arc::new(SubtaskTracker::new()),
         }
+    }
+
+    /// Register the built-in list_tasks tool that queries the subtask tracker.
+    pub fn register_list_tasks(&mut self) {
+        let tracker = Arc::clone(&self.subtask_tracker);
+        self.register(subtask::ListTasksTool::new(tracker));
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {

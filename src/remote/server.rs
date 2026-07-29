@@ -15,7 +15,7 @@ use tracing::{error, info, trace, warn};
 #[cfg(feature = "control")]
 use crate::control::broadcast::ControlEvent;
 
-use crate::audio::audio_capture::AudioChunk;
+use seneschal_core::audio::audio_capture::AudioChunk;
 
 use super::protocol::{ClientMessage, ServerMessage, TtsAudioPacket};
 

@@ -1,20 +1,14 @@
 pub mod agent_session;
 pub mod agents;
-pub mod audio;
 pub mod config;
 pub mod db;
 pub mod dream;
 pub mod i18n;
-pub mod llm;
 pub mod mcp;
-pub mod memory;
 pub mod plugins;
-pub mod profile;
 pub mod screen_capture;
 pub mod search;
-pub mod stt;
 pub mod tools;
-pub mod tts;
 
 pub mod control_client {
     pub use crate::control::broadcast::ControlEvent;
@@ -29,14 +23,13 @@ mod control {
     pub mod client;
 }
 
-pub use audio::buffer::AudioBuffer;
-pub use audio::output::AudioOutput;
-pub use config::Config;
-pub use db::Database;
-pub use llm::client::OpenAIClient;
-pub use llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
-pub use stt::{
+// Re-export core pipeline types from seneschal-core for backward compatibility.
+pub use seneschal_core::audio::buffer::AudioBuffer;
+pub use seneschal_core::audio::output::AudioOutput;
+pub use seneschal_core::llm::client::OpenAIClient;
+pub use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
+pub use seneschal_core::stt::{
     NoSpeechGate, SpeechEvent, SttProvider, TranscriptionQuality, WhisperSTTVAD,
     WhisperSTTVADConfig, WhisperSttProvider, create_provider,
 };
-pub use tts::SentenceSplitter;
+pub use seneschal_core::tts::SentenceSplitter;

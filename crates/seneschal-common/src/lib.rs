@@ -16,10 +16,10 @@ pub mod i18n;
 pub mod tools;
 
 // Re-export the most commonly used types for convenience.
-pub use classifier::{ClassifyResult, ClassifierLevel, Intent};
+pub use classifier::{ClassifyResult, ClassifierLevel, ClassifierPipeline, Intent, build_classifier};
 pub use config::Config;
 pub use config::SeneschalEnv;
 pub use db::Database;
-pub use events::{PluginSwitchEvent, ProactiveEvent};
+pub use events::{PluginPromptSections, PluginSwitchEvent, ProactiveEvent};
 pub use tools::Tool;
 pub use tools::ToolRegistry;

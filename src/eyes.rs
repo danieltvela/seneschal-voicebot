@@ -17,8 +17,8 @@ use tracing::{debug, info, warn};
 
 use std::sync::Arc;
 
-use crate::agents::ProactiveEvent;
-use crate::llm::LlmProvider;
+use seneschal_common::events::ProactiveEvent;
+use seneschal_core::llm::LlmProvider;
 use crate::screen_capture;
 
 const EYES_PROMPT: &str = "\

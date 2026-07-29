@@ -18,9 +18,9 @@ use crossterm::{
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
 use tokio::sync::mpsc;
 
-use crate::pipeline::PipelineFrame;
+use seneschal_core::pipeline::PipelineFrame;
 use crate::tools::ConversationMode;
-use crate::tools::PromptBuildState;
+use seneschal_common::tools::PromptBuildState;
 use app::{Action, App};
 use events::{TuiEvent, TuiEventRx};
 use input::KeyReader;

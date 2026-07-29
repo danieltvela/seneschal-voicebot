@@ -5,7 +5,7 @@ use super::acp_panel::AcpSessionState;
 use super::acp_panel::AcpSessionView;
 use super::events::{InputSource, PipelineState, TuiEvent};
 use crate::tools::ConversationMode;
-use crate::tools::PromptBuildState;
+use seneschal_common::tools::PromptBuildState;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 /// Action returned by key event handling.

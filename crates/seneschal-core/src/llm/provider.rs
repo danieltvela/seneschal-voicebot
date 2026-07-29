@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::config::Config;
+use seneschal_common::config::Config;
 
 use super::client::{OpenAIClient, StreamToken};
 use super::session::Message;

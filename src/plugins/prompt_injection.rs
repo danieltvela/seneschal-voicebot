@@ -1,11 +1,5 @@
 use crate::plugins::{PluginPromptConfig, PromptMode};
-
-#[derive(Debug, Default, Clone)]
-pub struct PluginPromptSections {
-    pub replace: String,
-    pub prepend: String,
-    pub append: String,
-}
+pub use seneschal_common::events::PluginPromptSections;
 
 pub fn build_plugin_prompt_section(configs: &[&PluginPromptConfig]) -> PluginPromptSections {
     let mut sections = PluginPromptSections::default();

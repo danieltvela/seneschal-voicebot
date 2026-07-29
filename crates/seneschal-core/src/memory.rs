@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
-use crate::db::{Memory, NewMemory};
+use seneschal_common::db::{Memory, NewMemory};
 use crate::llm::{LlmProvider, Message};
 
 /// Maximum number of memories injected into the system prompt.

@@ -91,3 +91,12 @@ pub enum PluginSwitchEvent {
     Activate { plugin_id: String },
     Deactivate,
 }
+
+/// Prompt sections contributed by active plugins.
+/// Used by the pipeline to assemble the LLM system prompt.
+#[derive(Clone, Debug, Default)]
+pub struct PluginPromptSections {
+    pub replace: String,
+    pub prepend: String,
+    pub append: String,
+}

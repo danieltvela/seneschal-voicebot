@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use tracing::{info, warn};
 
-use crate::llm::LlmProvider;
+use seneschal_core::llm::LlmProvider;
 use crate::screen_capture;
 
 use super::Tool;
@@ -107,7 +107,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::llm::OpenAiLlmProvider;
+    use seneschal_core::llm::OpenAiLlmProvider;
 
     fn tool(base_url: &str) -> TakeScreenshotTool {
         TakeScreenshotTool::new(Arc::new(OpenAiLlmProvider::new(

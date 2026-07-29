@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::tools::Tool;
+use seneschal_common::tools::Tool;
 
 /// Whether Seneschal is actively listening or only responding to its wake word.
 #[derive(Debug, Clone, PartialEq)]

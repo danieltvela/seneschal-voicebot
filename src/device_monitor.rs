@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::agents::ProactiveEvent;
+use seneschal_common::events::ProactiveEvent;
 
 /// Spawn a background task that polls for the configured audio device.
 ///

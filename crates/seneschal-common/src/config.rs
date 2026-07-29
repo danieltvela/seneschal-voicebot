@@ -431,7 +431,6 @@ pub struct Config {
 
     // ── Control API (HTTP + SSE) ──────────────────────────────────────────────
     /// HTTP control/SSE API port. None = disabled (CONTROL_PORT).
-    #[cfg(feature = "control")]
     pub control_port: Option<u16>,
 
     // ── Self-managed LLM process ──────────────────────────────────────────────
@@ -944,7 +943,6 @@ impl Config {
             self.ws_port = Some(v.parse().context("Invalid WS_PORT")?);
         }
 
-        #[cfg(feature = "control")]
         if let Ok(v) = env::var("CONTROL_PORT") {
             self.control_port = Some(v.parse().context("Invalid CONTROL_PORT")?);
         }

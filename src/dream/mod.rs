@@ -12,11 +12,11 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::agents::ProactiveEvent;
+use seneschal_common::events::ProactiveEvent;
 use crate::db::Database;
-use crate::llm::{LlmProvider, Message};
-use crate::memory::extract_memories;
-use crate::profile::extract_facts;
+use seneschal_core::llm::{LlmProvider, Message};
+use seneschal_core::memory::extract_memories;
+use seneschal_core::profile::extract_facts;
 
 /// Configuration for the S-DREAM daemon.
 #[derive(Debug, Clone)]
@@ -236,7 +236,7 @@ impl SDreamDaemon {
             info!(target: "dream", count = existing_memories.len(), "Active memories loaded");
 
             let extraction =
-                extract_memories(client.as_ref(), &conversation_text, &existing_memories).await;
+                extract_memories(client.as_ref(), &conversation_text, existing_memories.as_slice()).await;
             info!(
                 target: "dream",
                 new = extraction.new_memories.len(),
@@ -247,7 +247,7 @@ impl SDreamDaemon {
             if !extraction.new_memories.is_empty() {
                 if let Err(e) = self
                     .db
-                    .save_memories_batch(&extraction.new_memories, session_id)
+                    .save_memories_batch(extraction.new_memories.as_slice(), session_id)
                     .await
                 {
                     warn!(target: "dream", "Failed to save memories: {}", e);
@@ -409,7 +409,7 @@ impl SDreamDaemon {
         let (_, messages) = self.db.get_session_context(session_id, 50).await?;
         for (role, content) in &messages {
             if role == "user" {
-                let corrections = crate::profile::detect_corrections(content, "");
+                let corrections = seneschal_core::profile::detect_corrections(content, "");
                 for c in corrections {
                     let key = format!("correction:{}", c.topic);
                     if let Err(e) = self
@@ -707,7 +707,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = crate::llm::OpenAiLlmProvider::new(&server.uri(), "test", 256, 0.1);
+        let client = seneschal_core::llm::OpenAiLlmProvider::new(&server.uri(), "test", 256, 0.1);
         let (db, _db_dir) = fresh_db().await;
         let sid = db.get_or_create_session().await.unwrap();
         db.save_message(sid, "user", "Me llamo Daniel.")
