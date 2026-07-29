@@ -1,0 +1,81 @@
+//! `McpToolProxy` — wraps a single MCP tool as a `dyn Tool`.
+//!
+//! Created at startup for each tool discovered via `tools/list`. Calls are
+//! always background (`is_background = true`) because MCP tool execution
+//! time is unpredictable.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde_json::Value;
+use tracing;
+
+use seneschal_common::tools::Tool;
+use crate::mcp::McpClient;
+
+/// Proxy that exposes one MCP tool through the `Tool` trait.
+pub struct McpToolProxy {
+    /// Display name for the LLM (may be prefixed with server name).
+    display_name: String,
+    /// Original tool name from the MCP server (used for `call_tool`).
+    original_name: String,
+    description: String,
+    /// The `inputSchema` from the MCP server — used as-is for the OpenAI
+    /// function-calling `parameters` field.
+    parameters: Value,
+    client: Arc<McpClient>,
+}
+
+impl McpToolProxy {
+    pub fn new(
+        display_name: String,
+        original_name: String,
+        description: String,
+        parameters: Value,
+        client: Arc<McpClient>,
+    ) -> Self {
+        Self {
+            display_name,
+            original_name,
+            description,
+            parameters,
+            client,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for McpToolProxy {
+    fn name(&self) -> &str {
+        &self.display_name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn parameters(&self) -> Value {
+        self.parameters.clone()
+    }
+
+    /// All MCP tools run in a background task — execution time is unpredictable.
+    fn is_background(&self) -> bool {
+        true
+    }
+
+    async fn run(&self, args: &str) -> String {
+        let arguments: Value =
+            serde_json::from_str(args).unwrap_or(Value::Object(Default::default()));
+        match self.client.call_tool(&self.original_name, arguments).await {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!(
+                    target: "mcp",
+                    "Tool '{}' failed: {e}",
+                    self.display_name
+                );
+                format!("Error calling MCP tool '{}': {e}", self.display_name)
+            }
+        }
+    }
+}

@@ -1,4 +1,4 @@
-use crate::plugins::{PluginPromptConfig, PromptMode};
+use crate::manifest::{PluginPromptConfig, PromptMode};
 pub use seneschal_common::events::PluginPromptSections;
 
 pub fn build_plugin_prompt_section(configs: &[&PluginPromptConfig]) -> PluginPromptSections {

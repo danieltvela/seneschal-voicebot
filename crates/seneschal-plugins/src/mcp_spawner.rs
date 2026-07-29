@@ -5,9 +5,9 @@ use tracing::{info, warn};
 
 use seneschal_common::events::ProactiveEvent;
 use seneschal_mcp::mcp::{ForwardingNotificationHandler, McpClient, McpNotificationHandler};
-use crate::plugins::manifest::McpServerConfig;
+use crate::manifest::McpServerConfig;
 use seneschal_common::tools::ToolRegistry;
-use crate::tools::mcp_tool::McpToolProxy;
+use seneschal_mcp::mcp::McpToolProxy;
 
 /// Tracks spawned MCP clients and their registered tool names for cleanup.
 pub struct SpawnedMcpServers {

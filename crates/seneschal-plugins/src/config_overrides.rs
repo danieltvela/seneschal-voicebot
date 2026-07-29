@@ -1,4 +1,4 @@
-use crate::config::Config;
+use seneschal_common::config::Config;
 use serde::Deserialize;
 use tracing::info;
 

@@ -30,10 +30,12 @@ use seneschal_common::events::ProactiveEvent;
 
 pub mod config;
 pub mod transport;
+pub mod tool_proxy;
 
 #[allow(unused_imports)]
 pub use config::{McpConfig, McpRegistry, McpServerTomlConfig, McpTransportKind};
 pub use transport::McpTransport;
+pub use tool_proxy::McpToolProxy;
 
 // ── Notification handler trait ───────────────────────────────────────────────
 

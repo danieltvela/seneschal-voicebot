@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use tracing::{info, warn};
 
-use crate::plugins::config_overrides::{OriginalConfigSnapshot, PluginConfigOverrides};
-use crate::plugins::manifest::{
+use crate::config_overrides::{OriginalConfigSnapshot, PluginConfigOverrides};
+use crate::manifest::{
     McpServerConfig, PluginAgentConfig, PluginManifest, PluginPromptConfig,
 };
 
@@ -303,7 +303,7 @@ impl PluginManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::config_overrides::OriginalConfigSnapshot;
+    use crate::config_overrides::OriginalConfigSnapshot;
     use std::cell::RefCell;
 
     thread_local! {
@@ -611,7 +611,7 @@ language = "en""#,
 
     #[test]
     fn integration_switch_plugin_changes_tools_in_registry() {
-        use crate::tools::{Tool, ToolRegistry};
+        use seneschal_common::tools::{Tool, ToolRegistry};
         use async_trait::async_trait;
 
         struct NamedTool {
@@ -695,8 +695,8 @@ language = "en""#,
 
     #[test]
     fn integration_config_override_apply_revert() {
-        use crate::config::Config;
-        use crate::plugins::config_overrides::OriginalConfigSnapshot;
+        use seneschal_common::config::Config;
+        use crate::config_overrides::OriginalConfigSnapshot;
 
         let config_toml = r#"
 llm_temperature = 0.95
@@ -742,7 +742,7 @@ language = "fr"
 
     #[test]
     fn integration_prompt_inject_revert() {
-        use crate::plugins::prompt_injection::{PluginPromptSections, build_plugin_prompt_section};
+        use crate::prompt_injection::{PluginPromptSections, build_plugin_prompt_section};
 
         let path_a = create_plugin_dir_with_config("prompt-a", None);
         let path_b = create_plugin_dir_with_config("prompt-b", None);
