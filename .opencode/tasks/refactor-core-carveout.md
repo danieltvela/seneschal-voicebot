@@ -299,13 +299,9 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | `seneschal-tools-core` | 10 essential tools | common, core, search |
 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, analysis, agent_bridge + 8 tools | common, core, agents, plugins, search, mcp |
 
-### Remaining: Phase 9 (QA final + doc cleanup)
+### Remaining: None! 🎉
 
-| Step | Task | Notes |
-|------|------|-------|
-| 9.1 | make qa-full | end-to-end validation |
-| 9.2 | CHANGELOG.md | breaking change de arch |
-| 9.3 | Update CARVEOUT-DECISIONS.md | marcar done |
+All phases complete. QA pipeline green (6/6 stages).
 | 8 | Feature flags | `Cargo.toml` [features], `main.rs` conditional compilation |
 | 9 | QA final | `make qa-full`, CHANGELOG |
 
