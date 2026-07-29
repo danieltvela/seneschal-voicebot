@@ -35,7 +35,7 @@ use crate::db::Database;
 use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use seneschal_core::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
 use seneschal_common::tools::ToolRegistry;
-use crate::tools::conversation_mode::ConversationMode;
+use seneschal_common::tools::ConversationMode;
 use seneschal_core::tts::{TtsEngine, mock_tts::MockTts};
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────

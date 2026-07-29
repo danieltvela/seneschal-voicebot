@@ -9,7 +9,7 @@ use ratatui::{
 use super::acp_panel::state_style;
 use super::app::{App, ChatMessage, FocusTarget, InputMode, Role};
 use super::events::{InputSource, PipelineState};
-use crate::tools::ConversationMode;
+use seneschal_common::tools::ConversationMode;
 
 const MAX_INPUT_ROWS: u16 = 4;
 

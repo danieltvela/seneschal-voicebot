@@ -23,6 +23,18 @@ impl PromptBuildState {
         }
     }
 }
+
+/// Whether Seneschal is actively listening or only responding to its wake word.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConversationMode {
+    /// Default — responds to the enrolled user's voice normally.
+    Active,
+    /// Quiet mode activated automatically (silence timer or non-user streak).
+    Ambient,
+    /// Quiet mode activated explicitly by the user via the tool.
+    AmbientLocked,
+}
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;

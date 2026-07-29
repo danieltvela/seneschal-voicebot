@@ -2,22 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use seneschal_common::tools::Tool;
-
-/// Whether Seneschal is actively listening or only responding to its wake word.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConversationMode {
-    /// Default — responds to the enrolled user's voice normally.
-    Active,
-    /// Quiet mode activated automatically (silence timer or non-user streak).
-    /// Requires wake word to respond. Main-user wake word switches to Active;
-    /// secondary-voice wake word responds without mode change.
-    Ambient,
-    /// Quiet mode activated explicitly by the user via the tool.
-    /// Stays locked until the user explicitly requests Active mode — automatic
-    /// triggers (silence, non-user streak) do NOT override this state.
-    AmbientLocked,
-}
+use seneschal_common::tools::{ConversationMode, Tool};
 
 /// Tool that lets the LLM switch Seneschal between Active and Ambient mode.
 pub struct SetConversationModeTool {

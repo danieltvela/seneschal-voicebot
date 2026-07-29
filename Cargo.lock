@@ -3891,6 +3891,7 @@ dependencies = [
  "seneschal-memory",
  "seneschal-remote",
  "seneschal-search",
+ "seneschal-tui",
  "serde",
  "serde_json",
  "sherpa-rs",
@@ -4102,6 +4103,18 @@ version = "0.1.0"
 [[package]]
 name = "seneschal-tui"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossterm",
+ "futures-util",
+ "ratatui",
+ "seneschal-agents",
+ "seneschal-common",
+ "seneschal-core",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "serde"

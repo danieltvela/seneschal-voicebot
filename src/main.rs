@@ -24,7 +24,7 @@ mod screen_capture;
 // stt → seneschal_core::stt
 mod tools;
 // tts → seneschal_core::tts
-mod tui;
+// tui → seneschal_tui
 
 use anyhow::{Context, Result};
 use async_channel::bounded;
@@ -1051,7 +1051,7 @@ async fn async_main() -> Result<()> {
     > = Arc::new(tokio::sync::Mutex::new(None));
 
     #[cfg(feature = "tui")]
-    let (tui_tx, tui_rx) = tokio::sync::mpsc::unbounded_channel::<tui::events::TuiEvent>();
+    let (tui_tx, tui_rx) = tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
 
     let mut pending_agent_results: std::collections::VecDeque<(String, String)> =
         std::collections::VecDeque::new();
@@ -1216,14 +1216,14 @@ async fn async_main() -> Result<()> {
         let tui_tx_bridge = tui_tx.clone();
         tokio::spawn(async move {
             while let Some(ev) = session_event_rx.recv().await {
-                for mapped in tui::map_session_event_to_tui(ev) {
+                for mapped in seneschal_tui::map_session_event_to_tui(ev) {
                     let _ = tui_tx_bridge.send(mapped);
                 }
             }
         });
 
         let (acp_input_tx, mut acp_input_rx) =
-            tokio::sync::mpsc::channel::<tui::AcpInputCommand>(8);
+            tokio::sync::mpsc::channel::<seneschal_tui::AcpInputCommand>(8);
         let session_mgr_input = Arc::clone(&session_manager);
         let pending_answers_input = Arc::clone(&pending_acp_answers);
         tokio::spawn(async move {
@@ -1263,7 +1263,7 @@ async fn async_main() -> Result<()> {
         let conv_mode_c = Arc::clone(&conv_mode);
         let prompt_build_c = Arc::clone(&prompt_build_state);
         tokio::spawn(async move {
-            if let Err(e) = tui::run(
+            if let Err(e) = seneschal_tui::run(
                 tui_rx,
                 transcript_tx_c,
                 tts_muted_c,
@@ -1411,7 +1411,7 @@ async fn async_main() -> Result<()> {
                             Err(e) => {
                                 error!(target: "audio", "Audio channel closed: {}", e);
                                 #[cfg(feature = "tui")]
-                                tui_tx.send(tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
+                                tui_tx.send(seneschal_tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
                                 break;
                             }
                         },
@@ -1697,8 +1697,8 @@ async fn async_main() -> Result<()> {
                                 t_speech_start = Some(Instant::now());
                                 info!(target: "performance", "[+0ms] SpeechStart");
                                 #[cfg(feature = "tui")]
-                                tui_tx.send(tui::events::TuiEvent::StateChange(
-                                    tui::events::PipelineState::Listening,
+                                tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                    seneschal_tui::events::PipelineState::Listening,
                                 )).ok();
                                 *last_speech_at.lock().unwrap() = Instant::now();
 
@@ -1731,8 +1731,8 @@ async fn async_main() -> Result<()> {
                                     debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
                                     t_speech_start = None;
                                     #[cfg(feature = "tui")]
-                                    tui_tx.send(tui::events::TuiEvent::StateChange(
-                                        tui::events::PipelineState::Idle,
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
                                     )).ok();
                                     continue;
                                 }
@@ -1751,8 +1751,8 @@ async fn async_main() -> Result<()> {
                                     debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
                                     t_speech_start = None;
                                     #[cfg(feature = "tui")]
-                                    tui_tx.send(tui::events::TuiEvent::StateChange(
-                                        tui::events::PipelineState::Idle,
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
                                     )).ok();
                                     continue;
                                 }
@@ -1769,8 +1769,8 @@ async fn async_main() -> Result<()> {
                                 let mut segment_text = quality.text;
 
                                 #[cfg(feature = "tui")]
-                                tui_tx.send(tui::events::TuiEvent::StateChange(
-                                    tui::events::PipelineState::Transcribing,
+                                tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                    seneschal_tui::events::PipelineState::Transcribing,
                                 )).ok();
 
                                 let vad_elapsed = t_speech_start.take()

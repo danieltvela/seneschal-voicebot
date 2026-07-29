@@ -24,3 +24,5 @@ pub use db::Database;
 pub use events::{PluginPromptSections, PluginSwitchEvent, ProactiveEvent};
 pub use tools::Tool;
 pub use tools::ToolRegistry;
+pub use tools::ConversationMode;
+pub use tools::PromptBuildState;

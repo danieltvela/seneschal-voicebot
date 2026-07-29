@@ -26,7 +26,8 @@ use tracing::info;
 
 pub use apple_events::AppleEventsTool;
 pub use clipboard::{ReadClipboardTool, SetClipboardTool};
-pub use conversation_mode::{ConversationMode, SetConversationModeTool};
+pub use conversation_mode::SetConversationModeTool;
+pub use seneschal_common::tools::ConversationMode; // moved to common
 pub use current_time::CurrentTimeTool;
 pub use deep_research::DeepResearchTool;
 pub use mcp_tool::McpToolProxy;

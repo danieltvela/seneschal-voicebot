@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex};
 use super::acp_panel::AcpSessionState;
 use super::acp_panel::AcpSessionView;
 use super::events::{InputSource, PipelineState, TuiEvent};
-use crate::tools::ConversationMode;
-use seneschal_common::tools::PromptBuildState;
+use seneschal_common::tools::{ConversationMode, PromptBuildState};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 /// Action returned by key event handling.
@@ -618,7 +617,7 @@ mod tests {
         app.handle_tui_event(TuiEvent::AcpSessionLog {
             session_id: "s1".into(),
             line: "hi".into(),
-            mode: crate::tui::acp_panel::AcpLogMode::Line,
+            mode: crate::acp_panel::AcpLogMode::Line,
         });
         assert_eq!(app.acp_sessions[0].lines.len(), 1);
         assert_eq!(app.acp_sessions[0].lines[0].text, "hi");
