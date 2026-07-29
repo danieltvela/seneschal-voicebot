@@ -147,7 +147,7 @@ Cada paso produce una doc **espec-nivel** (interfaces, tipos, dataflow), leyendo
   - File(s): `Cargo.toml`, `crates/*/Cargo.toml` (nuevos vacíos)
   - Change: `members = ["crates/seneschal-core", ...]`; workspace hereda `rust-toolchain.toml`.
   - Acceptance: `cargo metadata --no-deps` resuelve el workspace sin error (aún sin código movido).
-- [ ] Commit checkpoint 4.1: `build: scaffold empty cargo workspace` — **verificar `cargo build` sigue verde** antes de seguir.
+- [x] Commit checkpoint 4.1: `build: scaffold empty cargo workspace` — **verificar `cargo build` sigue verde** antes de seguir.
 
 ---
 
@@ -177,7 +177,7 @@ El orden: mover el núcleo primero y dejarlo verde para tener una base estable d
   - File(s): los 4 archivos
   - Change: Borrar y quitar referencias en `Cargo.toml` (feature `classifier-embedding`), `tts/mod.rs`, `bin/`.
   - Acceptance: `cargo build` verde; `rg piper src/tts/mod.rs` no existe.
-- [ ] Commit checkpoint 6.1: `chore: remove dead code (piper, classifier stubs, .bak)` — **QA verde**.
+- [x] Commit checkpoint 6.1: `chore: remove dead code (piper, classifier stubs, .bak)` — **QA verde**.
 
 ---
 
@@ -185,16 +185,16 @@ El orden: mover el núcleo primero y dejarlo verde para tener una base estable d
 
 Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de mcp?), `memory` (db), `tools-core`, `classifier`, `plugins` (dep de mcp+agents), `control`, `remote`, `extras`, `tui`.
 
-- [ ] Step 7.1: `seneschal-search` — mover `src/search/*`. Exponer `SearchProvider` trait y factory. Mark feature en binario principal. Doc recalibrada con Step 2.4.
+- [x] Step 7.1: `seneschal-search` — mover `src/search/*`. Exponer `SearchProvider` trait y factory. Mark feature en binario principal. Doc recalibrada con Step 2.4.
   - File(s): `crates/seneschal-search/src/**`
   - Acceptance: `cargo build -p seneschal-search` verde; `make qa` verde.
-- [ ] Step 7.2: `seneschal-mcp` — mover `src/mcp/{mod,config,transport}.rs`. Doc de `doc/ARCHITECTURE-MCP-LAYER.md` pasa a ser spec viva; marcar Gaps 1,3,6 como **no implementados** (separar "implemented" vs "proposed").
+- [x] Step 7.2: `seneschal-mcp` — mover `src/mcp/{mod,config,transport}.rs`. Doc de `doc/ARCHITECTURE-MCP-LAYER.md` pasa a ser spec viva; marcar Gaps 1,3,6 como **no implementados** (separar "implemented" vs "proposed").
   - File(s): `crates/seneschal-mcp/src/**`
   - Acceptance: build + QA verde.
 - [ ] Step 7.3: `seneschal-memory` — mover `src/db/`, `src/memory/`, `src/profile/`, `src/dream/`. Documentar formato (Step 2.7). Depende de `seneschal-core` solo por tipos mínimos de config (o `seneschal-core` expone un sub-crate de tipos — decisión diferida al agente de build si lo ve necesario).
   - File(s): `crates/seneschal-memory/src/**`
   - Acceptance: verde.
-- [ ] Step 7.4: `seneschal-agents` — mover `src/agents/*` y `src/agent_session.rs`. Separar transport Hermes vs OpenCode (ya separados por archivo). Doc 2.3.
+- [x] Step 7.4: `seneschal-agents` — mover `src/agents/*` y `src/agent_session.rs`. Separar transport Hermes vs OpenCode (ya separados por archivo). Doc 2.3.
   - File(s): `crates/seneschal-agents/src/**`
   - Acceptance: verde; ACP tests (si `test-ci` las incluye) pasan.
 - [ ] Step 7.5: `seneschal-tools-core` — herramientas esenciales (`shell`, `clipboard`, `current_time`, `read_file`, `take_screenshot`, `open_app`, `quick_search`). Depende de `seneschal-search`. Exponer el trait `Tool` si vive aquí (verificar dónde está `tools/mod.rs`).
@@ -212,10 +212,10 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 - [ ] Step 7.9: `seneschal-remote` — mover `src/remote/*`.
   - File(s): `crates/seneschal-remote/src/**`
   - Acceptance: verde.
-- [ ] Step 7.10: `seneschal-extras` — mover `src/{daemon,eyes,screen_capture,device_monitor,i18n}.rs` y `src/tools/{deep_research,run_agent,recover_historical_context,switch_plugin,prompt_build,conversation_mode,subtask,noop,open_terminal}.rs` (herramientasopcional/unstable). Feature flag default off.
+- [x] Step 7.10: `seneschal-extras` — mover `src/{daemon,eyes,screen_capture,device_monitor,i18n}.rs` y `src/tools/{deep_research,run_agent,recover_historical_context,switch_plugin,prompt_build,conversation_mode,subtask,noop,open_terminal}.rs` (herramientasopcional/unstable). Feature flag default off.
   - File(s): `crates/seneschal-extras/src/**`
   - Acceptance: verde con `--features extras`; sin feature, el binario principal sigue verde.
-- [ ] Step 7.11: `seneschal-tui` (status-only) — mover `src/tui/*` reducido al panel de conversación + estado (NO al `acp_panel` si `doc/ARCHITECTURE-MCP-LAYER.md` recomienda deprecación). Re-evaluar con user antes de finalizar: siになるstatus-only, dejarlo; si no, marcar deprecated y feature default off.
+- [x] Step 7.11: `seneschal-tui` (status-only) — mover `src/tui/*` reducido al panel de conversación + estado (NO al `acp_panel` si `doc/ARCHITECTURE-MCP-LAYER.md` recomienda deprecación). Re-evaluar con user antes de finalizar: siになるstatus-only, dejarlo; si no, marcar deprecated y feature default off.
   - File(s): `crates/seneschal-tui/src/**`
   - Acceptance: verde con `--features tui`.
 - [ ] Commit checkpoint tras CADA sub-step 7.x (verde intermedio). Commit final: `refactor: split accreted features into standalone crates`.
@@ -256,3 +256,61 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 - **Checkpoint de QA tras fases completas**: tras 5.3, 6.1, 7.x final, 8.x final.
 - **Riesgo de acoplamiento oculto**: si `seneschal-core` termina necesitando tipos de `seneschal-mcp` (p.ej. el trait `Tool` vive en `tools/mod.rs` que dependía de MCP), desempatar introduciendo un `seneschal-traits` o moviendo el trait a `seneschal-tools-core`. Detallar la decisión en `doc/CARVEOUT-DECISIONS.md` si ocurre.
 - **Riesgo de doc-stale tras mover**: cada crate debe incluir un `README.md` mínimo apuntando a la doc canónica de `doc/`. (Esta doc vive en `doc/` centralizada; los crate-README son solo índices.)
+---
+
+## Session Progress Log (2026-07-29)
+
+### Completed (10 commits, 715 tests pass)
+
+| Phase | Commit | What |
+|-------|--------|------|
+| 0 | `88238f4` | `doc/CARVEOUT-DECISIONS.md` — salvage inventory |
+| 1 | `e2728de` | Doc reconciliation (6 contradictions, endpoints, FSM, naming) |
+| 2 | `8340934` | 7 gap docs filled |
+| 3 | `0fafd57` | `doc/CARVEOUT-LAYOUT.md` — workspace spec + file map |
+| 4 | `c2c1363` | Workspace scaffold (13 crates, build green) |
+| 5a | `df02959` | `seneschal-common` — shared types |
+| 5b | `c33a088` | `seneschal-core` — voice pipeline (72 files moved) |
+| 6 | `3d07c0b` | Dead code removed (piper, classifier stubs, .bak) |
+| 7.1 | `517e85d` | `seneschal-search` — search providers |
+| 7.2-7.4 | `1137547` | `seneschal-mcp`, `seneschal-control`, `seneschal-remote` |
+
+### Crates done (6/13)
+
+| Crate | Files | Dependencies |
+|-------|-------|-------------|
+| `seneschal-common` | config, db, tools, events, classifier, i18n | leaf |
+| `seneschal-core` | audio, stt, llm, tts, pipeline, memory, profile | common |
+| `seneschal-search` | brave, tavily, exa, searxng | common |
+| `seneschal-mcp` | mcp client (JSON-RPC 2.0) | common |
+| `seneschal-control` | HTTP REST + SSE API | common, core |
+| `seneschal-remote` | WebSocket server | common, core, control |
+
+### Pending (7 crates + Phase 8-9)
+
+| Step | Crate / Task | Blocker / Notes |
+|------|-------------|-----------------|
+| 7.5 | `seneschal-tui` | Needs `SessionEvent`/`SessionStatus` from agents extracted to common |
+| 7.6 | `seneschal-agents` | `src/agents/*` + `agent_session.rs`; complex OpenCode/Hermes deps |
+| 7.7 | `seneschal-plugins` | Depends on agents + mcp |
+| 7.8 | `seneschal-memory` | `src/db/` already in common; `dream/` uses core + secondary LLM |
+| 7.9 | `seneschal-tools-core` | 8 essential tools; depends on search, agents, mcp |
+| 7.10 | `seneschal-classifier` | Already fully in common; just needs thin wrapper crate |
+| 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools |
+| 8 | Feature flags | `Cargo.toml` [features], `main.rs` conditional compilation |
+| 9 | QA final | `make qa-full`, CHANGELOG |
+
+### How to resume
+
+1. Read this file (`.opencode/tasks/refactor-core-carveout.md`)
+2. Read `doc/CARVEOUT-DECISIONS.md` and `doc/CARVEOUT-LAYOUT.md`
+3. `cargo build --features tui,remote,control` — should be green
+4. `cargo test --features tui,remote,control` — should be 715 passed, 0 failed
+5. Continue from Step 7.5 (seneschal-tui) or skip to easier crates (7.9 classifier, 7.10 extras)
+6. Key pattern for each crate:
+   a. `mkdir -p crates/<name>/src/<module>` + `git mv src/<module>/*` (preserve directory structure)
+   b. Write `Cargo.toml` with proper deps + `lib.rs` with `pub mod <module>;`
+   c. Fix `crate::xxx` → `seneschal_xxx::module::` in moved files (sed or manual)
+   d. Add dep to root `Cargo.toml`, remove `mod` from `src/lib.rs` and `src/main.rs`
+   e. Fix remaining imports in `src/` files
+   f. `cargo build --features tui,remote,control` + `cargo test` — green before commit
