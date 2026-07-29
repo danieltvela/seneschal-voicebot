@@ -1,1 +1,1 @@
-// seneschal-control — placeholder
+pub mod control;

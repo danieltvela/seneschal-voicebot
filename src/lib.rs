@@ -4,23 +4,18 @@ pub mod config;
 pub mod db;
 pub mod dream;
 pub mod i18n;
-pub mod mcp;
 pub mod plugins;
 pub mod screen_capture;
 pub mod tools;
 
 pub mod control_client {
-    pub use crate::control::broadcast::ControlEvent;
-    pub use crate::control::client::{
+    pub use seneschal_control::control::broadcast::ControlEvent;
+    pub use seneschal_control::control::client::{
         ClientControlEvent, ControlClient, ControlClientBuilder, ControlClientError,
         HealthResponse, StateResponse,
     };
 }
 
-mod control {
-    pub mod broadcast;
-    pub mod client;
-}
 
 // Re-export core pipeline types from seneschal-core for backward compatibility.
 pub use seneschal_core::audio::buffer::AudioBuffer;

@@ -29,6 +29,9 @@ documentation = "https://github.com/danieltvela/seneschal-voicebot"
 seneschal-common = { path = "crates/seneschal-common" }
 seneschal-core = { path = "crates/seneschal-core" }
 seneschal-search = { path = "crates/seneschal-search" }
+seneschal-mcp = { path = "crates/seneschal-mcp" }
+seneschal-control = { path = "crates/seneschal-control" }
+seneschal-remote = { path = "crates/seneschal-remote" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

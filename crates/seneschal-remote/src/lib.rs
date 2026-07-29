@@ -1,1 +1,1 @@
-// seneschal-remote — placeholder
+pub mod remote;

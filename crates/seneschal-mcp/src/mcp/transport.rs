@@ -17,7 +17,7 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
 
-use crate::config::Config;
+use seneschal_common::config::Config;
 
 // ── McpTransport trait ────────────────────────────────────────────────────────
 

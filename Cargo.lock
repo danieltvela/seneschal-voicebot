@@ -3884,7 +3884,10 @@ dependencies = [
  "rubato",
  "scraper",
  "seneschal-common",
+ "seneschal-control",
  "seneschal-core",
+ "seneschal-mcp",
+ "seneschal-remote",
  "seneschal-search",
  "serde",
  "serde_json",
@@ -3939,6 +3942,22 @@ dependencies = [
 [[package]]
 name = "seneschal-control"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures-util",
+ "reqwest 0.12.28",
+ "rubato",
+ "seneschal-common",
+ "seneschal-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "seneschal-core"
@@ -3985,6 +4004,17 @@ version = "0.1.0"
 [[package]]
 name = "seneschal-mcp"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "reqwest 0.12.28",
+ "seneschal-common",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "seneschal-memory"
@@ -3997,6 +4027,21 @@ version = "0.1.0"
 [[package]]
 name = "seneschal-remote"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "axum",
+ "futures-util",
+ "rubato",
+ "seneschal-common",
+ "seneschal-control",
+ "seneschal-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+]
 
 [[package]]
 name = "seneschal-search"

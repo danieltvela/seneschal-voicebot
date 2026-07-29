@@ -12,8 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tracing::{error, info, trace, warn};
 
-#[cfg(feature = "control")]
-use crate::control::broadcast::ControlEvent;
+use seneschal_control::control::broadcast::ControlEvent;
 
 use seneschal_core::audio::audio_capture::AudioChunk;
 
@@ -34,7 +33,6 @@ pub struct RemoteState {
     /// True when a remote client is connected.
     pub connected: AtomicBool,
     /// Control event broadcast (transcript, LLM tokens, etc).
-    #[cfg(feature = "control")]
     pub control_broadcast_tx: broadcast::Sender<ControlEvent>,
 }
 

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc, watch};
 
 use super::broadcast::ControlBroadcast;
-use crate::db::Database;
+use seneschal_common::db::Database;
 use seneschal_core::llm::LlmSession;
 use seneschal_core::pipeline::frames::PipelineFrame;
 use seneschal_core::pipeline::fsm::PipelineState;

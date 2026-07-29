@@ -1,1 +1,1 @@
-// seneschal-mcp — placeholder
+pub mod mcp;

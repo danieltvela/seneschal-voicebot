@@ -9,7 +9,6 @@ mod analysis;
 // audio → seneschal_core::audio
 mod classifier;
 mod config;
-mod control;
 mod daemon;
 mod db;
 mod device_monitor;
@@ -17,12 +16,10 @@ mod dream;
 mod eyes;
 mod i18n;
 // llm → seneschal_core::llm
-mod mcp;
 // memory → seneschal_core::memory
 // pipeline → seneschal_core::pipeline
 mod plugins;
 // profile → seneschal_core::profile
-mod remote;
 mod screen_capture;
 // search → seneschal_search
 // stt → seneschal_core::stt
@@ -434,20 +431,20 @@ async fn async_main() -> Result<()> {
     }
 
     // ── MCP tools (multi-server) ──────────────────────────────────────────────
-    let mcp_registry = mcp::McpRegistry::from_config_and_env(config.mcp_servers.clone());
+    let mcp_registry = seneschal_mcp::mcp::McpRegistry::from_config_and_env(config.mcp_servers.clone());
     for server in &mcp_registry.servers {
         info!(target: "mcp", "Spawning MCP server '{}': {}", server.name, server.command);
 
         // Tag incoming notifications with the server name so the main loop can
         // route them per-server (see Gap 1 in doc/ARCHITECTURE-MCP-LAYER.md).
-        let handler: std::sync::Arc<dyn mcp::McpNotificationHandler> =
-            std::sync::Arc::new(mcp::ForwardingNotificationHandler {
+        let handler: std::sync::Arc<dyn seneschal_mcp::mcp::McpNotificationHandler> =
+            std::sync::Arc::new(seneschal_mcp::mcp::ForwardingNotificationHandler {
                 server_name: server.name.clone(),
             });
 
         let result = match &server.transport {
-            mcp::McpTransportKind::Stdio { command } => {
-                mcp::McpClient::spawn_and_init_with_handler(
+            seneschal_mcp::mcp::McpTransportKind::Stdio { command } => {
+                seneschal_mcp::mcp::McpClient::spawn_and_init_with_handler(
                     command,
                     server.tool_timeout_secs,
                     Some(handler),
@@ -455,8 +452,8 @@ async fn async_main() -> Result<()> {
                 )
                 .await
             }
-            mcp::McpTransportKind::Http { url } => {
-                mcp::McpClient::connect_http(
+            seneschal_mcp::mcp::McpTransportKind::Http { url } => {
+                seneschal_mcp::mcp::McpClient::connect_http(
                     url,
                     server.tool_timeout_secs,
                     Some(handler),
@@ -993,7 +990,7 @@ async fn async_main() -> Result<()> {
     let pipeline_state_tx = Arc::new(pipeline_state_tx);
 
     #[cfg(feature = "control")]
-    let control_broadcast = control::broadcast::ControlBroadcast::new(256);
+    let control_broadcast = seneschal_control::control::broadcast::ControlBroadcast::new(256);
 
     // Supervisor observer: logs every state transition (off the hot path).
     {
@@ -1008,7 +1005,7 @@ async fn async_main() -> Result<()> {
                 let state = rx.borrow().clone();
                 tracing::debug!(target: "fsm", "Pipeline state → {:?}", state);
                 #[cfg(feature = "control")]
-                ctrl.send(control::broadcast::ControlEvent::StateChanged {
+                ctrl.send(seneschal_control::control::broadcast::ControlEvent::StateChanged {
                     state: format!("{state:?}"),
                     utterance_id: state.utterance_id(),
                 });
@@ -1051,7 +1048,7 @@ async fn async_main() -> Result<()> {
 
     #[cfg(feature = "remote")]
     let remote_tts_tx: Arc<
-        tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<remote::protocol::TtsAudioPacket>>>,
+        tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<seneschal_remote::remote::protocol::TtsAudioPacket>>>,
     > = Arc::new(tokio::sync::Mutex::new(None));
 
     #[cfg(feature = "tui")]
@@ -1286,7 +1283,7 @@ async fn async_main() -> Result<()> {
     // ── Remote device WebSocket server ────────────────────────────────────────
     #[cfg(feature = "remote")]
     if let Some(ws_port) = config.ws_port {
-        let remote_state = Arc::new(remote::server::RemoteState {
+        let remote_state = Arc::new(seneschal_remote::remote::server::RemoteState {
             audio_tx: tx.clone(),
             samples_per_chunk,
             barge_in_tx: events.barge_in_tx.clone(),
@@ -1297,7 +1294,7 @@ async fn async_main() -> Result<()> {
             control_broadcast_tx: control_broadcast.tx.clone(),
         });
         tokio::spawn(async move {
-            if let Err(e) = remote::server::start_server(ws_port, remote_state).await {
+            if let Err(e) = seneschal_remote::remote::server::start_server(ws_port, remote_state).await {
                 error!(target: "remote", "WebSocket server error: {e}");
             }
         });
@@ -1306,7 +1303,7 @@ async fn async_main() -> Result<()> {
     // ── Control API (HTTP + SSE) ──────────────────────────────────────────────
     #[cfg(feature = "control")]
     if let Some(ctrl_port) = config.control_port {
-        let ctrl_state = Arc::new(control::state::ControlState {
+        let ctrl_state = Arc::new(seneschal_control::control::state::ControlState {
             broadcast: control_broadcast.clone(),
             pipeline_state_rx: pipeline_state_rx.clone(),
             tts_muted: Arc::clone(&tts_muted),
@@ -1317,7 +1314,7 @@ async fn async_main() -> Result<()> {
             db: db.clone(),
         });
         tokio::spawn(async move {
-            if let Err(e) = control::api::start_control_server(ctrl_port, ctrl_state).await {
+            if let Err(e) = seneschal_control::control::api::start_control_server(ctrl_port, ctrl_state).await {
                 error!(target: "control", "Control API error: {e}");
             }
         });
@@ -1573,7 +1570,7 @@ async fn async_main() -> Result<()> {
                                     );
                                     #[cfg(feature = "control")]
                                     control_broadcast.send(
-                                        crate::control::broadcast::ControlEvent::McpNotification {
+                                        seneschal_control::control::broadcast::ControlEvent::McpNotification {
                                             server_name: server_name.clone(),
                                             method: method.clone(),
                                             params: params.clone(),
