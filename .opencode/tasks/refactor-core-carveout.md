@@ -277,8 +277,9 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | 7.10+7.8 | `ea82a50` | `seneschal-classifier` + `seneschal-memory` — classifier wrapper + S-DREAM daemon |
 | 7.6 | `d0e69a7` | `seneschal-agents` — multi-agent session management (AcpWriter extracted to common) |
 | 7.5 | `83e53c1` | `seneschal-tui` — terminal UI (ConversationMode extracted to common) |
+| 7.7 | `c7f8a86` | `seneschal-plugins` — plugin lifecycle (McpToolProxy extracted to mcp) |
 
-### Crates done (10/13)
+### Crates done (11/13)
 
 | Crate | Files | Dependencies |
 |-------|-------|-------------|
@@ -292,12 +293,12 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | `seneschal-memory` | dream (S-DREAM daemon) | common, core |
 | `seneschal-agents` | agents, agent_session, acp_writer | common |
 | `seneschal-tui` | tui (status-only) | common, agents, core |
+| `seneschal-plugins` | plugins (5/6 files; agent_bridge stays in src/) | common, agents, mcp |
 
-### Pending (3 crates + Phase 8-9)
+### Pending (2 crates + Phase 8-9)
 
 | Step | Crate / Task | Blocker / Notes |
 |------|-------------|-----------------|
-| 7.7 | `seneschal-plugins` | Depends on agents + mcp |
 | 7.9 | `seneschal-tools-core` | 8 essential tools; depends on search, agents, mcp |
 | 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools |
 | 8 | Feature flags | `Cargo.toml` [features], `main.rs` conditional compilation |
