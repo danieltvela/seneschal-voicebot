@@ -278,8 +278,9 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | 7.6 | `d0e69a7` | `seneschal-agents` — multi-agent session management (AcpWriter extracted to common) |
 | 7.5 | `83e53c1` | `seneschal-tui` — terminal UI (ConversationMode extracted to common) |
 | 7.7 | `c7f8a86` | `seneschal-plugins` — plugin lifecycle (McpToolProxy extracted to mcp) |
+| 7.9 | `c009b3b` | `seneschal-tools-core` — 10 essential tools |
 
-### Crates done (11/13)
+### Crates done (12/13)
 
 | Crate | Files | Dependencies |
 |-------|-------|-------------|
@@ -294,13 +295,13 @@ Orden por dependencia: `mcp` y `search` primero (hojas), luego `agents` (dep de 
 | `seneschal-agents` | agents, agent_session, acp_writer | common |
 | `seneschal-tui` | tui (status-only) | common, agents, core |
 | `seneschal-plugins` | plugins (5/6 files; agent_bridge stays in src/) | common, agents, mcp |
+| `seneschal-tools-core` | apple_events, clipboard, current_time, noop, open_app, open_terminal, quick_search, read_file, run_shell, web_search | common, core, search |
 
-### Pending (2 crates + Phase 8-9)
+### Pending (1 crate + Phase 8-9)
 
 | Step | Crate / Task | Blocker / Notes |
 |------|-------------|-----------------|
-| 7.9 | `seneschal-tools-core` | 8 essential tools; depends on search, agents, mcp |
-| 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools |
+| 7.11 | `seneschal-extras` | daemon, eyes, screen_capture, device_monitor, remaining tools (take_screenshot, deep_research, run_agent, recover_historical_context, switch_plugin, prompt_build, conversation_mode, subtask) + agent_bridge.rs |
 | 8 | Feature flags | `Cargo.toml` [features], `main.rs` conditional compilation |
 | 9 | QA final | `make qa-full`, CHANGELOG |
 
