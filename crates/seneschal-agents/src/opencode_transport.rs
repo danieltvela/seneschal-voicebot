@@ -8,10 +8,10 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::agents::hermes_events::{
+use crate::hermes_events::{
     HermesMilestone, extract_milestone as extract_hermes_milestone, parse_hermes_event,
 };
-use crate::agents::opencode_events::{OpenCodeMilestone, extract_milestone, parse_opencode_event};
+use crate::opencode_events::{OpenCodeMilestone, extract_milestone, parse_opencode_event};
 
 /// Represents an OpenCode session returned from `POST /session` (or Hermes `/v1/runs`).
 #[derive(Debug, Clone)]

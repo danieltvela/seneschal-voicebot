@@ -8,6 +8,7 @@
 //
 // It is a leaf dependency — it does NOT depend on any other workspace crate.
 
+pub mod acp_writer;
 pub mod classifier;
 pub mod config;
 pub mod db;

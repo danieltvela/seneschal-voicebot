@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
+use seneschal_agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use crate::config::HermesSessionViewerMode;
 use seneschal_core::llm::LlmProvider;

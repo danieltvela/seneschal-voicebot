@@ -1,6 +1,6 @@
 //! ACP session strip + detail view-model for the TUI.
 
-use crate::agents::{SessionEvent, SessionStatus};
+use seneschal_agents::{SessionEvent, SessionStatus};
 
 /// UI-facing ACP session state (mapped from domain `SessionStatus`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

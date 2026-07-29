@@ -6,7 +6,7 @@ use serde_json::json;
 use tracing::info;
 
 use super::Tool;
-use crate::agents::AgentConfig;
+use seneschal_agents::AgentConfig;
 use crate::tools::run_agent;
 
 /// Deep research tool — delegates complex research to an autonomous agent.

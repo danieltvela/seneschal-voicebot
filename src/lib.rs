@@ -1,5 +1,5 @@
-pub mod agent_session;
-pub mod agents;
+// agents → seneschal_agents
+// agent_session → seneschal_agents::agent_session
 pub mod config;
 pub mod db;
 // dream → seneschal_memory::dream

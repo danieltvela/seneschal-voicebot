@@ -3883,6 +3883,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rubato",
  "scraper",
+ "seneschal-agents",
  "seneschal-common",
  "seneschal-control",
  "seneschal-core",
@@ -3912,6 +3913,25 @@ dependencies = [
 [[package]]
 name = "seneschal-agents"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "libc",
+ "portable-pty",
+ "reqwest 0.12.28",
+ "seneschal-common",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
 
 [[package]]
 name = "seneschal-classifier"

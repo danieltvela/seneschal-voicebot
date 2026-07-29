@@ -3,8 +3,7 @@
 #![allow(unused_mut)]
 #![allow(unused_variables)]
 
-mod agent_session;
-mod agents;
+// agents → seneschal_agents
 mod analysis;
 // audio → seneschal_core::audio
 mod classifier;
@@ -38,10 +37,10 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use seneschal_common::tools::PromptBuildState;
 
-use crate::agent_session::VisibleSessionManager;
+use seneschal_agents::agent_session::VisibleSessionManager;
 #[cfg(feature = "tui")]
-use crate::agents::create_session_event_channel;
-use crate::agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
+use seneschal_agents::create_session_event_channel;
+use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use crate::analysis::ContextLens;
 use crate::analysis::identity::IdentityAnalyzer;

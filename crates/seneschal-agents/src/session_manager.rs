@@ -7,8 +7,8 @@ use dashmap::DashMap;
 use tokio::sync::{Mutex, mpsc};
 
 use super::config::AgentConfig;
-use crate::config::{Config, HermesSessionViewerMode};
-use crate::tools::run_agent::{AcpWriter, JsonRpcMessage};
+use seneschal_common::config::{Config, HermesSessionViewerMode};
+use seneschal_common::acp_writer::{AcpWriter, JsonRpcMessage};
 
 // ── Session events ─────────────────────────────────────────────────────────────
 
@@ -590,7 +590,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_or_create_reuses_existing_session() {
-        use crate::agents::config::AgentConfig;
+        use crate::config::AgentConfig;
 
         let mgr = AcpSessionManager::new();
         let cfg = AgentConfig {
@@ -629,7 +629,7 @@ mod tests {
         entry.last_used = Instant::now() - Duration::from_secs(10);
         mgr.sessions.insert("hermes".into(), entry.clone());
 
-        let cfg = crate::agents::config::AgentConfig {
+        let cfg = crate::config::AgentConfig {
             name: "hermes".to_string(),
             mode: "acp".to_string(),
             command: None,
@@ -721,7 +721,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_twice_get_or_create_same_session_id() {
-        use crate::agents::config::AgentConfig;
+        use crate::config::AgentConfig;
 
         let mgr = AcpSessionManager::new();
         mgr.sessions
@@ -752,7 +752,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_writer_not_respawned_between_prompts() {
-        use crate::agents::config::AgentConfig;
+        use crate::config::AgentConfig;
 
         let mgr = AcpSessionManager::new();
         mgr.sessions
@@ -818,7 +818,7 @@ mod tests {
         mgr.sessions
             .insert("hermes".into(), make_dummy_entry("retry-1", "hermes"));
 
-        let cfg = crate::agents::config::AgentConfig {
+        let cfg = crate::config::AgentConfig {
             name: "hermes".to_string(),
             mode: "acp".to_string(),
             command: None,
@@ -1107,7 +1107,7 @@ mod tests {
 
     #[tokio::test]
     async fn prewarm_agent_delegates_to_get_or_create() {
-        use crate::agents::config::AgentConfig;
+        use crate::config::AgentConfig;
 
         let mgr = AcpSessionManager::new();
         mgr.sessions
