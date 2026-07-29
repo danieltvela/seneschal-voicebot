@@ -37,6 +37,7 @@ seneschal-agents = { path = "crates/seneschal-agents" }
 seneschal-tui = { path = "crates/seneschal-tui" }
 seneschal-plugins = { path = "crates/seneschal-plugins" }
 seneschal-tools-core = { path = "crates/seneschal-tools-core" }
+seneschal-extras = { path = "crates/seneschal-extras" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

@@ -3887,6 +3887,7 @@ dependencies = [
  "seneschal-common",
  "seneschal-control",
  "seneschal-core",
+ "seneschal-extras",
  "seneschal-mcp",
  "seneschal-memory",
  "seneschal-plugins",
@@ -4027,6 +4028,32 @@ dependencies = [
 [[package]]
 name = "seneschal-extras"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "cpal",
+ "dashmap",
+ "futures-util",
+ "libc",
+ "portable-pty",
+ "reqwest 0.12.28",
+ "seneschal-agents",
+ "seneschal-common",
+ "seneschal-core",
+ "seneschal-mcp",
+ "seneschal-plugins",
+ "seneschal-search",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
 
 [[package]]
 name = "seneschal-mcp"

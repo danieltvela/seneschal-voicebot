@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
 
-use super::Tool;
+use seneschal_common::tools::Tool;
 use seneschal_agents::AgentConfig;
-use crate::tools::run_agent;
+use crate::run_agent;
 
 /// Deep research tool — delegates complex research to an autonomous agent.
 ///

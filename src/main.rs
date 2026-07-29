@@ -4,25 +4,21 @@
 #![allow(unused_variables)]
 
 // agents → seneschal_agents
-mod analysis;
+// analysis → seneschal_extras::analysis
 // audio → seneschal_core::audio
 mod classifier;
 mod config;
-mod daemon;
 mod db;
-mod device_monitor;
 // dream → seneschal_memory::dream
-mod eyes;
-mod i18n;
 // llm → seneschal_core::llm
 // memory → seneschal_core::memory
 // pipeline → seneschal_core::pipeline
-mod plugins;
+// plugins → seneschal_plugins + seneschal_extras::agent_bridge
 // profile → seneschal_core::profile
-mod screen_capture;
+// screen_capture → seneschal_extras::screen_capture
 // search → seneschal_search
 // stt → seneschal_core::stt
-mod tools;
+// tools → seneschal_tools_core + seneschal_extras
 // tts → seneschal_core::tts
 // tui → seneschal_tui
 
@@ -42,8 +38,8 @@ use seneschal_agents::agent_session::VisibleSessionManager;
 use seneschal_agents::create_session_event_channel;
 use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
-use crate::analysis::ContextLens;
-use crate::analysis::identity::IdentityAnalyzer;
+use seneschal_extras::analysis::ContextLens;
+use seneschal_extras::analysis::identity::IdentityAnalyzer;
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
 use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
 use seneschal_core::audio::audio_transform::resample_nearest;
@@ -59,23 +55,28 @@ use seneschal_core::pipeline::{
     check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
     sen_task, tts_task,
 };
-use crate::plugins::{
-    OriginalConfigSnapshot, PluginManager, PluginPromptSections, PluginSwitchEvent,
-    SpawnedMcpServers,
-    agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents},
-    build_plugin_prompt_section,
+use seneschal_plugins::{
+    OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
 };
+use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
+use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
 use seneschal_core::profile::ProfileFact;
 use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
-#[cfg(target_os = "macos")]
-use crate::tools::OpenTerminalTool;
-use crate::tools::{
-    ActiveTask, AppleEventsTool, ConversationMode, CurrentTimeTool, DeepResearchTool, McpToolProxy,
-    NoopTool, OpenAppTool, PendingInteractionEntry, QuickSearchTool,
-    ReadClipboardTool, ReadFileTool, RecoverHistoricalContextTool, RunAgentTool, RunShellTool,
-    SetClipboardTool, SetConversationModeTool, SetPromptBuildTool, SwitchPluginTool,
-    TakeScreenshotTool, ToolRegistry, WebSearchTool,
+use seneschal_tools_core::{
+    AppleEventsTool, CurrentTimeTool, NoopTool, OpenAppTool, QuickSearchTool,
+    ReadClipboardTool, ReadFileTool, RunShellTool, SetClipboardTool, WebSearchTool,
 };
+#[cfg(target_os = "macos")]
+use seneschal_tools_core::OpenTerminalTool;
+use seneschal_extras::{
+    DeepResearchTool, RecoverHistoricalContextTool, RunAgentTool, SwitchPluginTool,
+    TakeScreenshotTool,
+    conversation_mode::SetConversationModeTool,
+    prompt_build::SetPromptBuildTool,
+    run_agent::{ActiveTask, PendingInteractionEntry},
+};
+use seneschal_common::tools::{ConversationMode, ToolRegistry};
+use seneschal_mcp::mcp::McpToolProxy;
 #[cfg(feature = "avspeech")]
 use seneschal_core::tts::AvSpeechTts;
 #[cfg(feature = "kokoro")]
@@ -417,7 +418,7 @@ async fn async_main() -> Result<()> {
             .collect();
 
         if !acp_agents.is_empty() {
-            daemon::AcpKeepAliveDaemon {
+            seneschal_extras::daemon::AcpKeepAliveDaemon {
                 interval_secs: config.agent_acp_keepalive_interval_secs,
                 manager: Arc::clone(&session_manager),
                 configs: acp_agents,
@@ -539,20 +540,20 @@ async fn async_main() -> Result<()> {
                 let prompt = &activated_prompt_configs;
                 plugin_sections = PluginPromptSections {
                     replace: match prompt.mode {
-                        crate::plugins::manifest::PromptMode::Replace => {
+                        seneschal_plugins::PromptMode::Replace => {
                             prompt.content.clone() + "\n"
                         }
                         _ => String::new(),
                     },
                     prepend: match prompt.mode {
-                        crate::plugins::manifest::PromptMode::Both if prompt.prepend => {
+                        seneschal_plugins::PromptMode::Both if prompt.prepend => {
                             prompt.content.clone() + "\n"
                         }
                         _ => String::new(),
                     },
                     append: match prompt.mode {
-                        crate::plugins::manifest::PromptMode::Append
-                        | crate::plugins::manifest::PromptMode::Both
+                        seneschal_plugins::PromptMode::Append
+                        | seneschal_plugins::PromptMode::Both
                             if !prompt.prepend =>
                         {
                             prompt.content.clone() + "\n"
@@ -769,7 +770,7 @@ async fn async_main() -> Result<()> {
             "Inference daemon enabled (interval={}s)",
             config.daemon_interval_secs
         );
-        daemon::InferenceDaemon {
+        seneschal_extras::daemon::InferenceDaemon {
             interval_secs: config.daemon_interval_secs,
             llm_client: llm_client.clone(),
             llm_session: Arc::clone(&llm_session),
@@ -787,7 +788,7 @@ async fn async_main() -> Result<()> {
                 config.eyes_interval_secs,
                 config.secondary_llm_model,
             );
-            eyes::EyesDaemon {
+            seneschal_extras::eyes::EyesDaemon {
                 interval_secs: config.eyes_interval_secs,
                 vision_client: sec_client.clone(),
                 proactive_tx: proactive_tx.clone(),
@@ -1351,7 +1352,7 @@ async fn async_main() -> Result<()> {
     if capture_stream.is_some() {
         let first = is_first_launch;
         let key = if first { "first_launch" } else { "startup" };
-        let notification = i18n::get_notification(key, &config.language);
+        let notification = seneschal_common::i18n::get_notification(key, &config.language);
         let notification = if first {
             notification.to_string()
         } else {
@@ -1374,7 +1375,7 @@ async fn async_main() -> Result<()> {
     // available (e.g. Bluetooth headset reconnect). The main loop then starts
     // capture, swaps the output device, and sends the startup greeting.
     if config.device_monitor_enabled {
-        device_monitor::spawn(
+        seneschal_extras::device_monitor::spawn(
             config.audio_input_device.clone(),
             proactive_tx.clone(),
             config.device_monitor_poll_secs,
@@ -1395,7 +1396,7 @@ async fn async_main() -> Result<()> {
                     if llm_idle && current_agent_announcement.is_none()
                         && let Some((task, result)) = pending_agent_results.pop_front()
                     {
-                        let notification = i18n::get_notification("background_task_done", &config.language)
+                        let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
                             .replace("{task}", &task)
                             .replace("{result}", &result);
                         current_agent_announcement = Some((task, result));
@@ -1455,7 +1456,7 @@ async fn async_main() -> Result<()> {
                                 }
                                 ProactiveEvent::InferenceDaemon { .. } => {}
                                 ProactiveEvent::L1Saturated { total_chars, threshold } => {
-                                    let prompt = i18n::get_notification("l1_saturated", &config.language)
+                                    let prompt = seneschal_common::i18n::get_notification("l1_saturated", &config.language)
                                         .replace("{total_chars}", &total_chars.to_string())
                                         .replace("{threshold}", &threshold.to_string());
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
@@ -1499,7 +1500,7 @@ async fn async_main() -> Result<()> {
                                         Some(entry) => entry.options.join(" / "),
                                         None => String::new(),
                                     };
-                                    let prompt = i18n::get_notification("acp_permission", &config.language)
+                                    let prompt = seneschal_common::i18n::get_notification("acp_permission", &config.language)
                                         .replace("{question}", &pending_agent_questions.front().map(|e| e.question.clone()).unwrap_or_default())
                                         .replace("{opts_str}", &opts_str);
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
@@ -1536,7 +1537,7 @@ async fn async_main() -> Result<()> {
                                         .ok();
                                     // Send greeting (first_launch or startup)
                                     let key = if is_first_launch { "first_launch" } else { "startup" };
-                                    let notification = i18n::get_notification(key, &config.language);
+                                    let notification = seneschal_common::i18n::get_notification(key, &config.language);
                                     let notification = if is_first_launch {
                                         notification.to_string()
                                     } else {

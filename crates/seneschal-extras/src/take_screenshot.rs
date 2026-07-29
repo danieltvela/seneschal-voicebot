@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use seneschal_core::llm::LlmProvider;
 use crate::screen_capture;
 
-use super::Tool;
+use seneschal_common::tools::Tool;
 
 /// Tool that takes a screenshot and describes it using a vision model.
 ///

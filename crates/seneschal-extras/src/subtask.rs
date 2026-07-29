@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 
-use super::Tool;
+use seneschal_common::tools::Tool;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SubtaskStatus {

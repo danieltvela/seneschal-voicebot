@@ -7,11 +7,12 @@ use tracing::warn;
 
 use seneschal_agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
-use crate::config::HermesSessionViewerMode;
+use seneschal_common::config::HermesSessionViewerMode;
 use seneschal_core::llm::LlmProvider;
-use crate::tools::{ActiveTask, RunAgentTool, Tool, ToolRegistry};
+use seneschal_common::tools::{Tool, ToolRegistry};
+use crate::run_agent::{ActiveTask, RunAgentTool};
 
-use super::manifest::PluginAgentConfig;
+use seneschal_plugins::PluginAgentConfig;
 
 /// Convert plugin agent configs to AgentConfig, skipping duplicates.
 ///

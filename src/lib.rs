@@ -3,9 +3,10 @@
 pub mod config;
 pub mod db;
 // dream → seneschal_memory::dream
-pub mod i18n;
+// i18n → seneschal_common::i18n
+// plugins → seneschal_plugins + seneschal_extras::agent_bridge
 pub mod plugins;
-pub mod screen_capture;
+// screen_capture → seneschal_extras::screen_capture
 pub mod tools;
 
 pub mod control_client {

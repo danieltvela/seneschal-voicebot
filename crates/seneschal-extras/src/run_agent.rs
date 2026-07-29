@@ -13,14 +13,14 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use super::Tool;
+use seneschal_common::tools::Tool;
 use seneschal_agents::agent_session::VisibleSessionManager;
 use seneschal_agents::{
     AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport,
     SessionEvent, SessionEventTx,
 };
 use seneschal_common::events::ProactiveEvent;
-use crate::config::{Config, HermesSessionViewerMode};
+use seneschal_common::config::{Config, HermesSessionViewerMode};
 
 use seneschal_core::llm::{LlmProvider, Message};
 
