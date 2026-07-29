@@ -2,7 +2,7 @@ pub mod agent_session;
 pub mod agents;
 pub mod config;
 pub mod db;
-pub mod dream;
+// dream → seneschal_memory::dream
 pub mod i18n;
 pub mod plugins;
 pub mod screen_capture;

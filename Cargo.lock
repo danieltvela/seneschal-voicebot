@@ -3887,6 +3887,7 @@ dependencies = [
  "seneschal-control",
  "seneschal-core",
  "seneschal-mcp",
+ "seneschal-memory",
  "seneschal-remote",
  "seneschal-search",
  "serde",
@@ -3915,6 +3916,9 @@ version = "0.1.0"
 [[package]]
 name = "seneschal-classifier"
 version = "0.1.0"
+dependencies = [
+ "seneschal-common",
+]
 
 [[package]]
 name = "seneschal-common"
@@ -4019,6 +4023,19 @@ dependencies = [
 [[package]]
 name = "seneschal-memory"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "seneschal-common",
+ "seneschal-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
 
 [[package]]
 name = "seneschal-plugins"

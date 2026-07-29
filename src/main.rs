@@ -12,7 +12,7 @@ mod config;
 mod daemon;
 mod db;
 mod device_monitor;
-mod dream;
+// dream → seneschal_memory::dream
 mod eyes;
 mod i18n;
 // llm → seneschal_core::llm
@@ -53,7 +53,7 @@ use seneschal_core::audio::output::AudioOutput;
 use seneschal_core::audio::speaker::SpeakerVerifier;
 use crate::config::{Config, SeneschalEnv};
 use crate::db::{Database, Memory};
-use crate::dream::{SDreamConfig, SDreamDaemon};
+use seneschal_memory::{SDreamConfig, SDreamDaemon};
 use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
 use seneschal_core::pipeline::{
     PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,

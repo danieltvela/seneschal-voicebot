@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use seneschal_common::events::ProactiveEvent;
-use crate::db::Database;
+use seneschal_common::Database;
 use seneschal_core::llm::{LlmProvider, Message};
 use seneschal_core::memory::extract_memories;
 use seneschal_core::profile::extract_facts;
