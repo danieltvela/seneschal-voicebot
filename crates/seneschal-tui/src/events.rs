@@ -1,7 +1,5 @@
 use tokio::sync::mpsc;
 
-use super::acp_panel::AcpSessionState;
-
 /// Pipeline state for the TUI status bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PipelineState {
@@ -42,24 +40,6 @@ pub enum TuiEvent {
     PromptBuildUpdate { prompt: String },
     /// Prompt-build mode: activation state changed.
     PromptBuildStateChange { active: bool },
-    /// Full replace/upsert of one ACP session row (strip + optional seed lines).
-    AcpSessionUpsert {
-        session_id: String,
-        agent_name: String,
-        label: String,
-        state: AcpSessionState,
-    },
-    /// Append log text to a session detail pane.
-    ///
-    /// Use `AcpLogMode::AgentStream` / `ThoughtStream` for token chunks so they
-    /// coalesce into readable paragraphs instead of one `>` line per chunk.
-    AcpSessionLog {
-        session_id: String,
-        line: String,
-        mode: super::acp_panel::AcpLogMode,
-    },
-    /// Session removed / closed — drop from strip.
-    AcpSessionRemove { session_id: String },
 }
 
 pub type TuiEventTx = mpsc::UnboundedSender<TuiEvent>;

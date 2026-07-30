@@ -1,14 +1,11 @@
 // seneschal-tui — Terminal user interface for Seneschal.
 //
-// Status-only TUI showing conversation, pipeline state, and ACP agent sessions.
+// Status-only TUI showing conversation and pipeline state.
 
-mod acp_panel;
 mod app;
 pub mod events;
 mod input;
 mod ui;
-
-pub use acp_panel::{AcpInputCommand, map_session_event_to_tui};
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,7 +34,6 @@ pub async fn run(
     tts_muted: Arc<AtomicBool>,
     conv_mode: Arc<Mutex<ConversationMode>>,
     prompt_build_state: Arc<Mutex<PromptBuildState>>,
-    acp_input_tx: Option<mpsc::Sender<AcpInputCommand>>,
 ) -> Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
@@ -77,18 +73,6 @@ pub async fn run(
                                 }
                                 Action::SubmitToSeneschal(text) => {
                                     transcript_tx.send(PipelineFrame::TextInput { text }).await.ok();
-                                }
-                                Action::SubmitToAcp { session_id, agent_name, text } => {
-                                    if let Some(ref tx) = acp_input_tx {
-                                        tx.send(AcpInputCommand {
-                                            session_id,
-                                            agent_name,
-                                            text,
-                                        }).await.ok();
-                                    } else {
-                                        // No ACP input channel — fall back to Seneschal.
-                                        transcript_tx.send(PipelineFrame::TextInput { text }).await.ok();
-                                    }
                                 }
                                 Action::ToggleTts => {
                                     let was_muted = tts_muted.load(Ordering::SeqCst);

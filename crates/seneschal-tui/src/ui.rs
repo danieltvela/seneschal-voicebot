@@ -3,11 +3,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Paragraph},
 };
 
-use super::acp_panel::state_style;
-use super::app::{App, ChatMessage, FocusTarget, InputMode, Role};
+use super::app::{App, ChatMessage, InputMode, Role};
 use super::events::{InputSource, PipelineState};
 use seneschal_common::tools::ConversationMode;
 
@@ -67,7 +66,7 @@ fn compute_conversation_heights(
 
 /// Render the fullscreen TUI.
 ///
-/// Outer: main | input | status. Main splits horizontally when ACP sessions exist.
+/// Outer: main | input | status. Main fills the full width.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let total = frame.area();
     let width = total.width as usize;
@@ -90,16 +89,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let input_area = outer[1];
     let status_area = outer[2];
 
-    let has_acp = app.has_acp_sessions();
-    let (left_area, right_area) = if has_acp {
-        let cols = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
-            .split(main_area);
-        (cols[0], Some(cols[1]))
-    } else {
-        (main_area, None)
-    };
-
-    let left_width = left_area.width as usize;
     let prompt_active = app.prompt_build_state.lock().unwrap().is_active();
     let prompt_height = if prompt_active {
         let prompt_text = app
@@ -109,172 +98,36 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             .prompt_text()
             .unwrap_or("")
             .to_string();
-        compute_prompt_display_height(&prompt_text, left_width).min(6) as u16
+        compute_prompt_display_height(&prompt_text, width).min(6) as u16
     } else {
         0
     };
 
     let (history_height, streaming_height, prompt_h) = compute_conversation_heights(
-        left_area.height,
+        main_area.height,
         prompt_height,
         !app.streaming_buffer.is_empty(),
     );
 
-    let left_parts = Layout::vertical([
+    let main_parts = Layout::vertical([
         Constraint::Length(history_height),
         Constraint::Length(streaming_height),
         Constraint::Length(prompt_h),
     ])
-    .split(left_area);
+    .split(main_area);
 
     if history_height > 0 {
-        render_history(frame, app, left_parts[0]);
+        render_history(frame, app, main_parts[0]);
     }
     if streaming_height > 0 {
-        render_streaming(frame, app, left_parts[1]);
+        render_streaming(frame, app, main_parts[1]);
     }
     if prompt_height > 0 {
-        render_prompt_display(frame, app, left_parts[2]);
-    }
-
-    if let Some(right) = right_area {
-        let strip_h = (app.acp_sessions.len() as u16)
-            .saturating_add(2)
-            .min(right.height)
-            .max(2);
-        let right_parts =
-            Layout::vertical([Constraint::Length(strip_h), Constraint::Min(0)]).split(right);
-        render_session_strip(frame, app, right_parts[0]);
-        render_session_detail(frame, app, right_parts[1]);
+        render_prompt_display(frame, app, main_parts[2]);
     }
 
     render_input(frame, app, input_area);
     render_status(frame, app, status_area);
-}
-
-fn render_session_strip(frame: &mut Frame, app: &App, area: Rect) {
-    if area.height == 0 {
-        return;
-    }
-    let focused = app.focus == FocusTarget::SessionStrip;
-    let border = if focused { Color::Cyan } else { Color::Gray };
-    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
-        Span::styled(
-            " SESIONES ACP ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("[Tab]", Style::default().fg(Color::DarkGray)),
-    ])];
-
-    for (i, sess) in app.acp_sessions.iter().enumerate() {
-        let (icon, color) = state_style(sess.state);
-        let selected = i == app.selected_session;
-        let prefix = format!(" [{}] {} {} ", i + 1, sess.label, icon);
-        let style = if selected {
-            Style::default()
-                .fg(color)
-                .bg(Color::Rgb(40, 40, 60))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(color)
-        };
-        lines.push(Line::from(Span::styled(prefix, style)));
-    }
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let skip = lines.len().saturating_sub(inner.height as usize);
-    frame.render_widget(Paragraph::new(Text::from(lines[skip..].to_vec())), inner);
-}
-
-fn render_session_detail(frame: &mut Frame, app: &App, area: Rect) {
-    if area.height == 0 {
-        return;
-    }
-    let focused = app.focus == FocusTarget::SessionDetail;
-    let border = if focused { Color::Cyan } else { Color::Gray };
-
-    let Some(sess) = app.selected_acp() else {
-        return;
-    };
-
-    let title = format!(" {} · {} ", sess.label, sess.agent_name);
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let width = inner.width as usize;
-    let mut all_lines: Vec<Line<'static>> = Vec::new();
-    if sess.lines.is_empty() {
-        all_lines.push(Line::from(Span::styled(
-            "(sin actividad)",
-            Style::default().fg(Color::DarkGray).italic(),
-        )));
-    } else {
-        use super::acp_panel::AcpEntryKind;
-        for entry in &sess.lines {
-            if entry.text.is_empty() {
-                continue;
-            }
-            let (style, display) = match entry.kind {
-                AcpEntryKind::Prompt => (
-                    Style::default().fg(Color::Yellow),
-                    if entry.text.starts_with('?') {
-                        entry.text.clone()
-                    } else {
-                        format!("? {}", entry.text)
-                    },
-                ),
-                AcpEntryKind::User => (
-                    Style::default().fg(Color::Cyan),
-                    format!("tú: {}", entry.text),
-                ),
-                AcpEntryKind::Thought => (
-                    Style::default().fg(Color::DarkGray).italic(),
-                    format!("thinking: {}", entry.text),
-                ),
-                AcpEntryKind::Tool => (Style::default().fg(Color::Magenta), entry.text.clone()),
-                AcpEntryKind::Error => (
-                    Style::default().fg(Color::Red),
-                    format!("error: {}", entry.text),
-                ),
-                AcpEntryKind::Agent => {
-                    // One logical stream entry → one ">" block; wrap body so
-                    // continuation rows are indented, not re-prefixed.
-                    let style = Style::default().fg(Color::Rgb(180, 180, 180));
-                    let body_w = width.saturating_sub(2).max(1);
-                    let body_rows = word_wrap_plain(&entry.text, body_w);
-                    for (i, row) in body_rows.into_iter().enumerate() {
-                        let display = if i == 0 {
-                            format!("> {row}")
-                        } else {
-                            format!("  {row}")
-                        };
-                        all_lines.push(Line::from(Span::styled(display, style)));
-                    }
-                    continue;
-                }
-            };
-            for row in word_wrap_plain(&display, width) {
-                all_lines.push(Line::from(Span::styled(row, style)));
-            }
-        }
-    }
-
-    let scroll = sess.scroll as usize;
-    let visible = inner.height as usize;
-    let end = all_lines.len().saturating_sub(scroll);
-    let start = end.saturating_sub(visible);
-    let display = Text::from(all_lines[start..end].to_vec());
-    frame.render_widget(Paragraph::new(display), inner);
 }
 
 /// Render the message history, auto-scrolled to the bottom.
@@ -735,11 +588,6 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::Insert => "INSERT",
         InputMode::Normal => "NORMAL",
     };
-    let focus_label = match app.focus {
-        FocusTarget::Conversation => "CONV",
-        FocusTarget::SessionStrip => "STRIP",
-        FocusTarget::SessionDetail => "ACP",
-    };
 
     let text = Text::from(vec![Line::from(vec![
         Span::styled(
@@ -754,11 +602,9 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(conv_label, Style::default().fg(conv_color)),
         Span::raw(" │ "),
         Span::styled(mode_label, Style::default().fg(Color::Yellow)),
-        Span::raw(" "),
-        Span::styled(focus_label, Style::default().fg(Color::Cyan)),
         Span::raw(" │ "),
         Span::styled(
-            "Ctrl+T TTS  Tab focus  i insert  Esc normal  Ctrl+C quit",
+            "Ctrl+T TTS  i insert  Esc normal  Ctrl+C quit",
             Style::default().fg(Color::Rgb(100, 100, 100)),
         ),
     ])]);

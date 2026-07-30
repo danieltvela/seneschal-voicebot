@@ -36,8 +36,6 @@ use tracing_subscriber::EnvFilter;
 use crate::config::{Config, SeneschalEnv};
 use crate::db::{Database, Memory};
 use seneschal_agents::agent_session::VisibleSessionManager;
-#[cfg(feature = "tui")]
-use seneschal_agents::create_session_event_channel;
 use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
@@ -308,18 +306,8 @@ async fn async_main() -> Result<()> {
     let agent_registry = AgentRegistry::from_config_and_env(config.agents.clone());
     let agent_section = agent_registry.system_prompt_section();
     let mut session_manager_inner = AcpSessionManager::new();
-    #[cfg(feature = "tui")]
-    let mut session_event_rx = {
-        let (tx, rx) = create_session_event_channel();
-        session_manager_inner.set_event_tx(tx);
-        rx
-    };
     let session_manager = Arc::new(session_manager_inner);
     let visible_session_manager = Arc::new(VisibleSessionManager::new());
-    // Pending ACP permission answers keyed by agent name (TUI keyboard path).
-    let pending_acp_answers: Arc<
-        Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<String>>>,
-    > = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
     // ── Search provider (fast path) ───────────────────────────────────────────
     if let Some(provider) = seneschal_search::from_config(&config) {
@@ -1221,52 +1209,6 @@ async fn async_main() -> Result<()> {
     // ── TUI ───────────────────────────────────────────────────────────────────
     #[cfg(feature = "tui")]
     {
-        // Bridge SessionEvent → TuiEvent
-        let tui_tx_bridge = tui_tx.clone();
-        tokio::spawn(async move {
-            while let Some(ev) = session_event_rx.recv().await {
-                for mapped in seneschal_tui::map_session_event_to_tui(ev) {
-                    let _ = tui_tx_bridge.send(mapped);
-                }
-            }
-        });
-
-        let (acp_input_tx, mut acp_input_rx) =
-            tokio::sync::mpsc::channel::<seneschal_tui::AcpInputCommand>(8);
-        let session_mgr_input = Arc::clone(&session_manager);
-        let pending_answers_input = Arc::clone(&pending_acp_answers);
-        tokio::spawn(async move {
-            while let Some(cmd) = acp_input_rx.recv().await {
-                // Prefer resolving a pending permission oneshot.
-                let pending = pending_answers_input
-                    .lock()
-                    .ok()
-                    .and_then(|mut m| m.remove(&cmd.agent_name));
-                if let Some(tx) = pending {
-                    let _ = tx.send(cmd.text);
-                    continue;
-                }
-                // Follow-up prompt on the live session.
-                if let Some(entry) = session_mgr_input
-                    .list_sessions()
-                    .into_iter()
-                    .find(|s| s.session_id == cmd.session_id || s.agent_name == cmd.agent_name)
-                {
-                    // Re-fetch writer via get_or_create is heavy; use internal lookup:
-                    // list_sessions does not expose writer — use mark + try open via dashmap
-                    // by agent name through a dedicated method.
-                    if let Err(e) = session_mgr_input
-                        .send_user_message(&cmd.agent_name, &cmd.text)
-                        .await
-                    {
-                        warn!(target: "acp", "ACP TUI input failed: {e}");
-                    } else {
-                        let _ = entry; // silence unused when send succeeds
-                    }
-                }
-            }
-        });
-
         let transcript_tx_c = transcript_tx.clone();
         let tts_muted_c = Arc::clone(&tts_muted);
         let conv_mode_c = Arc::clone(&conv_mode);
@@ -1278,7 +1220,6 @@ async fn async_main() -> Result<()> {
                 tts_muted_c,
                 conv_mode_c,
                 prompt_build_c,
-                Some(acp_input_tx),
             )
             .await
             {
@@ -1480,23 +1421,11 @@ async fn async_main() -> Result<()> {
                                             pending_agent_results.push_front(announcement);
                                         }
                                     }
-                                    // TUI can answer via keyboard when focus is on ACP panel.
-                                    if let Ok(mut map) = pending_acp_answers.lock() {
-                                        map.insert(agent_name.clone(), response_tx);
-                                    }
-                                    // Voice path still uses PendingInteractionEntry — create a
-                                    // placeholder oneshot that is never completed if TUI answers
-                                    // first; voice completion uses a second channel only when
-                                    // map still holds the sender. Rebuild entry only if still pending.
+                                    // Voice path: relay voice answer to the original response_tx.
                                     let (voice_tx, voice_rx) = tokio::sync::oneshot::channel::<String>();
-                                    let pending_map = Arc::clone(&pending_acp_answers);
-                                    let agent_name_c = agent_name.clone();
                                     tokio::spawn(async move {
-                                        if let Ok(ans) = voice_rx.await
-                                            && let Ok(mut map) = pending_map.lock()
-                                            && let Some(tx) = map.remove(&agent_name_c)
-                                        {
-                                            let _ = tx.send(ans);
+                                        if let Ok(ans) = voice_rx.await {
+                                            let _ = response_tx.send(ans);
                                         }
                                     });
                                     let entry = PendingInteractionEntry {
