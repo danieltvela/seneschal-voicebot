@@ -119,8 +119,7 @@ impl AnnouncementWindow {
 
     /// Enqueue an agent task result to be announced when safe.
     pub fn queue_announcement(&mut self, task: String, result: String) {
-        self.pending
-            .push_back(PendingAnnouncement { task, result });
+        self.pending.push_back(PendingAnnouncement { task, result });
     }
 
     /// Try to pop the next announcement from the queue.

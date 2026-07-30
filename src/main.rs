@@ -1370,7 +1370,8 @@ async fn async_main() -> Result<()> {
             _ = async {
                 loop {
                     // Inject pending agent results when AnnouncementWindow allows it.
-                    if let Some(announcement) = announcement_window.lock().unwrap().pop_announcement() {
+                    let maybe_announcement = announcement_window.lock().unwrap().pop_announcement();
+                    if let Some(announcement) = maybe_announcement {
                         let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
                             .replace("{task}", &announcement.task)
                             .replace("{result}", &announcement.result);
