@@ -30,6 +30,7 @@ pub async fn tts_task(
     tts_sample_rate: u32,
     play_cancel: Arc<AtomicBool>,
     tts_muted: Arc<AtomicBool>,
+    has_audio_device: bool,
     tui_tx: Option<TuiEventTx>,
     #[cfg(feature = "remote")] remote_tts_tx: Arc<
         tokio::sync::Mutex<
