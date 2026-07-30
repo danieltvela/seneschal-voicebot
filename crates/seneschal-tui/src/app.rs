@@ -29,6 +29,28 @@ pub enum Role {
     Error,
     System,
     Splash,
+    AgentTask,
+}
+
+/// Inline agent task state for timeline.inline rendering.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentTaskStatus {
+    Started,
+    Running,
+    Delegated,
+    Finalizing,
+    Completed,
+    PermissionRequested,
+    Failed,
+}
+
+/// Metadata for agent task messages (only meaningful when role == AgentTask).
+#[derive(Clone, Debug)]
+pub struct AgentTaskInfo {
+    pub task_id: String,
+    pub agent_name: String,
+    pub status: AgentTaskStatus,
+    pub options: Vec<String>,
 }
 
 /// A single message in the conversation view.
@@ -37,6 +59,20 @@ pub struct ChatMessage {
     pub role: Role,
     pub content: String,
     pub timestamp: chrono::DateTime<chrono::Local>,
+    /// Agent task metadata (only meaningful when role == AgentTask).
+    pub agent_task: Option<AgentTaskInfo>,
+}
+
+impl ChatMessage {
+    /// Convenience constructor for agent task messages.
+    pub fn agent_task(info: AgentTaskInfo, content: String) -> Self {
+        Self {
+            role: Role::AgentTask,
+            content,
+            timestamp: chrono::Local::now(),
+            agent_task: Some(info),
+        }
+    }
 }
 
 /// TUI application state.
@@ -86,6 +122,14 @@ impl App {
         "→ Seneschal".to_string()
     }
 
+    /// Find an existing agent task message by task_id, returning a mutable reference.
+    fn find_agent_task_mut(&mut self, task_id: &str) -> Option<&mut ChatMessage> {
+        self.messages
+            .iter_mut()
+            .rev()
+            .find(|msg| msg.agent_task.as_ref().map(|i| i.task_id.as_str()) == Some(task_id))
+    }
+
     /// Process a pipeline event and update app state.
     pub fn handle_tui_event(&mut self, event: TuiEvent) {
         match event {
@@ -97,6 +141,7 @@ impl App {
                     role: Role::User(source),
                     content: text,
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::AssistantToken(token) => {
@@ -109,6 +154,7 @@ impl App {
                         role: Role::Assistant,
                         content,
                         timestamp: chrono::Local::now(),
+                        agent_task: None,
                     });
                 }
             }
@@ -117,6 +163,7 @@ impl App {
                     role: Role::Error,
                     content: msg,
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::SystemNotification { text } => {
@@ -124,6 +171,7 @@ impl App {
                     role: Role::System,
                     content: text,
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::ToolCall { name, result } => {
@@ -136,6 +184,7 @@ impl App {
                     role: Role::Tool,
                     content: format!("{name} -> {short}"),
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::Splash => {
@@ -143,6 +192,7 @@ impl App {
                     role: Role::Splash,
                     content: String::new(),
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::PromptBuildUpdate { prompt: new_text } => {
@@ -161,6 +211,142 @@ impl App {
                     }
                 } else {
                     *state = PromptBuildState::Inactive;
+                }
+            }
+            // Agent task lifecycle events (timeline.inline — qwen-audio-agent style).
+            TuiEvent::AgentTaskStarted {
+                task_id,
+                agent_name,
+                objective,
+            } => {
+                // Dedup: skip if already exists and not terminal.
+                if let Some(existing) = self.find_agent_task_mut(&task_id) {
+                    if !matches!(
+                        existing.agent_task.as_ref().map(|i| &i.status),
+                        Some(AgentTaskStatus::Completed) | Some(AgentTaskStatus::Failed)
+                    ) {
+                        return;
+                    }
+                }
+                self.messages.push(ChatMessage::agent_task(
+                    AgentTaskInfo {
+                        task_id,
+                        agent_name: agent_name.clone(),
+                        status: AgentTaskStatus::Started,
+                        options: vec![],
+                    },
+                    format!("[{agent_name}] {objective}"),
+                ));
+            }
+            TuiEvent::AgentTaskRunning { task_id, objective } => {
+                if let Some(msg) = self.find_agent_task_mut(&task_id) {
+                    if let Some(ref mut info) = msg.agent_task {
+                        info.status = AgentTaskStatus::Running;
+                    }
+                    msg.content = objective;
+                } else {
+                    self.messages.push(ChatMessage::agent_task(
+                        AgentTaskInfo {
+                            task_id,
+                            agent_name: String::new(),
+                            status: AgentTaskStatus::Running,
+                            options: vec![],
+                        },
+                        objective,
+                    ));
+                }
+            }
+            TuiEvent::AgentTaskDelegated { task_id, objective } => {
+                let content = format!("[Proyecto en ejecución] {objective}");
+                if let Some(msg) = self.find_agent_task_mut(&task_id) {
+                    if let Some(ref mut info) = msg.agent_task {
+                        info.status = AgentTaskStatus::Delegated;
+                    }
+                    msg.content = content;
+                } else {
+                    self.messages.push(ChatMessage::agent_task(
+                        AgentTaskInfo {
+                            task_id,
+                            agent_name: String::new(),
+                            status: AgentTaskStatus::Delegated,
+                            options: vec![],
+                        },
+                        content,
+                    ));
+                }
+            }
+            TuiEvent::AgentTaskFinalizing { task_id, objective } => {
+                if let Some(msg) = self.find_agent_task_mut(&task_id) {
+                    if let Some(ref mut info) = msg.agent_task {
+                        info.status = AgentTaskStatus::Finalizing;
+                    }
+                    msg.content = objective;
+                } else {
+                    self.messages.push(ChatMessage::agent_task(
+                        AgentTaskInfo {
+                            task_id,
+                            agent_name: String::new(),
+                            status: AgentTaskStatus::Finalizing,
+                            options: vec![],
+                        },
+                        objective,
+                    ));
+                }
+            }
+            TuiEvent::AgentTaskCompleted {
+                task_id,
+                objective: _,
+                result,
+            } => {
+                if let Some(msg) = self.find_agent_task_mut(&task_id) {
+                    if let Some(ref mut info) = msg.agent_task {
+                        info.status = AgentTaskStatus::Completed;
+                    }
+                    msg.content = result;
+                } else {
+                    self.messages.push(ChatMessage::agent_task(
+                        AgentTaskInfo {
+                            task_id,
+                            agent_name: String::new(),
+                            status: AgentTaskStatus::Completed,
+                            options: vec![],
+                        },
+                        result,
+                    ));
+                }
+            }
+            TuiEvent::AgentTaskPermissionRequested {
+                task_id,
+                agent_name,
+                description,
+                options,
+            } => {
+                self.messages.push(ChatMessage::agent_task(
+                    AgentTaskInfo {
+                        task_id,
+                        agent_name: agent_name.clone(),
+                        status: AgentTaskStatus::PermissionRequested,
+                        options: options.clone(),
+                    },
+                    description,
+                ));
+            }
+            TuiEvent::AgentTaskFailed { task_id, message } => {
+                if let Some(msg) = self.find_agent_task_mut(&task_id) {
+                    if let Some(ref mut info) = msg.agent_task {
+                        info.status = AgentTaskStatus::Failed;
+                    }
+                    msg.content = message;
+                } else {
+                    self.messages.push(ChatMessage::agent_task(
+                        AgentTaskInfo {
+                            task_id,
+                            agent_name: String::new(),
+                            status: AgentTaskStatus::Failed,
+                            options: vec![],
+                        },
+                        message,
+                    ));
                 }
             }
         }
