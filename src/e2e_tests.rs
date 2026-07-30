@@ -281,6 +281,9 @@ impl E2eHarness {
                     muted_c,
                     has_audio_device,
                     None, // tui_tx
+                    Arc::new(std::sync::Mutex::new(
+                        seneschal_core::pipeline::AnnouncementWindow::new(),
+                    )),
                 )
                 .await
             })
