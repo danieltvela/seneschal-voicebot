@@ -510,7 +510,9 @@ impl RunAgentTool {
         let agent_name = self.config.name.clone();
         let session_dir = self.session_dir.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::runtime::Handle::current();
+
+        tokio::task::spawn_blocking(move || {
             info!(target: "agent", "RunAgentTool(visible): task started: {:?}", task);
 
             // Get or create visible session
@@ -518,14 +520,12 @@ impl RunAgentTool {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(target: "agent", "Failed to create visible session: {e}");
-                    let _ = proactive_tx
-                        .send(ProactiveEvent::AgentResult {
-                            task,
-                            result: format!("Visible session error: {e}"),
-                            tool_call_id: None,
-                            correlation_id: String::new(),
-                        })
-                        .await;
+                    let _ = handle.block_on(proactive_tx.send(ProactiveEvent::AgentResult {
+                        task,
+                        result: format!("Visible session error: {e}"),
+                        tool_call_id: None,
+                        correlation_id: String::new(),
+                    }));
                     return;
                 }
             };
@@ -533,14 +533,12 @@ impl RunAgentTool {
             // Send the query
             if let Err(e) = session.send(&query) {
                 warn!(target: "agent", "Failed to send to visible agent: {e}");
-                let _ = proactive_tx
-                    .send(ProactiveEvent::AgentResult {
-                        task,
-                        result: format!("Visible agent send error: {e}"),
-                        tool_call_id: None,
-                        correlation_id: String::new(),
-                    })
-                    .await;
+                let _ = handle.block_on(proactive_tx.send(ProactiveEvent::AgentResult {
+                    task,
+                    result: format!("Visible agent send error: {e}"),
+                    tool_call_id: None,
+                    correlation_id: String::new(),
+                }));
                 return;
             }
 
@@ -571,7 +569,7 @@ impl RunAgentTool {
                 // Check if agent has gone idle (no output for 5s + process may have exited)
                 if last_output.elapsed() > max_idle {
                     // Give one more brief chance and break
-                    tokio::time::sleep(poll_interval).await;
+                    std::thread::sleep(poll_interval);
                     if let Some(lines) = session.receive()
                         && !lines.is_empty()
                     {
@@ -582,7 +580,7 @@ impl RunAgentTool {
                     break;
                 }
 
-                tokio::time::sleep(poll_interval).await;
+                std::thread::sleep(poll_interval);
             }
 
             let result = if accumulated.is_empty() {
@@ -592,17 +590,19 @@ impl RunAgentTool {
             };
 
             info!(target: "agent", "RunAgentTool(visible): task complete ({} chars)", result.len());
-            let final_result =
-                synthesize_agent_result(&task, result, synthesis_client.as_deref()).await;
+            let final_result = handle.block_on(synthesize_agent_result(
+                &task,
+                result,
+                synthesis_client.as_deref(),
+            ));
 
-            if proactive_tx
-                .send(ProactiveEvent::AgentResult {
+            if handle
+                .block_on(proactive_tx.send(ProactiveEvent::AgentResult {
                     task,
                     result: final_result,
                     tool_call_id: None,
                     correlation_id: String::new(),
-                })
-                .await
+                }))
                 .is_err()
             {
                 warn!(

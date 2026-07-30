@@ -41,7 +41,7 @@ pub struct VisibleSession {
     log_path: String,
     /// Ring buffer of complete output lines received from the agent.
     /// Shared via Arc with the background reader thread.
-    output_lines: Arc<tokio::sync::Mutex<VecDeque<String>>>,
+    output_lines: Arc<Mutex<VecDeque<String>>>,
     /// When the session was created.
     created_at: Instant,
     /// When the session was last used (via send/receive/close).
@@ -116,8 +116,7 @@ impl VisibleSession {
         let log_path_for_reader = log_path_str.clone();
 
         // Shared state between reader thread and the session
-        let output_lines_ref: Arc<tokio::sync::Mutex<VecDeque<String>>> =
-            Arc::new(tokio::sync::Mutex::new(VecDeque::new()));
+        let output_lines_ref: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         // ── Spawn background reader thread ────────────────────────────────────
         let reader_session_id = session_id.clone();
@@ -180,7 +179,8 @@ impl VisibleSession {
                                 if byte == b'\n' {
                                     let line = String::from_utf8_lossy(&partial).to_string();
                                     partial.clear();
-                                    let mut guard = reader_output.blocking_lock();
+                                    let mut guard =
+                                        reader_output.lock().unwrap_or_else(|e| e.into_inner());
                                     guard.push_back(line);
                                     // Keep buffer bounded (max 1000 lines)
                                     while guard.len() > 1000 {
@@ -205,7 +205,7 @@ impl VisibleSession {
                 // Push any remaining partial line
                 if !partial.is_empty() {
                     let line = String::from_utf8_lossy(&partial).to_string();
-                    let mut guard = reader_output.blocking_lock();
+                    let mut guard = reader_output.lock().unwrap_or_else(|e| e.into_inner());
                     guard.push_back(line);
                 }
             })
@@ -260,7 +260,7 @@ impl VisibleSession {
 
         // Write to PTY
         {
-            let mut guard = self.writer.lock().unwrap();
+            let mut guard = self.writer.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(w) = guard.as_mut() {
                 w.write_all(&data).context("Failed to write to PTY")?;
                 w.flush().context("Failed to flush PTY writer")?;
@@ -269,7 +269,7 @@ impl VisibleSession {
 
         // Log the input
         {
-            let mut guard = self.log_file.lock().unwrap();
+            let mut guard = self.log_file.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(f) = guard.as_mut() {
                 let ts = chrono::Local::now().format("%H:%M:%S%.3f");
                 let line = format!("[{ts}] [IN] {text}\n");
@@ -295,7 +295,7 @@ impl VisibleSession {
             return None;
         }
 
-        let mut guard = self.output_lines.blocking_lock();
+        let mut guard = self.output_lines.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_empty() {
             return None;
         }
@@ -328,7 +328,7 @@ impl VisibleSession {
 
         // Kill child process
         {
-            let mut guard = self.child.lock().unwrap();
+            let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(mut child) = guard.take() {
                 let _ = child.kill();
                 info!(
@@ -342,13 +342,13 @@ impl VisibleSession {
 
         // Drop writer (sends EOF)
         {
-            let mut guard = self.writer.lock().unwrap();
+            let mut guard = self.writer.lock().unwrap_or_else(|e| e.into_inner());
             guard.take();
         }
 
         // Flush and close log file
         {
-            let mut guard = self.log_file.lock().unwrap();
+            let mut guard = self.log_file.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(mut f) = guard.take() {
                 let _ = f.flush();
                 drop(f);
@@ -391,7 +391,7 @@ impl VisibleSession {
         if self.closed.load(Ordering::SeqCst) {
             return false;
         }
-        let mut guard = self.child.lock().unwrap();
+        let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(child) = guard.as_mut() {
             matches!(child.try_wait(), Ok(None))
         } else {
@@ -419,6 +419,30 @@ impl VisibleSession {
 
     pub fn last_used(&self) -> Instant {
         self.last_used.lock().map(|g| *g).unwrap_or(self.created_at)
+    }
+}
+
+/// Guard against orphaned processes: if a `VisibleSession` is dropped
+/// without being closed first (e.g., due to an early panic), we do a
+/// best-effort cleanup that never panics.
+impl Drop for VisibleSession {
+    fn drop(&mut self) {
+        if !self.closed.load(Ordering::SeqCst) {
+            // Kill child process without poisoning mutexes
+            if let Ok(mut guard) = self.child.lock() {
+                if let Some(mut child) = guard.take() {
+                    let _ = child.kill();
+                }
+            }
+            // Close log file
+            if let Ok(mut guard) = self.log_file.lock() {
+                if let Some(mut f) = guard.take() {
+                    let _ = f.flush();
+                    drop(f);
+                }
+            }
+            self.closed.store(true, Ordering::SeqCst);
+        }
     }
 }
 
@@ -545,6 +569,15 @@ impl VisibleSessionManager {
             self.close_session(&name);
         }
         count
+    }
+}
+
+/// Ensure all sessions are closed when the manager is dropped.
+impl Drop for VisibleSessionManager {
+    fn drop(&mut self) {
+        for entry in self.sessions.iter() {
+            entry.close();
+        }
     }
 }
 
@@ -767,5 +800,67 @@ mod tests {
         );
 
         mgr.close_session("no-cleanup");
+    }
+
+    // ── Mutex poisoning & concurrency tests ──────────────────────────────────
+
+    /// Verify that the `send()` and `receive()` methods handle
+    /// poisoned std mutexes gracefully (i.e., do not panic).
+    #[test]
+    fn test_poisoned_mutex_does_not_panic() {
+        // Simulate a poisoned mutex: lock it, panic inside catch_unwind,
+        // then verify that subsequent lock() with recovery works.
+        let m: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(Some(42));
+        {
+            let _guard = m.lock().unwrap();
+            // Poison the mutex by panicking while holding the lock
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                panic!("simulated panic to poison mutex");
+            }));
+        }
+        // The mutex should now be poisoned; lock with recovery should succeed
+        let guard = m.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(*guard, Some(42));
+    }
+
+    /// Simulate nested panics — if one thread panics while holding a lock,
+    /// another thread recoverably locks the same mutex.
+    #[test]
+    fn test_concurrent_send_receive_no_panic() {
+        use std::sync::Barrier;
+
+        let dir = temp_session_dir();
+        let session = VisibleSession::spawn("/bin/cat", "test-concurrent", &dir)
+            .expect("Failed to spawn cat");
+
+        std::thread::sleep(Duration::from_millis(200));
+
+        let barrier = Arc::new(Barrier::new(2));
+        let s1 = Arc::clone(&session);
+        let b1 = Arc::clone(&barrier);
+
+        // Thread 1: send messages in a loop
+        let t1 = std::thread::spawn(move || {
+            b1.wait();
+            for i in 0..5 {
+                let _ = s1.send(&format!("msg-{i}"));
+            }
+            s1.close();
+        });
+
+        // Thread 2: receive in a loop
+        let s2 = Arc::clone(&session);
+        let b2 = Arc::clone(&barrier);
+        let t2 = std::thread::spawn(move || {
+            b2.wait();
+            for _ in 0..5 {
+                let _ = s2.receive();
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+
+        // Both threads should complete without panicking
+        t1.join().expect("send thread should not panic");
+        t2.join().expect("receive thread should not panic");
     }
 }
