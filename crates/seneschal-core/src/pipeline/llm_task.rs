@@ -12,6 +12,7 @@ use seneschal_common::classifier::{ClassifierLevel, ClassifierPipeline, Classify
 use seneschal_common::db::Database;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ToolRegistry;
+use seneschal_common::tui_events::{InputSource, TuiEvent, TuiEventTx};
 
 /// Monotonically increasing counter for tagging each pipeline run with a unique ID.
 static PIPELINE_RUN_ID: AtomicU64 = AtomicU64::new(0);
@@ -44,7 +45,7 @@ pub async fn llm_task(
     llm_thinking_simple: bool,
     llm_thinking_complex: bool,
     llm_tools_strict: bool,
-    #[cfg(feature = "tui")] tui_tx: crate::tui::events::TuiEventTx,
+    tui_tx: Option<TuiEventTx>,
     #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
 ) {
     let pipeline_id = PIPELINE_RUN_ID.fetch_add(1, Ordering::SeqCst);
@@ -70,7 +71,7 @@ pub async fn llm_task(
         };
 
         // Decode the incoming frame into (text, tool_continuation, is_text_input, is_system_notification).
-        let (text, tool_continuation, _is_text_input, is_system_notification) = match frame {
+        let (text, tool_continuation, is_text_input, is_system_notification) = match frame {
             PipelineFrame::TranscriptReady { text, .. } => (text, false, false, false),
             PipelineFrame::TextInput { text } => (text, false, true, false),
             PipelineFrame::SystemNotification { text } => (text, false, false, true),
@@ -101,24 +102,23 @@ pub async fn llm_task(
             info!(target: "pipeline", "[pipe={}] User: {}", pipeline_id, text);
         }
 
-        #[cfg(feature = "tui")]
-        if !tool_continuation && !is_system_notification {
-            let source = if is_text_input {
-                crate::tui::events::InputSource::Text
-            } else {
-                crate::tui::events::InputSource::Voice
-            };
-            tui_tx
-                .send(crate::tui::events::TuiEvent::UserMessage {
+        if let Some(ref tx) = tui_tx {
+            if !tool_continuation && !is_system_notification {
+                let source = if is_text_input {
+                    InputSource::Text
+                } else {
+                    InputSource::Voice
+                };
+                tx.send(TuiEvent::UserMessage {
                     text: text.clone(),
                     source,
                 })
                 .ok();
-            tui_tx
-                .send(crate::tui::events::TuiEvent::StateChange(
-                    crate::tui::events::PipelineState::Thinking,
+                tx.send(TuiEvent::StateChange(
+                    seneschal_common::tui_events::PipelineState::Thinking,
                 ))
                 .ok();
+            }
         }
         #[cfg(feature = "control")]
         if !tool_continuation && !is_system_notification {
@@ -129,10 +129,10 @@ pub async fn llm_task(
         }
 
         if is_system_notification {
-            #[cfg(feature = "tui")]
-            tui_tx
-                .send(crate::tui::events::TuiEvent::SystemNotification { text: text.clone() })
-                .ok();
+            if let Some(ref tx) = tui_tx {
+                tx.send(TuiEvent::SystemNotification { text: text.clone() })
+                    .ok();
+            }
             #[cfg(feature = "control")]
             control_broadcast.send(
                 crate::control::broadcast::ControlEvent::SystemNotification { text: text.clone() },
@@ -314,12 +314,9 @@ pub async fn llm_task(
                     Ok(r) => r,
                     Err(e) => {
                         error!(target: "llm", "LLM error: {}", e);
-                        #[cfg(feature = "tui")]
-                        tui_tx
-                            .send(crate::tui::events::TuiEvent::Error(format!(
-                                "LLM error: {e}"
-                            )))
-                            .ok();
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::Error(format!("LLM error: {e}"))).ok();
+                        }
                         let _ = sentences_tx
                             .send(super::frames::PipelineFrame::SentenceReady {
                                 utterance_id: pipeline_id,
@@ -359,8 +356,9 @@ pub async fn llm_task(
                                         utterance_id: pipeline_id,
                                         token: t.clone(),
                                     }).await;
-                                    #[cfg(feature = "tui")]
-                                    tui_tx.send(crate::tui::events::TuiEvent::AssistantToken(t.clone())).ok();
+                                    if let Some(ref tx) = tui_tx {
+                                        tx.send(TuiEvent::AssistantToken(t.clone())).ok();
+                                    }
                                     #[cfg(feature = "control")]
                                     control_broadcast.send(crate::control::broadcast::ControlEvent::LlmToken {
                                         utterance_id: pipeline_id,
@@ -378,8 +376,9 @@ pub async fn llm_task(
                                         full_text: llm_text.clone(),
                                     }).await;
                                     events.llm_post_finished.notify_one();
-                                    #[cfg(feature = "tui")]
-                                    tui_tx.send(crate::tui::events::TuiEvent::AssistantDone).ok();
+                                    if let Some(ref tx) = tui_tx {
+                                        tx.send(TuiEvent::AssistantDone).ok();
+                                    }
                                     #[cfg(feature = "control")]
                                     control_broadcast.send(crate::control::broadcast::ControlEvent::LlmDone {
                                         utterance_id: pipeline_id,
@@ -566,13 +565,13 @@ pub async fn llm_task(
                             break 'pipeline;
                         }
 
-                        #[cfg(feature = "tui")]
-                        tui_tx
-                            .send(crate::tui::events::TuiEvent::ToolCall {
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::ToolCall {
                                 name: name.clone(),
                                 result: result.clone(),
                             })
                             .ok();
+                        }
                         #[cfg(feature = "control")]
                         control_broadcast.send(crate::control::broadcast::ControlEvent::ToolCall {
                             name: name.clone(),

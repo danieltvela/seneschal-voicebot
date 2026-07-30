@@ -241,6 +241,7 @@ impl E2eHarness {
                     false, // llm_thinking_simple
                     true,  // llm_thinking_complex
                     false, // llm_tools_strict
+                    None,  // tui_tx
                 )
                 .await;
             })
@@ -277,6 +278,7 @@ impl E2eHarness {
                     sample_rate,
                     cancel_c,
                     muted_c,
+                    None, // tui_tx
                 )
                 .await
             })

@@ -1050,6 +1050,16 @@ async fn async_main() -> Result<()> {
     let (tui_tx, tui_rx) =
         tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
 
+    #[cfg(feature = "tui")]
+    let tui_tx_llm: Option<seneschal_common::tui_events::TuiEventTx> = Some(tui_tx.clone());
+    #[cfg(not(feature = "tui"))]
+    let tui_tx_llm: Option<seneschal_common::tui_events::TuiEventTx> = None;
+
+    #[cfg(feature = "tui")]
+    let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = Some(tui_tx.clone());
+    #[cfg(not(feature = "tui"))]
+    let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = None;
+
     let mut pending_agent_results: std::collections::VecDeque<(String, String)> =
         std::collections::VecDeque::new();
     let mut current_agent_announcement: Option<(String, String)> = None;
@@ -1112,6 +1122,7 @@ async fn async_main() -> Result<()> {
                 llm_think_simple,
                 llm_think_complex,
                 llm_strict,
+                tui_tx_llm,
             )
             .await;
         });
@@ -1151,6 +1162,7 @@ async fn async_main() -> Result<()> {
                 tts_sample_rate,
                 play_cancel_c,
                 tts_muted_c,
+                tui_tx_tts,
             )
             .await;
         });

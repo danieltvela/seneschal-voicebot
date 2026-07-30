@@ -9,6 +9,7 @@ use super::state::PipelineEvents;
 use crate::audio::output::AudioOutput;
 use crate::pipeline::frames::PipelineFrame;
 use crate::tts::TtsEngine;
+use seneschal_common::tui_events::{TuiEvent, TuiEventTx};
 
 /// TTS task: receives sentences from sen_task (and llm_task error paths) via typed channel,
 /// synthesizes and plays each one.
@@ -29,7 +30,7 @@ pub async fn tts_task(
     tts_sample_rate: u32,
     play_cancel: Arc<AtomicBool>,
     tts_muted: Arc<AtomicBool>,
-    #[cfg(feature = "tui")] tui_tx: crate::tui::events::TuiEventTx,
+    tui_tx: Option<TuiEventTx>,
     #[cfg(feature = "remote")] remote_tts_tx: Arc<
         tokio::sync::Mutex<
             Option<tokio::sync::mpsc::Sender<crate::remote::protocol::TtsAudioPacket>>,
@@ -100,12 +101,12 @@ pub async fn tts_task(
                     last_utterance_id = Some(utterance_id);
                 }
 
-                #[cfg(feature = "tui")]
-                tui_tx
-                    .send(crate::tui::events::TuiEvent::StateChange(
-                        crate::tui::events::PipelineState::Speaking,
+                if let Some(ref tx) = tui_tx {
+                    tx.send(TuiEvent::StateChange(
+                        seneschal_common::tui_events::PipelineState::Speaking,
                     ))
                     .ok();
+                }
                 #[cfg(feature = "control")]
                 control_broadcast
                     .send(crate::control::broadcast::ControlEvent::TtsStart { utterance_id });
@@ -168,14 +169,16 @@ pub async fn tts_task(
                             Ok(Ok(s)) => s,
                             Ok(Err(e)) => {
                                 error!(target: "tts", "TTS synthesis error: {}", e);
-                                #[cfg(feature = "tui")]
-                                tui_tx.send(crate::tui::events::TuiEvent::Error(format!("TTS synthesis error: {e}"))).ok();
+                                if let Some(ref tx) = tui_tx {
+                                    tx.send(TuiEvent::Error(format!("TTS synthesis error: {e}"))).ok();
+                                }
                                 continue;
                             }
                             Err(e) => {
                                 error!(target: "tts", "TTS task panicked: {e}");
-                                #[cfg(feature = "tui")]
-                                tui_tx.send(crate::tui::events::TuiEvent::Error(format!("TTS task panicked: {e}"))).ok();
+                                if let Some(ref tx) = tui_tx {
+                                    tx.send(TuiEvent::Error(format!("TTS task panicked: {e}"))).ok();
+                                }
                                 continue;
                             }
                         }

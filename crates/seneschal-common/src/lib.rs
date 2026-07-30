@@ -15,6 +15,7 @@ pub mod db;
 pub mod events;
 pub mod i18n;
 pub mod tools;
+pub mod tui_events;
 
 // Re-export the most commonly used types for convenience.
 pub use classifier::{
