@@ -3,6 +3,7 @@ pub mod frames;
 pub mod fsm;
 pub mod llm_task;
 pub mod sen_task;
+pub mod announcement_window;
 pub mod state;
 pub mod tts_task;
 
@@ -16,4 +17,5 @@ pub use fsm::{PauseReason, PipelineState};
 pub use llm_task::llm_task;
 pub use sen_task::sen_task;
 pub use state::PipelineEvents;
+pub use announcement_window::AnnouncementWindow;
 pub use tts_task::tts_task;
