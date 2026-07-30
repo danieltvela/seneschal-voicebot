@@ -157,18 +157,34 @@ impl LlmSession {
 
     /// Append an in-conversation system turn.
     ///
-    /// Used to deliver background task results and out-of-band notifications
-    /// to the model without impersonating the user. System turns do not
-    /// "consume" a pending user turn — the flag is left untouched.
+    /// NOTE: Kept for backward compatibility with `from_history()` which reads
+    /// `"System"` role from SQLite. New code should use `add_internal_notification()`
+    /// which injects as `role: "user"` for Gemma-4 chat template compatibility.
+    /// System turns inserted mid-conversation break the strict `user→assistant`
+    /// alternation that some models (e.g. Gemma-4) require.
     pub fn add_system_turn(&mut self, text: &str) {
         self.messages
             .push(serde_json::json!({"role": "system", "content": text}));
         self.cached_formatted_history = None;
     }
 
-    /// Inject an internal notification as a system turn.
+    /// Inject an internal notification as a user message with system prefix.
+    ///
+    /// Gemma-4 requires strict user→assistant alternation after the initial
+    /// system message. Injecting as `role: "user"` with a clear prefix respects
+    /// the chat template while still conveying system context to the model.
     pub fn add_internal_notification(&mut self, text: &str) {
-        self.add_system_turn(text);
+        let prefixed = format!("[Sistema: {}]", text);
+        if self.is_user_message_pending {
+            // Append to the existing pending user turn to avoid creating
+            // two consecutive `role: "user"` messages.
+            self.update_last_user_turn(&prefixed);
+        } else {
+            self.messages
+                .push(serde_json::json!({"role": "user", "content": prefixed}));
+            self.is_user_message_pending = true;
+        }
+        self.cached_formatted_history = None;
     }
 
     /// Append the assistant's final response for this turn.
@@ -242,6 +258,10 @@ impl LlmSession {
                 let role = m["role"].as_str()?;
                 let content = m["content"].as_str()?;
                 match role {
+                    "user" if content.starts_with("[Sistema: ") => {
+                        let inner = &content[10..content.len() - 1];
+                        Some(format!("[System notification]: {inner}"))
+                    }
                     "user" => Some(format!("[User]: {content}")),
                     "assistant" => Some(format!("[seneschal]: {content}")),
                     "system" => Some(format!("[System]: {content}")),
@@ -674,5 +694,128 @@ mod tests {
         // verifies the flag.)
         s.add_user_turn("bar");
         assert_eq!(s.messages.len(), 3);
+    }
+
+    // ── add_internal_notification (issue #175 Gemma-4 compat) ─────────────────
+
+    #[test]
+    fn add_internal_notification_after_assistant_creates_user_message() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("Hello");
+        s.add_assistant_turn("Hi");
+        // After assistant, is_user_message_pending is false
+        assert!(!s.is_user_message_pending);
+
+        s.add_internal_notification("tarea terminada");
+
+        // A new user message was pushed
+        assert_eq!(s.messages.len(), 3);
+        assert_eq!(s.messages[2]["role"], "user");
+        let content = s.messages[2]["content"].as_str().unwrap();
+        assert!(content.starts_with("[Sistema: "));
+        assert!(content.contains("tarea terminada"));
+
+        // Pending flag is now true
+        assert!(s.is_user_message_pending);
+
+        // Role alternation: user → assistant → user (no system in the middle)
+        let roles: Vec<&str> = s
+            .messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+    }
+
+    #[test]
+    fn add_internal_notification_while_user_pending_appends() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("Hello");
+        // is_user_message_pending is true (no assistant yet)
+
+        s.add_internal_notification("alerta");
+
+        // No new message was created — appended to existing user turn
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.messages[0]["role"], "user");
+        let content = s.messages[0]["content"].as_str().unwrap();
+        assert!(content.starts_with("Hello"));
+        assert!(content.contains("[Sistema: alerta]"));
+
+        // Pending flag stays true
+        assert!(s.is_user_message_pending);
+    }
+
+    #[test]
+    fn two_consecutive_notifications_maintain_alternation() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("q");
+        s.add_assistant_turn("a");
+        // pending is now false
+
+        s.add_internal_notification("notif A");
+        // First notification creates a new user message, pending=true
+        assert_eq!(s.messages.len(), 3);
+        assert!(s.is_user_message_pending);
+
+        s.add_internal_notification("notif B");
+        // Second notification appends (pending was already true)
+        assert_eq!(s.messages.len(), 3); // still 3 messages
+
+        let content = s.messages[2]["content"].as_str().unwrap();
+        assert!(content.contains("[Sistema: notif A]"));
+        assert!(content.contains("[Sistema: notif B]"));
+
+        // Role alternation is still valid
+        let roles: Vec<&str> = s
+            .messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+    }
+
+    #[test]
+    fn format_history_labels_system_notification() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("Hola");
+        s.add_assistant_turn("¿Cómo estás?");
+        s.add_internal_notification("tarea terminada");
+
+        let formatted = s.format_history();
+
+        // Regular messages keep their original labels
+        assert!(formatted.contains("[User]: Hola"));
+        assert!(formatted.contains("[seneschal]: ¿Cómo estás?"));
+
+        // System notification gets the special label
+        assert!(formatted.contains("[System notification]: tarea terminada"));
+
+        // The raw prefix should NOT appear
+        assert!(!formatted.contains("[User]: [Sistema:"));
+        // No stray trailing bracket
+        assert!(!formatted.contains("tarea terminada]"));
+    }
+
+    #[test]
+    fn all_messages_api_returns_user_role_for_notifications() {
+        let mut s = LlmSession::new("sys");
+        s.add_user_turn("q");
+        s.add_assistant_turn("a");
+        s.add_internal_notification("alerta");
+
+        let api_msgs = s.all_messages_api();
+        // system prompt (index 0) + 3 conversation messages
+        assert_eq!(api_msgs.len(), 4);
+
+        // The notification message is index 3 (after system prompt)
+        let notif_msg = &api_msgs[3];
+        assert_eq!(notif_msg["role"], "user"); // NOT "system"
+        assert!(
+            notif_msg["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("[Sistema: ")
+        );
     }
 }
