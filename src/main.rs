@@ -1170,9 +1170,9 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    let mut pending_agent_results: std::collections::VecDeque<(String, String)> =
-        std::collections::VecDeque::new();
-    let mut current_agent_announcement: Option<(String, String)> = None;
+    let announcement_window = Arc::new(std::sync::Mutex::new(
+        seneschal_core::pipeline::AnnouncementWindow::new(),
+    ));
     let mut pending_agent_questions: std::collections::VecDeque<PendingInteractionEntry> =
         std::collections::VecDeque::new();
 
@@ -1261,6 +1261,7 @@ async fn async_main() -> Result<()> {
         let audio_out_c = Arc::clone(&audio_output);
         let play_cancel_c = Arc::clone(&play_cancel);
         let tts_muted_c = Arc::clone(&tts_muted);
+        let announcement_window_c = Arc::clone(&announcement_window);
         tokio::spawn(async move {
             let has_audio_device = audio_out_c.has_device();
             tts_task(
@@ -1275,6 +1276,7 @@ async fn async_main() -> Result<()> {
                 tts_muted_c,
                 has_audio_device,
                 tui_tx_tts,
+                announcement_window_c,
             )
             .await;
         });
@@ -1477,19 +1479,13 @@ async fn async_main() -> Result<()> {
     tokio::select! {
             _ = async {
                 loop {
-                    // Inject pending agent results when LLM is idle.
-                    let llm_idle = !pipeline_state_rx.borrow().is_busy();
-                    if llm_idle && current_agent_announcement.is_none()
-                        && let Some((task, result)) = pending_agent_results.pop_front()
-                    {
+                    // Inject pending agent results when AnnouncementWindow allows it.
+                    let maybe_announcement = announcement_window.lock().unwrap().pop_announcement();
+                    if let Some(announcement) = maybe_announcement {
                         let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
-                            .replace("{task}", &task)
-                            .replace("{result}", &result);
-                        current_agent_announcement = Some((task, result));
+                            .replace("{task}", &announcement.task)
+                            .replace("{result}", &announcement.result);
                         transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
-                    }
-                    if current_agent_announcement.is_some() && llm_idle {
-                        current_agent_announcement = None;
                     }
 
                     let chunk: AudioChunk = tokio::select! {
@@ -1548,10 +1544,8 @@ async fn async_main() -> Result<()> {
                                             result,
                                             tool_call_id: Some(id),
                                         }).await.ok();
-                                    } else if !pipeline_state_rx.borrow().is_busy() {
-                                        pending_agent_results.push_front((task, result));
                                     } else {
-                                        pending_agent_results.push_back((task, result));
+                                        announcement_window.lock().unwrap().queue_announcement(task, result);
                                     }
                                 }
                                 ProactiveEvent::InferenceDaemon { .. } => {}
@@ -1581,9 +1575,7 @@ async fn async_main() -> Result<()> {
 
                                     if pipeline_state_rx.borrow().is_busy() {
                                         events.barge_in_tx.send(0).ok();
-                                        if let Some(announcement) = current_agent_announcement.take() {
-                                            pending_agent_results.push_front(announcement);
-                                        }
+                                        announcement_window.lock().unwrap().interrupt();
                                     }
                                     // Voice path: relay voice answer to the original response_tx.
                                     let (voice_tx, voice_rx) = tokio::sync::oneshot::channel::<String>();
@@ -1847,10 +1839,9 @@ async fn async_main() -> Result<()> {
 
                                 info!(target: "pipeline", "SpeechStart — firing BARGE_IN");
                                 events.barge_in_tx.send(utterance_epoch.load(Ordering::SeqCst)).ok();
-                                if let Some(announcement) = current_agent_announcement.take() {
-                                    info!(target: "pipeline", "SpeechStart interrupted agent announcement — re-queueing");
-                                    pending_agent_results.push_front(announcement);
-                                }
+                                announcement_window.lock().unwrap().set_user_speaking(true);
+                                announcement_window.lock().unwrap().interrupt();
+                                info!(target: "pipeline", "SpeechStart — interrupted pending announcements");
 
                                 let current_commits = turn_commit_counter.load(Ordering::SeqCst);
                                 if current_commits > last_cleared_commit {
@@ -2072,6 +2063,8 @@ async fn async_main() -> Result<()> {
                                     );
                                 }
                                 let uid = utterance_epoch.load(Ordering::SeqCst);
+                                announcement_window.lock().unwrap().set_user_speaking(false);
+                                announcement_window.lock().unwrap().begin_turn();
                                 transcript_tx.send(PipelineFrame::TranscriptReady {
                                     utterance_id: uid,
                                     text: final_text,

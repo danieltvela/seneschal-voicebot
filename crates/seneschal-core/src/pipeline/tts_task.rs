@@ -32,6 +32,7 @@ pub async fn tts_task(
     tts_muted: Arc<AtomicBool>,
     has_audio_device: bool,
     tui_tx: Option<TuiEventTx>,
+    announcement_window: Arc<Mutex<crate::pipeline::announcement_window::AnnouncementWindow>>,
     #[cfg(feature = "remote")] remote_tts_tx: Arc<
         tokio::sync::Mutex<
             Option<tokio::sync::mpsc::Sender<crate::remote::protocol::TtsAudioPacket>>,
@@ -48,7 +49,7 @@ pub async fn tts_task(
 
     loop {
         if no_more_sentences && play_handle.is_none() {
-            try_set_idle(&pipeline_state_tx, &tui_tx);
+            try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
             no_more_sentences = false;
         }
 
@@ -68,6 +69,7 @@ pub async fn tts_task(
                             &mut first_sentence,
                             &mut no_more_sentences,
                             &tui_tx,
+                            &announcement_window,
                         ).await;
                         continue;
                     }
@@ -79,12 +81,13 @@ pub async fn tts_task(
                                 Err(e) => error!(target: "audio", "Playback task join failed: {}", e),
                             }
                         }
+                        announcement_window.lock().unwrap().finish_playback();
                         continue;
                     }
                 }
             }
             Err(mpsc::error::TryRecvError::Disconnected) => {
-                try_set_idle(&pipeline_state_tx, &tui_tx);
+                try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
                 break;
             }
         };
@@ -97,6 +100,7 @@ pub async fn tts_task(
                 if tts_muted.load(Ordering::SeqCst) {
                     continue;
                 }
+                announcement_window.lock().unwrap().queue_audio();
 
                 if has_audio_device {
                     if last_utterance_id != Some(utterance_id) {
@@ -144,6 +148,7 @@ pub async fn tts_task(
                             &mut first_sentence,
                             &mut no_more_sentences,
                             &tui_tx,
+                            &announcement_window,
                         )
                         .await;
                         continue;
@@ -167,6 +172,7 @@ pub async fn tts_task(
                             &mut first_sentence,
                             &mut no_more_sentences,
                             &tui_tx,
+                            &announcement_window,
                         ).await;
                         continue;
                     }
@@ -229,11 +235,12 @@ pub async fn tts_task(
                     notify_c.notify_one();
                     r
                 }));
+                announcement_window.lock().unwrap().start_playback();
             }
             Some(PipelineFrame::LLMResponseDone { .. }) => {
                 no_more_sentences = true;
                 if play_handle.is_none() {
-                    try_set_idle(&pipeline_state_tx, &tui_tx);
+                    try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
                     no_more_sentences = false;
                 }
             }
@@ -253,6 +260,7 @@ async fn handle_barge_in(
     first_sentence: &mut bool,
     no_more_sentences: &mut bool,
     tui_tx: &Option<TuiEventTx>,
+    announcement_window: &Arc<Mutex<crate::pipeline::announcement_window::AnnouncementWindow>>,
 ) {
     // Single ownership of play_cancel in this task avoids cross-writer races.
     play_cancel.store(true, Ordering::SeqCst);
@@ -264,6 +272,7 @@ async fn handle_barge_in(
             Err(e) => error!(target: "audio", "Playback task join failed during barge-in: {}", e),
         }
     }
+    announcement_window.lock().unwrap().finish_playback();
 
     while sentences_rx.try_recv().is_ok() {}
     while cancel_rx.try_recv().is_ok() {}
@@ -272,14 +281,19 @@ async fn handle_barge_in(
     *no_more_sentences = false;
     play_cancel.store(false, Ordering::SeqCst);
 
-    try_set_idle(pipeline_state_tx, tui_tx);
+    try_set_idle(pipeline_state_tx, tui_tx, announcement_window);
 }
 
-fn try_set_idle(pipeline_state_tx: &watch::Sender<PipelineState>, tui_tx: &Option<TuiEventTx>) {
+fn try_set_idle(
+    pipeline_state_tx: &watch::Sender<PipelineState>,
+    tui_tx: &Option<TuiEventTx>,
+    announcement_window: &Arc<Mutex<crate::pipeline::announcement_window::AnnouncementWindow>>,
+) {
     if matches!(
         *pipeline_state_tx.borrow(),
         PipelineState::Thinking { .. } | PipelineState::Speaking { .. }
     ) {
+        announcement_window.lock().unwrap().end_turn();
         let _ = pipeline_state_tx.send(PipelineState::Idle);
         if let Some(tx) = tui_tx {
             tx.send(TuiEvent::StateChange(
