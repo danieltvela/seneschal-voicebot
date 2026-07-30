@@ -144,12 +144,25 @@ impl std::fmt::Debug for SessionEntry {
 }
 
 /// Manages persistent ACP sessions keyed by agent name.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AcpSessionManager {
     sessions: DashMap<String, SessionEntry>,
     backoff_states: DashMap<String, BackoffState>,
     /// Optional channel for TUI / display consumers (set before wrapping in Arc).
     event_tx: Option<SessionEventTx>,
+    /// Fan-out listeners for session events (created via `create_event_listener`).
+    session_event_listeners: std::sync::Mutex<Vec<mpsc::Sender<SessionEvent>>>,
+}
+
+impl Default for AcpSessionManager {
+    fn default() -> Self {
+        Self {
+            sessions: DashMap::new(),
+            backoff_states: DashMap::new(),
+            event_tx: None,
+            session_event_listeners: std::sync::Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl AcpSessionManager {
@@ -170,8 +183,19 @@ impl AcpSessionManager {
 
     fn emit(&self, event: SessionEvent) {
         if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(event);
+            let _ = tx.try_send(event.clone());
         }
+        let mut listeners = self.session_event_listeners.lock().unwrap();
+        listeners.retain(|tx| tx.try_send(event.clone()).is_ok());
+    }
+
+    /// Create a new listener for session events.
+    /// Returns a receiver that will receive all future session events.
+    /// Multiple listeners can be created and will all receive the same events.
+    pub fn create_event_listener(&self) -> mpsc::Receiver<SessionEvent> {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(64);
+        self.session_event_listeners.lock().unwrap().push(tx);
+        rx
     }
 
     fn emit_status(&self, agent_name: &str, session_id: &str, status: SessionStatus) {
