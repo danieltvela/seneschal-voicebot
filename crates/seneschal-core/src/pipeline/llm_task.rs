@@ -324,6 +324,16 @@ pub async fn llm_task(
                                     .to_string(),
                             })
                             .await;
+                        let _ = sentences_tx
+                            .send(super::frames::PipelineFrame::LLMResponseDone {
+                                utterance_id: pipeline_id,
+                                full_text: String::new(),
+                            })
+                            .await;
+                        events.llm_post_finished.notify_one();
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::AssistantDone).ok();
+                        }
                         break 'pipeline;
                     }
                 };
