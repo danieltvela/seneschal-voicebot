@@ -24,6 +24,13 @@ pub fn get_notification(key: &str, lang: &str) -> &'static str {
             "[System: seneschal just started. It's {time_str} on {date_str}\n Greet the user naturally and briefly.]"
         }
 
+        ("no_device_startup", "es") => {
+            "[Sistema: seneschal acaba de arrancar.]"
+        }
+        ("no_device_startup", "en") => {
+            "[System: seneschal just started.]"
+        }
+
         ("background_task_done", "es") => {
             "[Sistema: una tarea en segundo plano ha terminado.]\n Tarea: {task}\n Resultado: {result}\n Informa al usuario de forma natural y concisa."
         }
