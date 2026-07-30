@@ -379,6 +379,8 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
                 ]));
             }
         }
+        // AgentTask: rendered inline in step 5.1.
+        _ => {}
     }
 
     lines

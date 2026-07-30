@@ -29,6 +29,28 @@ pub enum Role {
     Error,
     System,
     Splash,
+    AgentTask,
+}
+
+/// Inline agent task state for timeline.inline rendering.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentTaskStatus {
+    Started,
+    Running,
+    Delegated,
+    Finalizing,
+    Completed,
+    PermissionRequested,
+    Failed,
+}
+
+/// Metadata for agent task messages (only meaningful when role == AgentTask).
+#[derive(Clone, Debug)]
+pub struct AgentTaskInfo {
+    pub task_id: String,
+    pub agent_name: String,
+    pub status: AgentTaskStatus,
+    pub options: Vec<String>,
 }
 
 /// A single message in the conversation view.
@@ -37,6 +59,20 @@ pub struct ChatMessage {
     pub role: Role,
     pub content: String,
     pub timestamp: chrono::DateTime<chrono::Local>,
+    /// Agent task metadata (only meaningful when role == AgentTask).
+    pub agent_task: Option<AgentTaskInfo>,
+}
+
+impl ChatMessage {
+    /// Convenience constructor for agent task messages.
+    pub fn agent_task(info: AgentTaskInfo, content: String) -> Self {
+        Self {
+            role: Role::AgentTask,
+            content,
+            timestamp: chrono::Local::now(),
+            agent_task: Some(info),
+        }
+    }
 }
 
 /// TUI application state.
@@ -97,6 +133,7 @@ impl App {
                     role: Role::User(source),
                     content: text,
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::AssistantToken(token) => {
@@ -109,6 +146,7 @@ impl App {
                         role: Role::Assistant,
                         content,
                         timestamp: chrono::Local::now(),
+                        agent_task: None,
                     });
                 }
             }
@@ -117,6 +155,7 @@ impl App {
                     role: Role::Error,
                     content: msg,
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::SystemNotification { text } => {
@@ -124,6 +163,7 @@ impl App {
                     role: Role::System,
                     content: text,
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::ToolCall { name, result } => {
@@ -136,6 +176,7 @@ impl App {
                     role: Role::Tool,
                     content: format!("{name} -> {short}"),
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::Splash => {
@@ -143,6 +184,7 @@ impl App {
                     role: Role::Splash,
                     content: String::new(),
                     timestamp: chrono::Local::now(),
+                    agent_task: None,
                 });
             }
             TuiEvent::PromptBuildUpdate { prompt: new_text } => {
@@ -163,6 +205,8 @@ impl App {
                     *state = PromptBuildState::Inactive;
                 }
             }
+            // Agent task events — handled properly in Step 4.1.
+            _ => {}
         }
     }
 
