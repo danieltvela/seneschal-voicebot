@@ -1152,6 +1152,7 @@ async fn async_main() -> Result<()> {
         let play_cancel_c = Arc::clone(&play_cancel);
         let tts_muted_c = Arc::clone(&tts_muted);
         tokio::spawn(async move {
+            let announcement_window_c = Arc::clone(&announcement_window);
             let has_audio_device = audio_out_c.has_device();
             tts_task(
                 events_c,
@@ -1165,6 +1166,7 @@ async fn async_main() -> Result<()> {
                 tts_muted_c,
                 has_audio_device,
                 tui_tx_tts,
+                announcement_window_c,
             )
             .await;
         });
