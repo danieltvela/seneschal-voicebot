@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use super::app::{App, ChatMessage, InputMode, Role};
+use super::app::{AgentTaskStatus, App, ChatMessage, InputMode, Role};
 use super::events::{InputSource, PipelineState};
 use seneschal_common::tools::ConversationMode;
 
@@ -379,8 +379,72 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
                 ]));
             }
         }
-        // AgentTask: rendered inline in step 5.1.
-        _ => {}
+        Role::AgentTask => {
+            let info = match &msg.agent_task {
+                Some(i) => i,
+                None => return lines,
+            };
+            let time = msg.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+
+            // Status label and color
+            let (label, color) = match info.status {
+                AgentTaskStatus::Started => ("[Iniciando]", Color::Magenta),
+                AgentTaskStatus::Running => ("[Procesando]", Color::Magenta),
+                AgentTaskStatus::Delegated => ("[Proyecto en ejecución]", Color::Magenta),
+                AgentTaskStatus::Finalizing => ("[Organizando resultados]", Color::Magenta),
+                AgentTaskStatus::Completed => ("[Completado]", Color::Green),
+                AgentTaskStatus::PermissionRequested => ("[Necesita confirmación]", Color::Yellow),
+                AgentTaskStatus::Failed => ("[Error]", Color::Red),
+            };
+            let header = format!("{label} {}", info.agent_name);
+
+            lines.push(Line::from(vec![
+                Span::raw("┌ "),
+                Span::styled(header, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(time, Style::default().fg(Color::Rgb(100, 100, 100))),
+            ]));
+
+            // Content
+            let content_color = if info.status == AgentTaskStatus::Completed {
+                Color::Green
+            } else if info.status == AgentTaskStatus::Failed {
+                Color::Red
+            } else if info.status == AgentTaskStatus::PermissionRequested {
+                Color::Yellow
+            } else {
+                Color::Rgb(200, 160, 200)
+            };
+            for content_line in msg.content.lines() {
+                let wrapped = word_wrap_plain(content_line, w.saturating_sub(2));
+                for line in wrapped {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("│ {line}"),
+                        Style::default().fg(content_color),
+                    )]));
+                }
+            }
+
+            // Options for permission requests
+            if info.status == AgentTaskStatus::PermissionRequested && !info.options.is_empty() {
+                let opts_text = format!("Opciones: {}", info.options.join(" / "));
+                for row in word_wrap_plain(&opts_text, w.saturating_sub(2)) {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("│ {row}"),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    )]));
+                }
+            }
+
+            let content_lines = msg.content.lines().count();
+            if content_lines > 0 {
+                lines.push(Line::from(vec![
+                    Span::raw("└"),
+                    Span::raw("─".repeat(w.saturating_sub(2))),
+                    Span::raw("┘"),
+                ]));
+            }
+        }
     }
 
     lines
