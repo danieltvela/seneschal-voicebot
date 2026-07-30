@@ -97,20 +97,22 @@ pub async fn tts_task(
                     continue;
                 }
 
-                if last_utterance_id != Some(utterance_id) {
-                    let _ = pipeline_state_tx.send(PipelineState::Speaking { utterance_id });
-                    last_utterance_id = Some(utterance_id);
-                }
+                if has_audio_device {
+                    if last_utterance_id != Some(utterance_id) {
+                        let _ = pipeline_state_tx.send(PipelineState::Speaking { utterance_id });
+                        last_utterance_id = Some(utterance_id);
+                    }
 
-                if let Some(ref tx) = tui_tx {
-                    tx.send(TuiEvent::StateChange(
-                        seneschal_common::tui_events::PipelineState::Speaking,
-                    ))
-                    .ok();
+                    if let Some(ref tx) = tui_tx {
+                        tx.send(TuiEvent::StateChange(
+                            seneschal_common::tui_events::PipelineState::Speaking,
+                        ))
+                        .ok();
+                    }
+                    #[cfg(feature = "control")]
+                    control_broadcast
+                        .send(crate::control::broadcast::ControlEvent::TtsStart { utterance_id });
                 }
-                #[cfg(feature = "control")]
-                control_broadcast
-                    .send(crate::control::broadcast::ControlEvent::TtsStart { utterance_id });
 
                 // Ensure previous playback fully stops before starting next sentence.
                 if let Some(mut h) = play_handle.take() {
