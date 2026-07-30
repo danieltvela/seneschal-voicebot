@@ -1312,8 +1312,9 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Startup greeting / first-time introduction ─────────────────────────────
-    // Only send if audio capture is active; otherwise the device monitor will
-    // send the greeting when the device connects.
+    // If audio capture is active, send the full greeting (first_launch or startup
+    // with time/date). Otherwise send a brief notification that the system started;
+    // the device monitor will send the full greeting when a device connects later.
     if capture_stream.is_some() {
         let first = is_first_launch;
         let key = if first { "first_launch" } else { "startup" };
@@ -1330,6 +1331,14 @@ async fn async_main() -> Result<()> {
         };
         transcript_tx
             .send(PipelineFrame::SystemNotification { text: notification })
+            .await
+            .ok();
+    } else {
+        let msg = seneschal_common::i18n::get_notification("no_device_startup", &config.language);
+        transcript_tx
+            .send(PipelineFrame::SystemNotification {
+                text: msg.to_string(),
+            })
             .await
             .ok();
     }

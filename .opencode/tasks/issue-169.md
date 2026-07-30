@@ -30,7 +30,7 @@
 
 ## Phase 2: Send the no-device greeting at startup in main.rs
 
-- [ ] Step 2.1: Add an `else` branch to the startup greeting block to handle `capture_stream.is_none()`
+- [x] Step 2.1: Add an `else` branch to the startup greeting block to handle `capture_stream.is_none()`
   - File(s): `src/main.rs`
   - Change: In the `// ── Startup greeting / first-time introduction ─────────────────────────────` block (currently lines 1314–1335), the existing code is:
     ```rust
