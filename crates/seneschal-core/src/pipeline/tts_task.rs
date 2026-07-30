@@ -48,7 +48,7 @@ pub async fn tts_task(
 
     loop {
         if no_more_sentences && play_handle.is_none() {
-            try_set_idle(&pipeline_state_tx);
+            try_set_idle(&pipeline_state_tx, &tui_tx);
             no_more_sentences = false;
         }
 
@@ -67,6 +67,7 @@ pub async fn tts_task(
                             &mut cancel_rx,
                             &mut first_sentence,
                             &mut no_more_sentences,
+                            &tui_tx,
                         ).await;
                         continue;
                     }
@@ -83,7 +84,7 @@ pub async fn tts_task(
                 }
             }
             Err(mpsc::error::TryRecvError::Disconnected) => {
-                try_set_idle(&pipeline_state_tx);
+                try_set_idle(&pipeline_state_tx, &tui_tx);
                 break;
             }
         };
@@ -142,6 +143,7 @@ pub async fn tts_task(
                             &mut cancel_rx,
                             &mut first_sentence,
                             &mut no_more_sentences,
+                            &tui_tx,
                         )
                         .await;
                         continue;
@@ -164,6 +166,7 @@ pub async fn tts_task(
                             &mut cancel_rx,
                             &mut first_sentence,
                             &mut no_more_sentences,
+                            &tui_tx,
                         ).await;
                         continue;
                     }
@@ -230,7 +233,7 @@ pub async fn tts_task(
             Some(PipelineFrame::LLMResponseDone { .. }) => {
                 no_more_sentences = true;
                 if play_handle.is_none() {
-                    try_set_idle(&pipeline_state_tx);
+                    try_set_idle(&pipeline_state_tx, &tui_tx);
                     no_more_sentences = false;
                 }
             }
@@ -249,6 +252,7 @@ async fn handle_barge_in(
     cancel_rx: &mut broadcast::Receiver<u64>,
     first_sentence: &mut bool,
     no_more_sentences: &mut bool,
+    tui_tx: &Option<TuiEventTx>,
 ) {
     // Single ownership of play_cancel in this task avoids cross-writer races.
     play_cancel.store(true, Ordering::SeqCst);
@@ -268,14 +272,23 @@ async fn handle_barge_in(
     *no_more_sentences = false;
     play_cancel.store(false, Ordering::SeqCst);
 
-    try_set_idle(pipeline_state_tx);
+    try_set_idle(pipeline_state_tx, tui_tx);
 }
 
-fn try_set_idle(pipeline_state_tx: &watch::Sender<PipelineState>) {
+fn try_set_idle(
+    pipeline_state_tx: &watch::Sender<PipelineState>,
+    tui_tx: &Option<TuiEventTx>,
+) {
     if matches!(
         *pipeline_state_tx.borrow(),
         PipelineState::Thinking { .. } | PipelineState::Speaking { .. }
     ) {
         let _ = pipeline_state_tx.send(PipelineState::Idle);
+        if let Some(tx) = tui_tx {
+            tx.send(TuiEvent::StateChange(
+                seneschal_common::tui_events::PipelineState::Idle,
+            ))
+            .ok();
+        }
     }
 }
