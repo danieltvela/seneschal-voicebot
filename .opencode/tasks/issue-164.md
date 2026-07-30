@@ -16,7 +16,7 @@
 
 ## Phase 1: Define new TUI event types for agent task lifecycle
 
-- [ ] Step 1.1: Add new `TuiEvent` variants to `crates/seneschal-common/src/tui_events.rs`
+- [x] Step 1.1: Add new `TuiEvent` variants to `crates/seneschal-common/src/tui_events.rs`
   - File(s): `crates/seneschal-common/src/tui_events.rs`
   - Change: Append the following variants to the `TuiEvent` enum (after `PromptBuildStateChange`), keeping all existing variants untouched:
     ```rust
@@ -42,7 +42,7 @@
 
 ## Phase 2: Extend ChatMessage with AgentTask role and state struct
 
-- [ ] Step 2.1: Add `AgentTask` variant to `Role` enum and `AgentTaskState` struct in `crates/seneschal-tui/src/app.rs`
+- [x] Step 2.1: Add `AgentTask` variant to `Role` enum and `AgentTaskState` struct in `crates/seneschal-tui/src/app.rs`
   - File(s): `crates/seneschal-tui/src/app.rs`
   - Change:
     1. Add an `AgentTask` variant to `Role`:
@@ -85,7 +85,7 @@
 
 ## Phase 3: Bridge SessionEvent and ProactiveEvent → TuiEvent in main.rs
 
-- [ ] Step 3.1: Create a bridge task in `src/main.rs` that subscribes to `SessionEvent` and forwards to `tui_tx`
+- [x] Step 3.1: Create a bridge task in `src/main.rs` that subscribes to `SessionEvent` and forwards to `tui_tx`
   - File(s): `src/main.rs`
   - Change: After the `AcpSessionManager` is created (after line ~310 in the agent setup section), add code to:
     1. Get a `SessionEvent` receiver from the session manager via `session_manager.subscribe()` (check if `AcpSessionManager` has a `subscribe()` method — if not, add one in this step that returns `mpsc::Receiver<SessionEvent>` by cloning from the internal `event_tx`).
@@ -103,7 +103,7 @@
     3. Send each translated event via `tui_tx.send(...)`. Log errors with `tracing::warn!`.
   - Acceptance criteria: Bridge task compiles. `cargo check --features tui` passes.
 
-- [ ] Step 3.2: Enhance existing `ProactiveEvent` handler in `src/main.rs` to also emit TUI agent task events
+- [x] Step 3.2: Enhance existing `ProactiveEvent` handler in `src/main.rs` to also emit TUI agent task events
   - File(s): `src/main.rs` (the main loop `proactive_rx.recv()` match arm, around lines 1393-1537)
   - Change: In each `ProactiveEvent` arm, add a `tui_tx.send(...)` call **in addition to** the existing behavior (do not replace). Specifically:
     1. `ProactiveEvent::AgentResult { task, result, .. }`:
@@ -124,7 +124,7 @@
 
 ## Phase 4: Handle new TuiEvent variants in App state
 
-- [ ] Step 4.1: Implement `handle_tui_event` for the new agent task variants in `crates/seneschal-tui/src/app.rs`
+- [x] Step 4.1: Implement `handle_tui_event` for the new agent task variants in `crates/seneschal-tui/src/app.rs`
   - File(s): `crates/seneschal-tui/src/app.rs`
   - Change: Add match arms in `handle_tui_event` for each new variant. The logic:
     1. `AgentTaskStarted { task_id, agent_name, objective }`:
@@ -149,7 +149,7 @@
 
 ## Phase 5: Render agent task messages inline in the TUI
 
-- [ ] Step 5.1: Add `Role::AgentTask` rendering in `message_lines()` in `crates/seneschal-tui/src/ui.rs`
+- [x] Step 5.1: Add `Role::AgentTask` rendering in `message_lines()` in `crates/seneschal-tui/src/ui.rs`
   - File(s): `crates/seneschal-tui/src/ui.rs`
   - Change: Add a new match arm to `message_lines()` for `Role::AgentTask`. The rendering should follow the same box-drawing border pattern as other roles but with task-specific colors and labels:
     1. Header line: box top border with status label and agent name.
@@ -169,7 +169,7 @@
     5. Bottom border: same box-closing pattern as other roles.
   - Acceptance criteria: `cargo check -p seneschal-tui` passes. `cargo test -p seneschal-tui` passes. The `Role::AgentTask` arm handles all `AgentTaskStatus` variants explicitly (use exhaustive match to ensure compile-time coverage).
 
-- [ ] Step 5.2: Add an `AgentTask` entry to the `Role` exhaustive match in `render_streaming_lines` (no-op for streaming)
+- [x] Step 5.2: Add an `AgentTask` entry to the `Role` exhaustive match in `render_streaming_lines` (no-op for streaming)
   - File(s): `crates/seneschal-tui/src/ui.rs`
   - Change: The `message_lines()` function's `Role` match is exhaustive — verify the compiler forces covering `AgentTask`. In `render_streaming`, agent tasks don't need special handling (streaming is only for Assistant). No code change needed — just verify compilation.
   - Acceptance criteria: `cargo check -p seneschal-tui` compiles without warnings about non-exhaustive match.
@@ -178,7 +178,7 @@
 
 ## Phase 6: Wire the `AcpSessionManager` to provide a subscribable event channel
 
-- [ ] Step 6.1: Add a `subscribe()` method to `AcpSessionManager` in `crates/seneschal-agents/src/session_manager.rs`
+- [x] Step 6.1: Add a `subscribe()` method to `AcpSessionManager` in `crates/seneschal-agents/src/session_manager.rs`
   - File(s): `crates/seneschal-agents/src/session_manager.rs`
   - Change: At the end of the `impl AcpSessionManager` block (before the test module), add:
     ```rust
@@ -256,7 +256,7 @@
 
 ## Phase 7: Connect the bridge task in main.rs
 
-- [ ] Step 7.1: Create and spawn the bridge task in `src/main.rs`
+- [x] Step 7.1: Create and spawn the bridge task in `src/main.rs`
   - File(s): `src/main.rs`
   - Change: After the `session_manager` is created (search for `AcpSessionManager::new` or `Arc::new(AcpSessionManager`), add:
     ```rust
@@ -350,7 +350,7 @@
 
 ## Phase 8: QA — verify no regressions
 
-- [ ] Step 8.1: Run `make qa` and fix any issues
+- [x] Step 8.1: Run `make qa` and fix any issues
   - File(s): N/A (code quality)
   - Change: Execute `make qa` from the repository root. This runs `cargo fmt --check`, `cargo clippy --all-targets --no-deps -- -D warnings`, `cargo test`, `cargo test --features full`, `cargo test e2e -- --ignored`, and `cargo build --features full`.
   - Fix any formatting, clippy, or compilation errors that arise from the changes.
@@ -362,7 +362,7 @@
   - If the e2e test fails, inspect the failure. If it's related to the new TUI events, adapt the e2e test to expect them (add new `TuiEvent` variant matching in `test_tui_receives_state_changes` or similar e2e tests).
   - Acceptance criteria: `make qa` passes entirely (or at minimum: `fmt`, `lint`, `test`, `test-ci`, `build` pass).
 
-- [ ] Step 8.2: Manual review of the TUI event flow
+- [x] Step 8.2: Manual review of the TUI event flow
   - File(s): `src/main.rs`, `crates/seneschal-tui/src/app.rs`, `crates/seneschal-tui/src/ui.rs`
   - Change: No code changes — review-only. Verify:
     1. The bridge task receives `SessionEvent` from `session_manager.create_event_listener()`.
