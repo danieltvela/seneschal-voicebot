@@ -259,6 +259,7 @@ impl E2eHarness {
         };
 
         // Spawn TTS task.
+        let has_audio_device = self.audio_output.has_device();
         let h_tts = {
             let events_c = Arc::clone(&events);
             let state_tx_c = Arc::clone(&state_tx);
@@ -278,7 +279,11 @@ impl E2eHarness {
                     sample_rate,
                     cancel_c,
                     muted_c,
+                    has_audio_device,
                     None, // tui_tx
+                    Arc::new(std::sync::Mutex::new(
+                        seneschal_core::pipeline::AnnouncementWindow::new(),
+                    )),
                 )
                 .await
             })
