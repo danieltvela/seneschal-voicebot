@@ -45,6 +45,46 @@ pub enum TuiEvent {
     PromptBuildUpdate { prompt: String },
     /// Prompt-build mode: activation state changed.
     PromptBuildStateChange { active: bool },
+    /// Agent task lifecycle events (timeline.inline — qwen-audio-agent style).
+    /// An agent task was created (LLM delegated to an agent).
+    AgentTaskStarted {
+        task_id: String,
+        agent_name: String,
+        objective: String,
+    },
+    /// The agent is actively processing the task.
+    AgentTaskRunning {
+        task_id: String,
+        objective: String,
+    },
+    /// The agent spawned a sub-delegation (complex multi-step project).
+    AgentTaskDelegated {
+        task_id: String,
+        objective: String,
+    },
+    /// The agent is finalizing / organizing results.
+    AgentTaskFinalizing {
+        task_id: String,
+        objective: String,
+    },
+    /// The agent completed the task successfully. `result` is the final output (Markdown/code).
+    AgentTaskCompleted {
+        task_id: String,
+        objective: String,
+        result: String,
+    },
+    /// The agent is requesting user permission for an action.
+    AgentTaskPermissionRequested {
+        task_id: String,
+        agent_name: String,
+        description: String,
+        options: Vec<String>,
+    },
+    /// The agent task failed.
+    AgentTaskFailed {
+        task_id: String,
+        message: String,
+    },
 }
 
 pub type TuiEventTx = mpsc::UnboundedSender<TuiEvent>;
