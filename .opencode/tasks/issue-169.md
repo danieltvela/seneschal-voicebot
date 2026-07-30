@@ -73,7 +73,7 @@
 
 ## Phase 3: QA validation
 
-- [ ] Step 3.1: Run the QA suite
+- [x] Step 3.1: Run the QA suite
   - Commands (in order):
     1. `cargo fmt --check`
     2. `cargo clippy --all-targets --no-deps -- -D warnings`
