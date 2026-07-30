@@ -53,20 +53,11 @@ pub enum TuiEvent {
         objective: String,
     },
     /// The agent is actively processing the task.
-    AgentTaskRunning {
-        task_id: String,
-        objective: String,
-    },
+    AgentTaskRunning { task_id: String, objective: String },
     /// The agent spawned a sub-delegation (complex multi-step project).
-    AgentTaskDelegated {
-        task_id: String,
-        objective: String,
-    },
+    AgentTaskDelegated { task_id: String, objective: String },
     /// The agent is finalizing / organizing results.
-    AgentTaskFinalizing {
-        task_id: String,
-        objective: String,
-    },
+    AgentTaskFinalizing { task_id: String, objective: String },
     /// The agent completed the task successfully. `result` is the final output (Markdown/code).
     AgentTaskCompleted {
         task_id: String,
@@ -81,10 +72,7 @@ pub enum TuiEvent {
         options: Vec<String>,
     },
     /// The agent task failed.
-    AgentTaskFailed {
-        task_id: String,
-        message: String,
-    },
+    AgentTaskFailed { task_id: String, message: String },
 }
 
 pub type TuiEventTx = mpsc::UnboundedSender<TuiEvent>;

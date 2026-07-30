@@ -400,7 +400,10 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
 
             lines.push(Line::from(vec![
                 Span::raw("┌ "),
-                Span::styled(header, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    header,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
                 Span::styled(time, Style::default().fg(Color::Rgb(100, 100, 100))),
             ]));
@@ -431,7 +434,9 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
                 for row in word_wrap_plain(&opts_text, w.saturating_sub(2)) {
                     lines.push(Line::from(vec![Span::styled(
                         format!("│ {row}"),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
                     )]));
                 }
             }

@@ -1152,7 +1152,9 @@ async fn async_main() -> Result<()> {
                         }
                     }
                     SessionEvent::Error {
-                        session_id, message, ..
+                        session_id,
+                        message,
+                        ..
                     } => Some(seneschal_tui::events::TuiEvent::AgentTaskFailed {
                         task_id: session_id.clone(),
                         message: message.clone(),

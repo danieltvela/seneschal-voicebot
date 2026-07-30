@@ -275,10 +275,7 @@ async fn handle_barge_in(
     try_set_idle(pipeline_state_tx, tui_tx);
 }
 
-fn try_set_idle(
-    pipeline_state_tx: &watch::Sender<PipelineState>,
-    tui_tx: &Option<TuiEventTx>,
-) {
+fn try_set_idle(pipeline_state_tx: &watch::Sender<PipelineState>, tui_tx: &Option<TuiEventTx>) {
     if matches!(
         *pipeline_state_tx.borrow(),
         PipelineState::Thinking { .. } | PipelineState::Speaking { .. }
