@@ -261,46 +261,55 @@ async fn async_main() -> Result<()> {
     let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
 
     tool_registry.register(CurrentTimeTool);
-    tool_registry.register(ReadFileTool);
-    tool_registry.register(ReadClipboardTool);
-    tool_registry.register(SetClipboardTool);
-    tool_registry.register(OpenAppTool);
+    // DISABLED (temp)
+    // tool_registry.register(ReadFileTool);
+    // DISABLED (temp)
+    // tool_registry.register(ReadClipboardTool);
+    // DISABLED (temp)
+    // tool_registry.register(SetClipboardTool);
+    // DISABLED (temp)
+    // tool_registry.register(OpenAppTool);
     tool_registry.register(SetConversationModeTool::new(Arc::clone(&conv_mode)));
 
     let prompt_build_state: Arc<Mutex<PromptBuildState>> =
         Arc::new(Mutex::new(PromptBuildState::Inactive));
-    tool_registry.register(SetPromptBuildTool::new(Arc::clone(&prompt_build_state)));
+    // DISABLED (temp)
+    // tool_registry.register(SetPromptBuildTool::new(Arc::clone(&prompt_build_state)));
 
-    if config.apple_events_enabled {
-        tool_registry.register(AppleEventsTool);
-        info!(target: "seneschal", "apple_events tool enabled (Calendar & Reminders)");
-    }
+    // DISABLED (temp)
+    // if config.apple_events_enabled {
+    //     tool_registry.register(AppleEventsTool);
+    //     info!(target: "seneschal", "apple_events tool enabled (Calendar & Reminders)");
+    // }
 
-    if config.shell_enabled {
-        tool_registry.register(RunShellTool::new(config.shell_timeout_secs));
-        info!(target: "seneschal", "run_shell tool enabled (timeout={}s)", config.shell_timeout_secs);
-    }
+    // DISABLED (temp)
+    // if config.shell_enabled {
+    //     tool_registry.register(RunShellTool::new(config.shell_timeout_secs));
+    //     info!(target: "seneschal", "run_shell tool enabled (timeout={}s)", config.shell_timeout_secs);
+    // }
 
-    if let Some(ref sec_client) = secondary_llm_client {
-        info!(
-            target: "seneschal",
-            "Vision tool enabled via secondary LLM (model={})",
-            config.secondary_llm_model,
-        );
-        tool_registry.register(TakeScreenshotTool::new(sec_client.clone()));
-    }
+    // DISABLED (temp)
+    // if let Some(ref sec_client) = secondary_llm_client {
+    //     info!(
+    //         target: "seneschal",
+    //         "Vision tool enabled via secondary LLM (model={})",
+    //         config.secondary_llm_model,
+    //     );
+    //     tool_registry.register(TakeScreenshotTool::new(sec_client.clone()));
+    // }
 
-    if config.web_search_enabled
-        && let Some(ref searxng_url) = config.searxng_url
-    {
-        let mut wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
-        if let Some(ref sec) = secondary_llm_client {
-            wst = wst.with_synthesis(sec.clone());
-            info!(target: "seneschal", "web_search synthesis via secondary LLM enabled");
-        }
-        tool_registry.register(wst);
-        info!(target: "seneschal", "web_search tool enabled (url={})", searxng_url);
-    }
+    // DISABLED (temp)
+    // if config.web_search_enabled
+    //     && let Some(ref searxng_url) = config.searxng_url
+    // {
+    //     let mut wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
+    //     if let Some(ref sec) = secondary_llm_client {
+    //         wst = wst.with_synthesis(sec.clone());
+    //         info!(target: "seneschal", "web_search synthesis via secondary LLM enabled");
+    //     }
+    //     tool_registry.register(wst);
+    //     info!(target: "seneschal", "web_search tool enabled (url={})", searxng_url);
+    // }
 
     // ── Agent delegation (multi-agent registry) ───────────────────────────────
     let agent_registry = AgentRegistry::from_config_and_env(config.agents.clone());
@@ -310,16 +319,17 @@ async fn async_main() -> Result<()> {
     let visible_session_manager = Arc::new(VisibleSessionManager::new());
 
     // ── Search provider (fast path) ───────────────────────────────────────────
-    if let Some(provider) = seneschal_search::from_config(&config) {
-        let provider = Arc::from(provider);
-        tool_registry.register(QuickSearchTool::new(Arc::clone(&provider)));
-        info!(target: "seneschal", "quick_search tool enabled (provider={})", provider.name());
-
-        if let Some(agent) = agent_registry.agents.first() {
-            tool_registry.register(DeepResearchTool::new(agent.clone(), shared_history.clone()));
-            info!(target: "seneschal", "deep_research tool enabled (agent={})", agent.name);
-        }
-    }
+    // DISABLED (temp)
+    // if let Some(provider) = seneschal_search::from_config(&config) {
+    //     let provider = Arc::from(provider);
+    //     tool_registry.register(QuickSearchTool::new(Arc::clone(&provider)));
+    //     info!(target: "seneschal", "quick_search tool enabled (provider={})", provider.name());
+    //
+    //     if let Some(agent) = agent_registry.agents.first() {
+    //         tool_registry.register(DeepResearchTool::new(agent.clone(), shared_history.clone()));
+    //         info!(target: "seneschal", "deep_research tool enabled (agent={})", agent.name);
+    //     }
+    // }
 
     for agent in &agent_registry.agents {
         info!(target: "seneschal", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
@@ -365,15 +375,16 @@ async fn async_main() -> Result<()> {
     }
 
     // ── OpenTerminalTool: macOS-only, registered when remote agents exist ─────
-    #[cfg(target_os = "macos")]
-    if agent_registry.agents.iter().any(|a| a.mode == "remote") {
-        let dir = std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        tool_registry.register(OpenTerminalTool { directory: dir });
-        info!(target: "seneschal", "open_terminal tool enabled (macOS + remote agents)");
-    }
+    // DISABLED (temp)
+    // #[cfg(target_os = "macos")]
+    // if agent_registry.agents.iter().any(|a| a.mode == "remote") {
+    //     let dir = std::env::current_dir()
+    //         .unwrap_or_default()
+    //         .to_string_lossy()
+    //         .to_string();
+    //     tool_registry.register(OpenTerminalTool { directory: dir });
+    //     info!(target: "seneschal", "open_terminal tool enabled (macOS + remote agents)");
+    // }
 
     // ── ACP pre-warm (per-agent) — skipped for remote agents ────────────────
     for agent in &agent_registry.agents {
@@ -621,13 +632,14 @@ async fn async_main() -> Result<()> {
     let mut pending_plugin_switch: Option<PluginSwitchEvent> = None;
 
     // Register switch_plugin tool if any plugins are available
-    if !plugin_manager.list_available().is_empty() {
-        tool_registry.register(SwitchPluginTool::new(
-            (*plugin_manager).clone(),
-            plugin_switch_tx,
-        ));
-        info!(target: "seneschal", "switch_plugin tool enabled");
-    }
+    // DISABLED (temp)
+    // if !plugin_manager.list_available().is_empty() {
+    //     tool_registry.register(SwitchPluginTool::new(
+    //         (*plugin_manager).clone(),
+    //         plugin_switch_tx,
+    //     ));
+    //     info!(target: "seneschal", "switch_plugin tool enabled");
+    // }
 
     // ── Database ──────────────────────────────────────────────────────────────
     let db = Database::new(&config.db_path).await?;
@@ -671,8 +683,9 @@ async fn async_main() -> Result<()> {
         info!(target: "memory", "Loaded {} persistent memories", memories.len());
     }
 
-    tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
-    info!(target: "seneschal", "recover_historical_context tool enabled");
+    // DISABLED (temp)
+    // tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
+    // info!(target: "seneschal", "recover_historical_context tool enabled");
 
     tool_registry.register(NoopTool::new(config.noop_tool_instructions.clone()));
     info!(
@@ -682,8 +695,9 @@ async fn async_main() -> Result<()> {
     );
 
     // Register list_tasks tool for subtask tracking
-    tool_registry.register_list_tasks();
-    info!(target: "seneschal", "list_tasks tool enabled");
+    // DISABLED (temp)
+    // tool_registry.register_list_tasks();
+    // info!(target: "seneschal", "list_tasks tool enabled");
 
     let tools = Arc::new(std::sync::Mutex::new(tool_registry));
 
