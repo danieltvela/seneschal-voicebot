@@ -1060,6 +1060,114 @@ async fn async_main() -> Result<()> {
     #[cfg(not(feature = "tui"))]
     let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = None;
 
+    // ── Bridge ACP session events → TUI agent task events ─────────────────────
+    #[cfg(feature = "tui")]
+    {
+        let mut session_rx = session_manager.create_event_listener();
+        let tui_tx_bridge = tui_tx.clone();
+        tokio::spawn(async move {
+            use seneschal_agents::session_manager::{SessionEvent, SessionStatus};
+            let mut buffers: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            while let Some(event) = session_rx.recv().await {
+                let tui_event = match &event {
+                    SessionEvent::Status {
+                        agent_name,
+                        session_id,
+                        status,
+                        ..
+                    } => match status {
+                        SessionStatus::Started => {
+                            Some(seneschal_tui::events::TuiEvent::AgentTaskStarted {
+                                task_id: session_id.clone(),
+                                agent_name: agent_name.clone(),
+                                objective: String::new(),
+                            })
+                        }
+                        SessionStatus::Busy => {
+                            Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                task_id: session_id.clone(),
+                                objective: String::new(),
+                            })
+                        }
+                        SessionStatus::Done => {
+                            Some(seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                task_id: session_id.clone(),
+                                objective: String::new(),
+                            })
+                        }
+                        SessionStatus::Error => {
+                            Some(seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                                task_id: session_id.clone(),
+                                message: "Error de sesión ACP".to_string(),
+                            })
+                        }
+                        _ => None,
+                    },
+                    SessionEvent::ToolCall {
+                        agent_name: _,
+                        session_id,
+                        tool_name,
+                        ..
+                    } => Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                        task_id: session_id.clone(),
+                        objective: format!("llamando a {tool_name}..."),
+                    }),
+                    SessionEvent::ToolResult {
+                        session_id,
+                        tool_name,
+                        result,
+                        ..
+                    } => {
+                        let summary = if result.len() > 80 {
+                            format!("{}...", &result[..80])
+                        } else {
+                            result.clone()
+                        };
+                        Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                            task_id: session_id.clone(),
+                            objective: format!("✅ {tool_name}: {summary}"),
+                        })
+                    }
+                    SessionEvent::AgentMessage {
+                        session_id, text, ..
+                    } => {
+                        let buf = buffers.entry(session_id.clone()).or_default();
+                        buf.push_str(text);
+                        buf.push(' ');
+                        let should_emit = buf.len() > 200
+                            || text.ends_with('.')
+                            || text.ends_with('!')
+                            || text.ends_with('?')
+                            || text.ends_with('\n');
+                        if should_emit {
+                            let msg = buf.clone();
+                            buf.clear();
+                            Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                task_id: session_id.clone(),
+                                objective: msg,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    SessionEvent::Error {
+                        session_id, message, ..
+                    } => Some(seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                        task_id: session_id.clone(),
+                        message: message.clone(),
+                    }),
+                    _ => None,
+                };
+                if let Some(ev) = tui_event {
+                    if tui_tx_bridge.send(ev).is_err() {
+                        break; // TUI closed
+                    }
+                }
+            }
+        });
+    }
+
     let mut pending_agent_results: std::collections::VecDeque<(String, String)> =
         std::collections::VecDeque::new();
     let mut current_agent_announcement: Option<(String, String)> = None;
@@ -1397,6 +1505,20 @@ async fn async_main() -> Result<()> {
     ProactiveEvent::AgentResult { task, result, tool_call_id, .. } => {
                                     // Stop background processing sound
                                     filler_controller.stop();
+
+                                    #[cfg(feature = "tui")]
+                                    {
+                                        let tui_task = task.clone();
+                                        let tui_result = result.clone();
+                                        tui_tx
+                                            .send(seneschal_tui::events::TuiEvent::AgentTaskCompleted {
+                                                task_id: tui_task.clone(),
+                                                objective: tui_task,
+                                                result: tui_result,
+                                            })
+                                            .ok();
+                                    }
+
                                     if let Some(id) = tool_call_id {
                                         // Inject as proper tool-role message to satisfy OpenAI API contract:
                                         // assistant(tool_calls) must be followed by tool(tool_call_id).
@@ -1438,6 +1560,23 @@ async fn async_main() -> Result<()> {
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
                                 }
                                 ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
+                                    #[cfg(feature = "tui")]
+                                    {
+                                        let a_name = agent_name.clone();
+                                        let desc = question.clone();
+                                        let opts = options.clone();
+                                        tui_tx
+                                            .send(
+                                                seneschal_tui::events::TuiEvent::AgentTaskPermissionRequested {
+                                                    task_id: task_id.clone(),
+                                                    agent_name: a_name,
+                                                    description: desc,
+                                                    options: opts,
+                                                },
+                                            )
+                                            .ok();
+                                    }
+
                                     if pipeline_state_rx.borrow().is_busy() {
                                         events.barge_in_tx.send(0).ok();
                                         if let Some(announcement) = current_agent_announcement.take() {
@@ -1514,7 +1653,44 @@ async fn async_main() -> Result<()> {
                                     };
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
                                 }
-                                ProactiveEvent::AgentMilestone { milestone, .. } => {
+                                ProactiveEvent::AgentMilestone { agent_name: _, milestone, .. } => {
+                                    #[cfg(feature = "tui")]
+                                    {
+                                        let milestone_text = milestone.clone();
+                                        let lower = milestone_text.to_lowercase();
+                                        let tui_ev = if lower.contains("ejecución")
+                                            || lower.contains("running")
+                                            || lower.contains("procesando")
+                                        {
+                                            seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text,
+                                            }
+                                        } else if lower.contains("finalizando")
+                                            || lower.contains("organizando")
+                                            || lower.contains("complet")
+                                        {
+                                            seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text,
+                                            }
+                                        } else if lower.contains("delegación")
+                                            || lower.contains("delegated")
+                                            || lower.contains("proyecto")
+                                        {
+                                            seneschal_tui::events::TuiEvent::AgentTaskDelegated {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text,
+                                            }
+                                        } else {
+                                            seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text,
+                                            }
+                                        };
+                                        tui_tx.send(tui_ev).ok();
+                                    }
+
                                     // Speak the milestone text via TTS so the user hears progress.
                                     if !pipeline_state_rx.borrow().is_busy() {
                                         transcript_tx
