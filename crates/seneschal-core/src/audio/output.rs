@@ -57,6 +57,12 @@ impl AudioOutput {
         })
     }
 
+    /// Returns `true` when a real audio output device is available,
+    /// `false` for the null/headless variant.
+    pub fn has_device(&self) -> bool {
+        self.inner.lock().unwrap().device.is_some()
+    }
+
     /// Like `new()`, but falls back to a null/headless output when no device is
     /// available. Used at startup so the app can launch without an audio device
     /// connected; `swap_device` upgrades to a real device when one appears.
