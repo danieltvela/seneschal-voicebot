@@ -1,9 +1,5 @@
 # Git Workflow
 
-## Branch Strategy
-- **Bugs/fixes**: Work directly on `main`. Small fixes, no feature branch needed.
-- **New features**: Create a feature branch (`feature/<short-name>`). One feature per branch.
-
 ## Commit Messages
 - **English only**, short descriptive text identifying the change. No lengthy explanations.
 - Small, focused commits are preferred.
@@ -77,5 +73,4 @@ To avoid context switching for the human and resource collisions, use an isolate
 - **Human Zone:** `/Users/danielvela/projects/ai/seneschal` (Main stable context). Validates and merges PRs.
 - **AI Zone:** `/Users/danielvela/projects/ai/seneschal-ai` (Autonomous cycle zone).
   - Agents MUST perform all work here.
-  - Each issue requires its own worktree/branch: `git worktree add -b feature/issue-N /Users/danielvela/projects/ai/seneschal-ai`.
   - When a task is completed and a PR is opened, the worktree is cleared or moved to the next task.
