@@ -63,10 +63,8 @@ use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin
 use seneschal_extras::analysis::ContextLens;
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
 use seneschal_extras::{
-    DeepResearchTool, RecoverHistoricalContextTool, RunAgentTool, SwitchPluginTool,
-    TakeScreenshotTool,
+    RunAgentTool,
     conversation_mode::SetConversationModeTool,
-    prompt_build::SetPromptBuildTool,
     run_agent::{ActiveTask, PendingInteractionEntry},
 };
 use seneschal_mcp::mcp::McpToolProxy;
@@ -75,8 +73,7 @@ use seneschal_plugins::{
     OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
 };
 use seneschal_tools_core::{
-    AppleEventsTool, CurrentTimeTool, NoopTool, OpenAppTool, QuickSearchTool, ReadClipboardTool,
-    ReadFileTool, RunShellTool, SetClipboardTool, WebSearchTool,
+    CurrentTimeTool, NoopTool,
 };
 
 #[cfg(test)]
