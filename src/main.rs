@@ -74,8 +74,6 @@ use seneschal_memory::{SDreamConfig, SDreamDaemon};
 use seneschal_plugins::{
     OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
 };
-#[cfg(target_os = "macos")]
-use seneschal_tools_core::OpenTerminalTool;
 use seneschal_tools_core::{
     AppleEventsTool, CurrentTimeTool, NoopTool, OpenAppTool, QuickSearchTool, ReadClipboardTool,
     ReadFileTool, RunShellTool, SetClipboardTool, WebSearchTool,
@@ -373,18 +371,6 @@ async fn async_main() -> Result<()> {
         }
         tool_registry.register(run_agent_tool);
     }
-
-    // ── OpenTerminalTool: macOS-only, registered when remote agents exist ─────
-    // DISABLED (temp)
-    // #[cfg(target_os = "macos")]
-    // if agent_registry.agents.iter().any(|a| a.mode == "remote") {
-    //     let dir = std::env::current_dir()
-    //         .unwrap_or_default()
-    //         .to_string_lossy()
-    //         .to_string();
-    //     tool_registry.register(OpenTerminalTool { directory: dir });
-    //     info!(target: "seneschal", "open_terminal tool enabled (macOS + remote agents)");
-    // }
 
     // ── ACP pre-warm (per-agent) — skipped for remote agents ────────────────
     for agent in &agent_registry.agents {
