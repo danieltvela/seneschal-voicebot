@@ -63,10 +63,8 @@ use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin
 use seneschal_extras::analysis::ContextLens;
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
 use seneschal_extras::{
-    DeepResearchTool, RecoverHistoricalContextTool, RunAgentTool, SwitchPluginTool,
-    TakeScreenshotTool,
+    RunAgentTool,
     conversation_mode::SetConversationModeTool,
-    prompt_build::SetPromptBuildTool,
     run_agent::{ActiveTask, PendingInteractionEntry},
 };
 use seneschal_mcp::mcp::McpToolProxy;
@@ -74,11 +72,8 @@ use seneschal_memory::{SDreamConfig, SDreamDaemon};
 use seneschal_plugins::{
     OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
 };
-#[cfg(target_os = "macos")]
-use seneschal_tools_core::OpenTerminalTool;
 use seneschal_tools_core::{
-    AppleEventsTool, CurrentTimeTool, NoopTool, OpenAppTool, QuickSearchTool, ReadClipboardTool,
-    ReadFileTool, RunShellTool, SetClipboardTool, WebSearchTool,
+    CurrentTimeTool, NoopTool,
 };
 
 #[cfg(test)]
@@ -360,7 +355,6 @@ async fn async_main() -> Result<()> {
             }
         } else if agent.mode == "acp" {
             run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
-            run_agent_tool = run_agent_tool.with_hermes_viewer(config.hermes_session_viewer);
         } else if agent.mode == "visible" {
             run_agent_tool = run_agent_tool
                 .with_visible_manager(Arc::clone(&visible_session_manager))
@@ -373,18 +367,6 @@ async fn async_main() -> Result<()> {
         }
         tool_registry.register(run_agent_tool);
     }
-
-    // ── OpenTerminalTool: macOS-only, registered when remote agents exist ─────
-    // DISABLED (temp)
-    // #[cfg(target_os = "macos")]
-    // if agent_registry.agents.iter().any(|a| a.mode == "remote") {
-    //     let dir = std::env::current_dir()
-    //         .unwrap_or_default()
-    //         .to_string_lossy()
-    //         .to_string();
-    //     tool_registry.register(OpenTerminalTool { directory: dir });
-    //     info!(target: "seneschal", "open_terminal tool enabled (macOS + remote agents)");
-    // }
 
     // ── ACP pre-warm (per-agent) — skipped for remote agents ────────────────
     for agent in &agent_registry.agents {
@@ -607,7 +589,6 @@ async fn async_main() -> Result<()> {
                         proactive_tx.clone(),
                         Some(Arc::clone(&session_manager)),
                         secondary_llm_client.clone(),
-                        config.hermes_session_viewer,
                     );
                     info!(
                         target: "plugin",

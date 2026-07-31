@@ -10,8 +10,6 @@ pub use seneschal_tools_core::AppleEventsTool;
 pub use seneschal_tools_core::CurrentTimeTool;
 pub use seneschal_tools_core::NoopTool;
 pub use seneschal_tools_core::OpenAppTool;
-#[cfg(target_os = "macos")]
-pub use seneschal_tools_core::OpenTerminalTool;
 pub use seneschal_tools_core::QuickSearchTool;
 pub use seneschal_tools_core::ReadFileTool;
 pub use seneschal_tools_core::RunShellTool;

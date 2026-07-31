@@ -3,20 +3,17 @@
 //! Extracted from `src/tools/run_agent.rs` to break the circular dependency
 //! between the agents and tools modules during the crate carve-out.
 
-use std::fs::File;
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow;
-use chrono::Local;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::config::{Config, HermesSessionViewerMode};
+use crate::config::Config;
 
 // ── JSON-RPC 2.0 helpers ─────────────────────────────────────────────────────
 
@@ -99,8 +96,6 @@ pub struct AcpWriter {
     pub verbose: Arc<AtomicBool>,
     /// Cached PID for synchronous SIGKILL in `Drop`.
     child_pid: Option<libc::pid_t>,
-    /// Optional log file for ACP traffic (HermesSessionViewerMode::LogFile).
-    pub log_file: Option<File>,
 }
 
 /// Backward-compat alias. Renamed from `HermesAcpWriter` → `AcpWriter`.
@@ -126,7 +121,6 @@ impl AcpWriter {
             next_id: 0,
             verbose: Arc::new(AtomicBool::new(false)),
             child_pid: Some(pid as libc::pid_t),
-            log_file: None,
         }
     }
 
@@ -208,64 +202,9 @@ impl AcpWriter {
                 next_id: 0,
                 verbose,
                 child_pid: Some(pid as libc::pid_t),
-                log_file: None,
             },
             rx,
         ))
-    }
-
-    /// Open an ACP traffic log file at `/tmp/seneschal_sessions/{session_id}.log`
-    /// and launch a macOS Terminal window tailing it.
-    pub fn open_log_file(&mut self, session_id: &str) {
-        let dir = std::path::PathBuf::from("/tmp/seneschal_sessions");
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!(target: "agent", "Failed to create log dir: {e}");
-            return;
-        }
-
-        let path = dir.join(format!("{session_id}.log"));
-        let path_str = path.to_string_lossy().to_string();
-
-        match File::create(&path) {
-            Ok(file) => {
-                info!(target: "agent", "ACP log file opened: {}", path_str);
-                self.log_file = Some(file);
-            }
-            Err(e) => {
-                warn!(target: "agent", "Failed to open ACP log file: {e}");
-                return;
-            }
-        }
-
-        // Launch Terminal.app with tail -f
-        let osacmd = format!(
-            r#"tell application "Terminal" to do script "clear && echo 'ACP Session: {session_id}' && tail -f {}""#,
-            path_str.replace("\"", "\\\""),
-        );
-
-        match std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&osacmd)
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(_) => {
-                info!(target: "agent", "Opened Terminal tail -f for ACP log: {}", path_str);
-            }
-            Err(e) => {
-                warn!(target: "agent", "Failed to open Terminal for ACP log: {e}");
-            }
-        }
-    }
-
-    /// Log a formatted ACP message line to the log file.
-    pub fn log_acp_message(&mut self, direction: &str, msg: &str) {
-        if let Some(ref mut file) = self.log_file {
-            let ts = Local::now().format("%H:%M:%S%.3f");
-            let line = format!("[{ts}] {direction} {msg}\n");
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
-        }
     }
 
     /// Write a raw JSON value as a newline-delimited line to the process stdin.
@@ -287,7 +226,6 @@ impl AcpWriter {
         let msg = jsonrpc_request(id, method, params);
         let json_str = serde_json::to_string(&msg).unwrap_or_default();
         debug!(target: "acp", "→ {}", json_str);
-        self.log_acp_message("→ REQUEST", &json_str);
         self.write_json(&msg).await?;
         Ok(id)
     }
@@ -297,7 +235,6 @@ impl AcpWriter {
         let msg = jsonrpc_notification(method, params);
         let json_str = serde_json::to_string(&msg).unwrap_or_default();
         debug!(target: "acp", "→ {}", json_str);
-        self.log_acp_message("→ NOTIFICATION", &json_str);
         self.write_json(&msg).await?;
         Ok(())
     }
@@ -307,19 +244,16 @@ impl AcpWriter {
         let msg = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
         let json_str = serde_json::to_string(&msg).unwrap_or_default();
         debug!(target: "acp", "→ {}", json_str);
-        self.log_acp_message("→ RESPONSE", &json_str);
         self.write_json(&msg).await?;
         Ok(())
     }
 
     /// Perform the full ACP initialize + session/new handshake.
     /// Blocks until both responses arrive on `rx`.
-    /// If `viewer_mode` is `LogFile`, opens an ACP traffic log and launches a Terminal.
     pub async fn initialize(
         &mut self,
         rx: &mut mpsc::Receiver<JsonRpcMessage>,
         cwd: &str,
-        viewer_mode: HermesSessionViewerMode,
     ) -> anyhow::Result<String> {
         let init_id = self
             .send_request(
@@ -379,10 +313,6 @@ impl AcpWriter {
         };
 
         self.session_id = Some(sid.clone());
-
-        if viewer_mode == HermesSessionViewerMode::LogFile {
-            self.open_log_file(&sid);
-        }
 
         info!(target: "acp", "ACP initialized, sessionId={}", sid);
         Ok(sid)
