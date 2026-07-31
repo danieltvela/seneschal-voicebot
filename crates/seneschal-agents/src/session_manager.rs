@@ -8,7 +8,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use super::config::AgentConfig;
 use seneschal_common::acp_writer::{AcpWriter, JsonRpcMessage};
-use seneschal_common::config::{Config, HermesSessionViewerMode};
+use seneschal_common::config::Config;
 
 // ── Session events ─────────────────────────────────────────────────────────────
 
@@ -228,7 +228,7 @@ impl AcpSessionManager {
             .to_string_lossy()
             .to_string();
         let session_id = writer
-            .initialize(&mut inbound_rx, &cwd, HermesSessionViewerMode::Off)
+            .initialize(&mut inbound_rx, &cwd)
             .await?;
         let now = Instant::now();
         let entry = SessionEntry {

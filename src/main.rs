@@ -358,7 +358,6 @@ async fn async_main() -> Result<()> {
             }
         } else if agent.mode == "acp" {
             run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
-            run_agent_tool = run_agent_tool.with_hermes_viewer(config.hermes_session_viewer);
         } else if agent.mode == "visible" {
             run_agent_tool = run_agent_tool
                 .with_visible_manager(Arc::clone(&visible_session_manager))
@@ -593,7 +592,6 @@ async fn async_main() -> Result<()> {
                         proactive_tx.clone(),
                         Some(Arc::clone(&session_manager)),
                         secondary_llm_client.clone(),
-                        config.hermes_session_viewer,
                     );
                     info!(
                         target: "plugin",

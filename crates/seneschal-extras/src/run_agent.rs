@@ -16,7 +16,6 @@ use seneschal_agents::{
     AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, SessionEvent,
     SessionEventTx,
 };
-use seneschal_common::config::HermesSessionViewerMode;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::Tool;
 
@@ -183,7 +182,6 @@ pub struct RunAgentTool {
     synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
     opencode_transport: Option<Arc<OpenCodeHttpTransport>>,
-    hermes_viewer_mode: HermesSessionViewerMode,
     /// Manager for visible (PTY-based) agent sessions.
     visible_manager: Option<Arc<VisibleSessionManager>>,
     /// Directory for visible session log files.
@@ -206,16 +204,10 @@ impl RunAgentTool {
             synthesis_client: None,
             session_manager: None,
             opencode_transport: None,
-            hermes_viewer_mode: HermesSessionViewerMode::Off,
             visible_manager: None,
             session_dir: "/tmp/seneschal_sessions".to_string(),
             tool_name: OnceLock::new(),
         }
-    }
-
-    pub fn with_hermes_viewer(mut self, mode: HermesSessionViewerMode) -> Self {
-        self.hermes_viewer_mode = mode;
-        self
     }
 
     /// Attach an optional session manager for persistent ACP sessions.
@@ -663,7 +655,6 @@ impl RunAgentTool {
         let agent_name = self.config.name.clone();
         let config = self.config.clone();
         let session_mgr = self.session_manager.clone();
-        let viewer_mode = self.hermes_viewer_mode;
 
         tokio::spawn(async move {
             let writer_arc: Arc<Mutex<AcpWriter>>;
@@ -691,13 +682,6 @@ impl RunAgentTool {
                 session_id = sess.session_id;
                 mgr.mark_session_busy(&agent_name);
                 mgr.add_task(&agent_name, &task_id);
-                // If log viewer is enabled and log not yet opened, open it now
-                if viewer_mode == HermesSessionViewerMode::LogFile {
-                    let mut w = writer_arc.lock().await;
-                    if w.log_file.is_none() {
-                        w.open_log_file(&session_id);
-                    }
-                }
                 false
             } else {
                 let (mut writer, mut rx) = match AcpWriter::spawn(&acp_command).await {
@@ -719,7 +703,7 @@ impl RunAgentTool {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                let sid = match writer.initialize(&mut rx, &cwd, viewer_mode).await {
+                let sid = match writer.initialize(&mut rx, &cwd).await {
                     Ok(sid) => sid,
                     Err(e) => {
                         let _ = writer.kill().await;
@@ -1074,26 +1058,6 @@ async fn collect_acp_response(
             _ = &mut cancel_rx => None,
             msg = inbound_rx.recv() => msg,
         };
-
-        // Log every inbound message before processing
-        if let Some(ref msg) = maybe_msg {
-            let mut guard = acp_writer.lock().await;
-            if let Some(w) = guard.as_mut() {
-                let json = match msg {
-                    JsonRpcMessage::Response { id, result, error } => {
-                        serde_json::json!({"jsonrpc":"2.0","id":id,"result":result,"error":error})
-                    }
-                    JsonRpcMessage::Request { id, method, params } => {
-                        serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
-                    }
-                    JsonRpcMessage::Notification { method, params } => {
-                        serde_json::json!({"jsonrpc":"2.0","method":method,"params":params})
-                    }
-                };
-                let json_str = serde_json::to_string(&json).unwrap_or_default();
-                w.log_acp_message("← INBOUND", &json_str);
-            }
-        }
 
         match maybe_msg {
             None => {
@@ -1782,7 +1746,7 @@ mod integration_tests {
             .to_string();
 
         let session_id = writer
-            .initialize(&mut rx, &cwd, HermesSessionViewerMode::Off)
+            .initialize(&mut rx, &cwd)
             .await
             .expect("initialize failed");
 
@@ -1809,7 +1773,7 @@ mod integration_tests {
             .to_string();
 
         let session_id = writer
-            .initialize(&mut rx, &cwd, HermesSessionViewerMode::Off)
+            .initialize(&mut rx, &cwd)
             .await
             .expect("initialize failed");
 
@@ -1872,7 +1836,7 @@ mod integration_tests {
             .to_string();
 
         let session_id = writer
-            .initialize(&mut rx, &cwd, HermesSessionViewerMode::Off)
+            .initialize(&mut rx, &cwd)
             .await
             .expect("initialize failed");
 

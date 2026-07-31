@@ -16,7 +16,7 @@ use tracing::debug;
 use tracing_subscriber::EnvFilter;
 
 // Re-use library modules from the voicebot crate.
-use seneschal::config::{Config, HermesSessionViewerMode};
+use seneschal::config::Config;
 use seneschal_common::acp_writer::{AcpWriter, JsonRpcMessage};
 
 /// How permission requests from the agent are handled.
@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
     let session_id = writer
-        .initialize(&mut rx, &cwd, HermesSessionViewerMode::Off)
+        .initialize(&mut rx, &cwd)
         .await?;
     eprintln!("Session initialized: {session_id}\n");
 

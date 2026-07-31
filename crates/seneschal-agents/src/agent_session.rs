@@ -211,27 +211,6 @@ impl VisibleSession {
             })
             .context("Failed to spawn PTY reader thread")?;
 
-        // ── Launch Terminal.app (macOS only) ─────────────────────────────────
-        #[cfg(target_os = "macos")]
-        {
-            let escaped = log_path_str.replace('"', "\\\"");
-            let osa = format!(
-                r#"tell application "Terminal" to do script "clear && echo 'Visible Agent: {}' && tail -f {}""#,
-                agent_name, escaped,
-            );
-
-            if let Err(e) = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(&osa)
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                warn!(target: "agent_session", "Failed to launch Terminal window: {e}");
-            } else {
-                info!(target: "agent_session", %session_id, "Terminal.app launched for visible agent");
-            }
-        }
-
         Ok(Arc::new(Self {
             session_id,
             agent_name: agent_name_owned,
@@ -363,19 +342,6 @@ impl VisibleSession {
         // Update last_used
         if let Ok(mut last) = self.last_used.lock() {
             *last = Instant::now();
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let osa = format!(
-                r#"tell application "Terminal" to close (every window whose name contains "{}")"#,
-                session_id,
-            );
-            let _ = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(&osa)
-                .stderr(std::process::Stdio::null())
-                .spawn();
         }
 
         info!(

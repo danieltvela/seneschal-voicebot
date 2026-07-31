@@ -54,27 +54,6 @@ fn default_mcp_tool_timeout() -> u64 {
     30
 }
 
-/// Mode for the Hermes ACP session log viewer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HermesSessionViewerMode {
-    #[default]
-    Off,
-    LogFile,
-}
-
-impl std::str::FromStr for HermesSessionViewerMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "off" | "0" | "false" => Ok(Self::Off),
-            "logfile" | "log-file" | "log" => Ok(Self::LogFile),
-            _ => Err(format!("Invalid HermesSessionViewerMode: {s}")),
-        }
-    }
-}
-
 /// Active Seneschal runtime environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -445,9 +424,6 @@ pub struct Config {
 
     // ── Persistence ───────────────────────────────────────────────────────────
     pub db_path: String,
-
-    // ── Hermes ACP session log viewer ───────────────────────────────────────────
-    pub hermes_session_viewer: HermesSessionViewerMode,
 
     // ── Cold Path Memory (S-DREAM) ─────────────────────────────────────────────
     /// Interval in seconds between S-DREAM consolidation cycles.
@@ -958,13 +934,6 @@ impl Config {
         // DB
         if let Ok(v) = env::var("DB_PATH") {
             self.db_path = v;
-        }
-
-        // Hermes ACP session log viewer
-        if let Ok(v) = env::var("HERMES_SESSION_VIEWER") {
-            self.hermes_session_viewer = v
-                .parse::<HermesSessionViewerMode>()
-                .unwrap_or(HermesSessionViewerMode::Off);
         }
 
         // Cold Path Memory (S-DREAM)

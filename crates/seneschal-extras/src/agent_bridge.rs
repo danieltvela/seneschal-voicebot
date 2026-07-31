@@ -7,7 +7,6 @@ use tracing::warn;
 
 use crate::run_agent::{ActiveTask, RunAgentTool};
 use seneschal_agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
-use seneschal_common::config::HermesSessionViewerMode;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::{Tool, ToolRegistry};
 use seneschal_core::llm::LlmProvider;
@@ -50,7 +49,6 @@ pub fn register_plugin_agent_tools(
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     session_manager: Option<Arc<AcpSessionManager>>,
     secondary_llm: Option<Arc<dyn LlmProvider>>,
-    hermes_viewer_mode: HermesSessionViewerMode,
 ) -> Vec<String> {
     let mut registered_names = Vec::new();
 
@@ -80,7 +78,6 @@ pub fn register_plugin_agent_tools(
             if let Some(ref mgr) = session_manager {
                 run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(mgr));
             }
-            run_agent_tool = run_agent_tool.with_hermes_viewer(hermes_viewer_mode);
         }
 
         let tool_name = run_agent_tool.name().to_string();
