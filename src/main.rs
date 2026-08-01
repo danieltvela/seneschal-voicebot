@@ -816,9 +816,13 @@ async fn async_main() -> Result<()> {
     // enriches every LLM call without being persisted to the session.
     let context_lens = Arc::new(Mutex::new(ContextLens::new()));
 
-    let identity_analyzer: Option<Arc<Mutex<IdentityAnalyzer>>> = if let Some(ref model_path) =
-        config.speaker_model
-    {
+    let identity_analyzer: Option<Arc<Mutex<IdentityAnalyzer>>> = if !config.speaker_enabled {
+        info!(
+            target: "speaker",
+            "Speaker verification disabled by config"
+        );
+        None
+    } else if let Some(ref model_path) = config.speaker_model {
         match SpeakerVerifier::new(
             model_path,
             std::path::Path::new(&config.speaker_enrollment_path),

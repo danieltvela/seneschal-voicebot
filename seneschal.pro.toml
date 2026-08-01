@@ -160,6 +160,7 @@ web_search_enabled = true
 # ── Speaker verification ──────────────────────────────────────────────────────
 # speaker_model defaults to None at runtime; the env override checks whether
 # models/speaker_embedding.onnx exists when no value is configured.
+speaker_enabled = true
 speaker_enrollment_path = "data/pro/speaker.emb"
 speaker_similarity_min = 0.45
 

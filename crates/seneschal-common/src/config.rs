@@ -373,6 +373,10 @@ pub struct Config {
     pub web_search_enabled: bool,
 
     // ── Speaker verification ──────────────────────────────────────────────────
+    /// Enable/disable speaker verification at runtime (SPEAKER_ENABLED, default true).
+    /// Set to false to skip model loading and the 50-200ms latency penalty per utterance.
+    #[serde(default = "default_speaker_enabled")]
+    pub speaker_enabled: bool,
     /// Path to sherpa-onnx speaker embedding ONNX model (SPEAKER_MODEL).
     /// None = auto-detect from models/speaker_embedding.onnx; disabled if absent.
     pub speaker_model: Option<String>,
@@ -466,6 +470,10 @@ where
 {
     let s = String::deserialize(deserializer)?;
     Ok(if s.is_empty() { None } else { Some(s) })
+}
+
+fn default_speaker_enabled() -> bool {
+    true
 }
 
 impl Config {
@@ -876,6 +884,9 @@ impl Config {
         }
 
         // Speaker verification
+        if let Ok(v) = env::var("SPEAKER_ENABLED") {
+            self.speaker_enabled = !(v == "0" || v.to_lowercase() == "false");
+        }
         if let Ok(v) = env::var("SPEAKER_MODEL") {
             self.speaker_model = Some(v);
         } else if self.speaker_model.is_none() {
@@ -1007,5 +1018,55 @@ impl Config {
 
     pub fn samples_per_chunk(&self) -> usize {
         (self.sample_rate as usize * self.chunk_ms as usize) / 1000
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speaker_enabled_defaults_true() {
+        use temp_env::with_vars;
+        with_vars(&[] as &[(&str, Option<&str>); 0], || {
+            let config = Config::from_env().unwrap();
+            assert!(config.speaker_enabled);
+        });
+    }
+
+    #[test]
+    fn speaker_enabled_false_via_env_zero() {
+        use temp_env::with_vars;
+        with_vars([("SPEAKER_ENABLED", Some("0"))], || {
+            let config = Config::from_env().unwrap();
+            assert!(!config.speaker_enabled);
+        });
+    }
+
+    #[test]
+    fn speaker_enabled_false_via_env_false() {
+        use temp_env::with_vars;
+        with_vars([("SPEAKER_ENABLED", Some("false"))], || {
+            let config = Config::from_env().unwrap();
+            assert!(!config.speaker_enabled);
+        });
+    }
+
+    #[test]
+    fn speaker_enabled_true_via_env_one() {
+        use temp_env::with_vars;
+        with_vars([("SPEAKER_ENABLED", Some("1"))], || {
+            let config = Config::from_env().unwrap();
+            assert!(config.speaker_enabled);
+        });
+    }
+
+    #[test]
+    fn speaker_enabled_true_via_env_true() {
+        use temp_env::with_vars;
+        with_vars([("SPEAKER_ENABLED", Some("true"))], || {
+            let config = Config::from_env().unwrap();
+            assert!(config.speaker_enabled);
+        });
     }
 }

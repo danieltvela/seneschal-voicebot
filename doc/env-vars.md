@@ -49,6 +49,7 @@ Read from `.env` (dotenvy loads automatically):
 | `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |
 | `SEARXNG_URL` | — | SearXNG base URL (enables web_search) |
 | `SEARXNG_SECRET` | — | SearXNG bearer token |
+| `SPEAKER_ENABLED` | `true` | Enable/disable speaker verification at runtime (`0`/`false` = disabled, `1`/`true` = enabled). When disabled, the speaker model is not loaded and the associated 50-200ms latency per utterance is avoided. |
 | `WS_PORT` | `9090` | WebSocket server port |
 | `S_DREAM_INTERVAL_SECS` | `3600` | Seconds between consolidation cycles (0 = disabled) |
 | `S_DREAM_ON_IDLE` | `1` | Trigger consolidation when user is idle (1 = true) |
