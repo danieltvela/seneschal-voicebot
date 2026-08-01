@@ -227,9 +227,7 @@ impl AcpSessionManager {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let session_id = writer
-            .initialize(&mut inbound_rx, &cwd)
-            .await?;
+        let session_id = writer.initialize(&mut inbound_rx, &cwd).await?;
         let now = Instant::now();
         let entry = SessionEntry {
             writer: Arc::new(Mutex::new(writer)),

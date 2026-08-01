@@ -72,9 +72,7 @@ use seneschal_memory::{SDreamConfig, SDreamDaemon};
 use seneschal_plugins::{
     OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
 };
-use seneschal_tools_core::{
-    CurrentTimeTool, NoopTool,
-};
+use seneschal_tools_core::{CurrentTimeTool, NoopTool};
 
 #[cfg(test)]
 mod e2e_tests;

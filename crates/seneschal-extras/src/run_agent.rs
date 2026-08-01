@@ -1159,17 +1159,32 @@ async fn collect_acp_response(
                     .as_array()
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|o| o["optionId"].as_str().map(String::from))
+                            .map(|o| {
+                                let id = o["optionId"].as_str().unwrap_or("?");
+                                let label =
+                                    o["label"].as_str().or_else(|| o["description"].as_str());
+                                match label {
+                                    Some(l) if !l.is_empty() => format!("{l} ({id})"),
+                                    _ => id.to_string(),
+                                }
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
 
                 // Build a description from the toolCall info
                 let tool_call = &params["toolCall"];
-                let description = tool_call["name"]
-                    .as_str()
-                    .unwrap_or("acción desconocida")
-                    .to_string();
+                let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
+                let description = if let Some(input) = tool_call["input"].as_str() {
+                    let truncated = if input.len() > 200 {
+                        format!("{}...", &input[..200])
+                    } else {
+                        input.to_string()
+                    };
+                    format!("{tool_name}: {truncated}")
+                } else {
+                    tool_name.to_string()
+                };
 
                 if let Some(ref mgr) = session_mgr {
                     mgr.mark_session_needs_input(&agent_name);
@@ -1720,6 +1735,195 @@ mod tests {
         let result = serde_json::json!({"outcome": "cancelled"});
         let msg = serde_json::json!({"jsonrpc": "2.0", "id": 5, "result": result});
         assert_eq!(msg["result"]["outcome"], "cancelled");
+    }
+
+    // ── Permission request description enrichment ─────────────────────────────
+
+    #[test]
+    fn permission_description_includes_tool_input() {
+        let params = serde_json::json!({
+            "toolCall": {
+                "name": "bash",
+                "input": "cargo build --release"
+            }
+        });
+        let tool_call = &params["toolCall"];
+        let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
+        let description = if let Some(input) = tool_call["input"].as_str() {
+            format!("{tool_name}: {input}")
+        } else {
+            tool_name.to_string()
+        };
+        assert_eq!(description, "bash: cargo build --release");
+    }
+
+    #[test]
+    fn permission_description_no_input_fallback() {
+        let params = serde_json::json!({
+            "toolCall": {
+                "name": "bash"
+            }
+        });
+        let tool_call = &params["toolCall"];
+        let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
+        let description = if let Some(input) = tool_call["input"].as_str() {
+            format!("{tool_name}: {input}")
+        } else {
+            tool_name.to_string()
+        };
+        assert_eq!(description, "bash");
+    }
+
+    #[test]
+    fn permission_description_input_is_null() {
+        let params = serde_json::json!({
+            "toolCall": {
+                "name": "read",
+                "input": null
+            }
+        });
+        let tool_call = &params["toolCall"];
+        let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
+        let description = if let Some(input) = tool_call["input"].as_str() {
+            format!("{tool_name}: {input}")
+        } else {
+            tool_name.to_string()
+        };
+        assert_eq!(description, "read");
+    }
+
+    #[test]
+    fn permission_description_truncates_long_input() {
+        let long_arg = "x".repeat(250);
+        let params = serde_json::json!({
+            "toolCall": {
+                "name": "bash",
+                "input": long_arg
+            }
+        });
+        let tool_call = &params["toolCall"];
+        let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
+        let description = if let Some(input) = tool_call["input"].as_str() {
+            let truncated = if input.len() > 200 {
+                format!("{}...", &input[..200])
+            } else {
+                input.to_string()
+            };
+            format!("{tool_name}: {truncated}")
+        } else {
+            tool_name.to_string()
+        };
+        assert!(description.starts_with("bash: "));
+        assert!(description.ends_with("..."));
+        assert_eq!(description.len(), "bash: ".len() + 200 + 3);
+    }
+
+    // ── Permission options enrichment ─────────────────────────────────────────
+
+    #[test]
+    fn permission_options_include_labels() {
+        let params = serde_json::json!({
+            "options": [
+                {"optionId": "allow", "label": "Allow once"},
+                {"optionId": "deny", "label": "Deny"},
+                {"optionId": "always_allow", "label": "Always allow"}
+            ]
+        });
+        let options: Vec<String> = params["options"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|o| {
+                        let id = o["optionId"].as_str().unwrap_or("?");
+                        let label = o["label"].as_str().or_else(|| o["description"].as_str());
+                        match label {
+                            Some(l) if !l.is_empty() => format!("{l} ({id})"),
+                            _ => id.to_string(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(options[0], "Allow once (allow)");
+        assert_eq!(options[1], "Deny (deny)");
+        assert_eq!(options[2], "Always allow (always_allow)");
+    }
+
+    #[test]
+    fn permission_options_no_label_fallback_to_option_id() {
+        let params = serde_json::json!({
+            "options": [
+                {"optionId": "allow"},
+                {"optionId": "deny"}
+            ]
+        });
+        let options: Vec<String> = params["options"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|o| {
+                        let id = o["optionId"].as_str().unwrap_or("?");
+                        let label = o["label"].as_str().or_else(|| o["description"].as_str());
+                        match label {
+                            Some(l) if !l.is_empty() => format!("{l} ({id})"),
+                            _ => id.to_string(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(options[0], "allow");
+        assert_eq!(options[1], "deny");
+    }
+
+    #[test]
+    fn permission_options_use_description_fallback() {
+        let params = serde_json::json!({
+            "options": [
+                {"optionId": "allow", "description": "Grant permission once"}
+            ]
+        });
+        let options: Vec<String> = params["options"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|o| {
+                        let id = o["optionId"].as_str().unwrap_or("?");
+                        let label = o["label"].as_str().or_else(|| o["description"].as_str());
+                        match label {
+                            Some(l) if !l.is_empty() => format!("{l} ({id})"),
+                            _ => id.to_string(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(options[0], "Grant permission once (allow)");
+    }
+
+    #[test]
+    fn permission_options_empty_label_uses_option_id() {
+        let params = serde_json::json!({
+            "options": [
+                {"optionId": "allow", "label": ""}
+            ]
+        });
+        let options: Vec<String> = params["options"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|o| {
+                        let id = o["optionId"].as_str().unwrap_or("?");
+                        let label = o["label"].as_str().or_else(|| o["description"].as_str());
+                        match label {
+                            Some(l) if !l.is_empty() => format!("{l} ({id})"),
+                            _ => id.to_string(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(options[0], "allow");
     }
 }
 

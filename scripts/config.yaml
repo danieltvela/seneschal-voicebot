@@ -45,14 +45,15 @@ servers:
     host: "http://mac-mini.local"
     location: "mac-mini"
     runtimes:
-      # llama-server:
-      #   port: 8005
-      #   token: "asdf"
-      #   models: []
-      #     # - LFM2.5-8B-A1B-Q8_0
-      #     # - gemma-4-26B-A4B-it-UD-Q4_K_XL
-      #     # - gemma-4-26B-A4B-it-UD-Q8_K_XL
-      #     # - Qwen3.6-35B-A3B-UD-Q4_K_M
+      llama-server:
+        port: 8000
+        token: "asdf"
+        models: []
+          # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
+          # - LFM2.5-8B-A1B-Q8_0
+          # - gemma-4-26B-A4B-it-UD-Q4_K_XL
+          # - gemma-4-26B-A4B-it-UD-Q8_K_XL
+          # - Qwen3.6-35B-A3B-UD-Q4_K_M
       omlx:
         port: 8000
         token: "asdf"
@@ -90,7 +91,8 @@ servers:
           # - google/gemma-4-12b
           # - gemma-4-12b-it-mlx
           # - google/gemma-4-12b-qat
-          - google/gemma-4-26b-a4b
+          # - google/gemma-4-26b-a4b
+          - ornith-1.0-35b-mlx
           # - gemma-4-26b-a4b-it-qat-nvfp4
           # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
           # - gemma-4-26b-a4b-it-nvfp4
