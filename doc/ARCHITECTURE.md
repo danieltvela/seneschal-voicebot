@@ -304,8 +304,17 @@ An HTTP + SSE server (built on axum) for external management of the seneschal.
 | `/control/barge_in` | POST | Trigger barge-in (cancel current pipeline) |
 | `/control/input` | POST | Send text input to the pipeline |
 
-`ControlEvent` types include: `StateChanged`, `Transcript`, `LlmToken`, `LlmDone`,
-`TtsStart`, `ToolCall`, `MuteChanged`, `Error`.
+`ControlEvent` types include: `StateChanged` (stable tokens `idle` | `listening` |
+`thinking` | `speaking` | `paused`, optional `pause_reason`), `Transcript`,
+`LlmToken`, `LlmDone`, `TtsStart`, `ToolCall`, `MuteChanged`, `Error`,
+`SystemNotification`, `McpNotification`, `Classification`, agent task lifecycle
+(`AgentTaskStarted` / `Running` / `Delegated` / `Finalizing` / `Completed` /
+`Failed`), and permission (`AgentPermissionRequested` / `AgentPermissionResolved`
+with structured ACP `option_id`s).
+
+SSE `/control/events` has **no cumulative byte cap**; lagging subscribers receive
+an `Error` event (`Missed N events`) and should resync via `GET /control/state`.
+Recommended ports: `WS_PORT=9090`, `CONTROL_PORT=9001`. Control binds `0.0.0.0`.
 
 ---
 

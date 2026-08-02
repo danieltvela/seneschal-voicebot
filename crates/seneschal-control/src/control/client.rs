@@ -34,9 +34,13 @@ pub struct HealthResponse {
 /// Response from the state endpoint.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StateResponse {
+    /// Stable pipeline token: `idle` | `listening` | `thinking` | `speaking` | `paused`.
     pub state: String,
     pub utterance_id: Option<u64>,
     pub tts_muted: bool,
+    /// Present when `state == "paused"` (e.g. `"consolidation"`).
+    #[serde(default)]
+    pub pause_reason: Option<String>,
 }
 
 /// Request body for the mute endpoint.
@@ -80,12 +84,17 @@ pub enum ControlClientError {
 }
 
 /// Events emitted by the seneschal control system.
+///
+/// Must stay in lockstep with [`super::broadcast::ControlEvent`]. Unknown
+/// server variants fail to deserialize and are skipped by the SSE parser.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientControlEvent {
     StateChanged {
         state: String,
         utterance_id: Option<u64>,
+        #[serde(default)]
+        pause_reason: Option<String>,
     },
     Transcript {
         utterance_id: u64,
@@ -111,6 +120,56 @@ pub enum ClientControlEvent {
     },
     Error {
         message: String,
+    },
+    SystemNotification {
+        text: String,
+    },
+    McpNotification {
+        server_name: String,
+        method: String,
+        params: serde_json::Value,
+    },
+    Classification {
+        intent: String,
+        level: String,
+        forced: bool,
+        utterance_id: Option<u64>,
+    },
+    AgentTaskStarted {
+        task_id: String,
+        agent_name: String,
+        objective: String,
+    },
+    AgentTaskRunning {
+        task_id: String,
+        objective: String,
+    },
+    AgentTaskDelegated {
+        task_id: String,
+        objective: String,
+    },
+    AgentTaskFinalizing {
+        task_id: String,
+        objective: String,
+    },
+    AgentTaskCompleted {
+        task_id: String,
+        objective: String,
+        result: String,
+    },
+    AgentTaskFailed {
+        task_id: String,
+        message: String,
+    },
+    AgentPermissionRequested {
+        task_id: String,
+        agent_name: String,
+        description: String,
+        options: Vec<seneschal_common::PermissionOptionWire>,
+    },
+    AgentPermissionResolved {
+        task_id: String,
+        option_id: String,
     },
 }
 
@@ -607,7 +666,7 @@ mod tests {
     #[test]
     fn test_parse_sse_event() {
         let event_text =
-            "data: {\"type\": \"state_changed\", \"state\": \"Idle\", \"utterance_id\": null}";
+            "data: {\"type\": \"state_changed\", \"state\": \"idle\", \"utterance_id\": null}";
         let event = ControlClient::parse_sse_event(event_text);
 
         assert!(event.is_some());
@@ -615,10 +674,39 @@ mod tests {
             ClientControlEvent::StateChanged {
                 state,
                 utterance_id,
+                pause_reason,
             } => {
-                assert_eq!(state, "Idle");
+                assert_eq!(state, "idle");
                 assert_eq!(utterance_id, None);
+                assert_eq!(pause_reason, None);
             }
+            _ => panic!("wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_event_paused() {
+        let event_text = "data: {\"type\":\"state_changed\",\"state\":\"paused\",\"utterance_id\":null,\"pause_reason\":\"consolidation\"}";
+        let event = ControlClient::parse_sse_event(event_text).expect("parse");
+        match event {
+            ClientControlEvent::StateChanged {
+                state,
+                pause_reason,
+                ..
+            } => {
+                assert_eq!(state, "paused");
+                assert_eq!(pause_reason.as_deref(), Some("consolidation"));
+            }
+            _ => panic!("wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_system_notification() {
+        let event_text = "data: {\"type\":\"system_notification\",\"text\":\"hi\"}";
+        let event = ControlClient::parse_sse_event(event_text).expect("parse");
+        match event {
+            ClientControlEvent::SystemNotification { text } => assert_eq!(text, "hi"),
             _ => panic!("wrong event type"),
         }
     }

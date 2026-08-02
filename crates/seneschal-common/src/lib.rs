@@ -14,6 +14,7 @@ pub mod config;
 pub mod db;
 pub mod events;
 pub mod i18n;
+pub mod permission;
 pub mod tools;
 pub mod tui_events;
 
@@ -26,6 +27,7 @@ pub use config::Config;
 pub use config::SeneschalEnv;
 pub use db::Database;
 pub use events::{PluginPromptSections, PluginSwitchEvent, ProactiveEvent};
+pub use permission::PermissionOptionWire;
 pub use tools::ConversationMode;
 pub use tools::PromptBuildState;
 pub use tools::Tool;

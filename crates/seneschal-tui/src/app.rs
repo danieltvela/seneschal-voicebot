@@ -639,7 +639,10 @@ mod tests {
         let n = app.seed_history(&history);
         assert_eq!(n, 3);
         assert_eq!(app.messages.len(), 3);
-        assert!(matches!(app.messages[0].role, Role::User(InputSource::Text)));
+        assert!(matches!(
+            app.messages[0].role,
+            Role::User(InputSource::Text)
+        ));
         assert_eq!(app.messages[0].content, "hola");
         assert_eq!(app.messages[1].role, Role::Assistant);
         assert_eq!(app.messages[1].content, "buenos dias");
