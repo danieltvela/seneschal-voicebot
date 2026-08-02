@@ -8,13 +8,13 @@
 import Foundation
 import WatchConnectivity
 
-/// Bridges audio between the Watch (WCSession) and Voicebot (WebSocket).
+/// Bridges audio + glance state between the Watch (WCSession) and Seneschal (WebSocket/Control).
 ///
 /// Routes audio based on Watch connectivity:
 /// - Watch connected: Forwards WebSocket audio → Watch speaker
 /// - Watch disconnected: Calls audioCallback for iPhone playback
 ///
-/// Also forwards Watch audio → WebSocket for STT.
+/// Also forwards Watch audio → WebSocket for STT, and pushes pipeline state / last assistant line.
 final class WatchRelayService: NSObject {
     
     private let websocketManager: WebSocketManager
@@ -23,6 +23,11 @@ final class WatchRelayService: NSObject {
     
     /// Callback for iPhone audio playback (when Watch is disconnected).
     private var audioCallback: ((Data) -> Void)?
+
+    /// Last values pushed to the watch (application context + live messages).
+    private var lastPipelineState: String = "unknown"
+    private var lastAssistantLine: String = ""
+    private var hostSessionActive: Bool = false
     
     init(websocketManager: WebSocketManager) {
         self.websocketManager = websocketManager
@@ -77,14 +82,76 @@ final class WatchRelayService: NSObject {
     
     /// Notify the Watch that the LLM response has ended.
     func notifyWatchResponseEnd() {
+        sendWatchMessage(["type": "response_end"])
+    }
+
+    /// Push host pipeline state token (`idle` | `listening` | …) to the Watch.
+    func notifyWatchPipelineState(_ state: String) {
+        lastPipelineState = state
+        hostSessionActive = true
+        pushApplicationContext()
+        sendWatchMessage([
+            "type": "pipeline_state",
+            "state": state,
+        ])
+    }
+
+    /// Push a short preview of the last assistant line (truncated for glance UI).
+    func notifyWatchLastLine(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let maxLen = 120
+        if trimmed.count > maxLen {
+            let idx = trimmed.index(trimmed.startIndex, offsetBy: maxLen)
+            lastAssistantLine = String(trimmed[..<idx]) + "…"
+        } else {
+            lastAssistantLine = trimmed
+        }
+        pushApplicationContext()
+        sendWatchMessage([
+            "type": "last_line",
+            "text": lastAssistantLine,
+        ])
+    }
+
+    /// Tell the Watch whether the iPhone is connected to the host.
+    func notifyWatchHostSession(active: Bool) {
+        hostSessionActive = active
+        if !active {
+            lastPipelineState = "unknown"
+        }
+        pushApplicationContext()
+        sendWatchMessage([
+            "type": "host_session",
+            "active": active,
+        ])
+    }
+
+    private func sendWatchMessage(_ payload: [String: Any]) {
+        guard session.activationState == .activated else { return }
         guard session.isReachable else { return }
         session.sendMessage(
-            ["type": "response_end"],
+            payload,
             replyHandler: nil,
             errorHandler: { error in
-                NSLog("WatchRelayService: response_end failed: \(error.localizedDescription)")
+                NSLog("WatchRelayService: sendMessage \(payload["type"] ?? "?") failed: \(error.localizedDescription)")
             }
         )
+    }
+
+    /// Persist glance state for when the watch wakes offline from the phone UI.
+    private func pushApplicationContext() {
+        guard session.activationState == .activated else { return }
+        let ctx: [String: Any] = [
+            "pipeline_state": lastPipelineState,
+            "last_line": lastAssistantLine,
+            "host_session": hostSessionActive,
+        ]
+        do {
+            try session.updateApplicationContext(ctx)
+        } catch {
+            NSLog("WatchRelayService: updateApplicationContext failed: \(error.localizedDescription)")
+        }
     }
     
     /// Forward audio to Watch.
@@ -111,6 +178,8 @@ extension WatchRelayService: WCSessionDelegate {
         switch activationState {
         case .activated:
             NSLog("WatchRelayService: Watch activated")
+            // Re-push glance state so a newly reachable watch gets current pipeline/last line.
+            pushApplicationContext()
         case .inactive, .notActivated:
             NSLog("WatchRelayService: Watch deactivated")
         @unknown default:
@@ -139,6 +208,19 @@ extension WatchRelayService: WCSessionDelegate {
     
     func sessionReachabilityDidChange(_ session: WCSession) {
         NSLog("WatchRelayService: reachability changed: \(session.isReachable)")
+        if session.isReachable {
+            pushApplicationContext()
+            sendWatchMessage([
+                "type": "pipeline_state",
+                "state": lastPipelineState,
+            ])
+            if !lastAssistantLine.isEmpty {
+                sendWatchMessage([
+                    "type": "last_line",
+                    "text": lastAssistantLine,
+                ])
+            }
+        }
     }
     
     #if os(iOS)

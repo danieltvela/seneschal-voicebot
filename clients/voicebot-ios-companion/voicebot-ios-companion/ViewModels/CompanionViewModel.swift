@@ -170,6 +170,14 @@ final class CompanionViewModel: ObservableObject {
             self?.handleIncomingAudio(data)
         }
         relayService?.startRelay()
+        relayService?.notifyWatchHostSession(active: true)
+        // Push pipeline state changes to the Watch (glance + color).
+        $pipelineState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.relayService?.notifyWatchPipelineState(state.rawValue)
+            }
+            .store(in: &cancellables)
         setupBindings(generation: generation)
 
         messageTask = Task { [weak self] in
@@ -209,6 +217,7 @@ final class CompanionViewModel: ObservableObject {
         controlSSE = nil
         controlClient = nil
 
+        relayService?.notifyWatchHostSession(active: false)
         relayService?.stopRelay()
         webSocketManager?.disconnect()
         audioManager.stopCapture()
@@ -842,11 +851,13 @@ final class CompanionViewModel: ObservableObject {
     }
 
     private func finalizeAssistant(fullText: String) {
+        var finalText = fullText
         if var last = chatMessages.last, last.role == .assistant {
             // Prefer full text from Control when available
             if !fullText.isEmpty {
                 last.text = fullText
             }
+            finalText = last.text
             let lastIndex = chatMessages.count - 1
             chatMessages[lastIndex] = last
             updatePersistedMessage(last, at: lastIndex)
@@ -854,6 +865,10 @@ final class CompanionViewModel: ObservableObject {
             let msg = ChatMessage(role: .assistant, text: fullText, timestamp: Date())
             chatMessages.append(msg)
             persistMessage(msg)
+            finalText = fullText
+        }
+        if !finalText.isEmpty {
+            relayService?.notifyWatchLastLine(finalText)
         }
     }
 }

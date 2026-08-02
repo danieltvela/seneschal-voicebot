@@ -5,7 +5,7 @@
 | **Document** | Issue #190 — iOS companion v2 |
 | **Author** | (design agent) |
 | **Date** | 2026-08-02 |
-| **Status** | Implemented (host PR1–PR2 + iOS PR3–PR7; docs PR9 — see `doc/IOS_COMPANION.md`) |
+| **Status** | Implemented (host PR1–PR2 + iOS PR3–PR7 + watch PR8 + docs PR9 — see `doc/IOS_COMPANION.md`) |
 | **Milestone** | v0.1.0-alpha.8 (P0–P2); P3–P5 follow-up under same issue |
 | **Scope** | **Option A only** — host remains the brain |
 | **Related** | ROADMAP M2.4, `doc/APPLE_WATCH_CLIENT.md`, `tasks/control-ui.md` |
