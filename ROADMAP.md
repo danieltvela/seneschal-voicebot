@@ -124,11 +124,12 @@ Ready for daily use by non-developers.
 - [ ] **Translation** — documentation in Spanish and English
 
 ### M2.4: Mobile Companion App
-- [ ] **iOS companion app v1** — remote microphone stream to Seneschal WebSocket server, conversation view
-- [ ] **watchOS companion app v1** — quick voice commands from Apple Watch
-- [ ] **Android companion app** — equivalent to iOS
-- [ ] **Push notifications** — proactive suggestions delivered to phone/watch
-- [ ] **Offline mode** — basic assistant functionality without desktop LLM (cloud fallback)
+- [x] **iOS companion dual-channel (LAN)** — WS audio (`WS_PORT`) + Control SSE/REST (`CONTROL_PORT`); pipeline status, conversation, timeline, text input, mute, barge-in, agent PermissionSheet; iPad adaptive layout + a11y (issue #190; see [`doc/IOS_COMPANION.md`](doc/IOS_COMPANION.md))
+- [ ] **watchOS companion polish** — pipeline state surface + last-line preview on top of existing PTT relay (TN3135); full timeline remains phone-side
+- [ ] **Android companion app** — equivalent to iOS dual-channel companion
+- [ ] **WAN access** — Tailscale/tunnel + auth for away-from-home (explicitly out of #190)
+- [ ] **Push notifications** — proactive suggestions delivered to phone/watch (Live Activities optional)
+- [ ] **Offline / edge mode** — on-device STT/TTS or cloud fallback when host offline
 
 ---
 
@@ -195,7 +196,7 @@ M1.3 ░░░░░░░░░░░░░░░░░░░░   0%  User Exp
 M2.1 ░░░░░░░░░░░░░░░░░░░░   0%  API & Extensibility
 M2.2 ░░░░░░░░░░░░░░░░░░░░   0%  Multi-Platform
 M2.3 ░░░░░░░░░░░░░░░░░░░░   0%  Documentation
-M2.4 ░░░░░░░░░░░░░░░░░░░░   0%  Mobile Companion App
+M2.4 ████████░░░░░░░░░░░░  40%  Mobile Companion App (iOS LAN dual-channel shipped)
 M3.1 ░░░░░░░░░░░░░░░░░░░░   0%  Multi-User Support
 M3.2 ░░░░░░░░░░░░░░░░░░░░   0%  Advanced Intelligence
 M3.3 ░░░░░░░░░░░░░░░░░░░░   0%  Smart Home & IoT

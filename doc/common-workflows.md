@@ -9,6 +9,20 @@
 cargo run --features tui --release
 ```
 
+## iOS Companion (LAN dual-channel)
+
+```bash
+# Host: remote audio + Control API
+export WS_PORT=9090
+export CONTROL_PORT=9001
+cargo run --features "remote,control,tui" --release
+
+# Client: open clients/voicebot-ios-companion in Xcode
+# Connect with host IP, WS 9090, Control 9001
+```
+
+Full architecture, Control event list, and QA matrix: [`doc/IOS_COMPANION.md`](IOS_COMPANION.md).
+
 ## Adding a New Feature
 
 1. Read AGENTS.md first (architecture guidance).
