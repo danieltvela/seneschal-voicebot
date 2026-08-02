@@ -98,6 +98,14 @@ struct ConnectionControlsView: View {
 struct ConversationView: View {
     @EnvironmentObject var vm: CompanionViewModel
     @State private var showTimestamps = false
+    /// Cancels in-flight multi-pass scroll when a newer message batch arrives.
+    @State private var scrollGeneration: UInt64 = 0
+    /// Used to detect bulk history hydrate (large count jump) vs single appends.
+    @State private var previousMessageCount = 0
+
+    /// Stable anchor past the last bubble so `scrollTo` works even while LazyVStack
+    /// has not yet materialised every historical cell (bulk history load).
+    private static let bottomAnchorID = "conversation-bottom"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -127,76 +135,147 @@ struct ConversationView: View {
             }
 
             ScrollViewReader { proxy in
-                ScrollView {
-                    if vm.chatMessages.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "bubble.left.and.bubble.right")
-                                .font(.system(size: 40))
-                                .foregroundColor(.secondary.opacity(0.5))
-                                .accessibilityHidden(true)
-                            Text(vm.isSessionActive ? "No messages yet" : "Connect to Seneschal")
-                                .font(.title3.weight(.semibold))
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                            Text(
-                                vm.isSessionActive
-                                    ? "Speak or type a message"
-                                    : "Enter host and ports to begin"
-                            )
-                            .font(.body)
-                            .foregroundColor(.secondary.opacity(0.85))
-                            .multilineTextAlignment(.center)
-                        }
-                        .padding(.top, 80)
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity)
-                        .accessibilityIdentifier("conversationEmpty")
-                        .accessibilityElement(children: .combine)
-                    } else {
-                        LazyVStack(spacing: 10) {
-                            ForEach(vm.chatMessages) { msg in
-                                MessageBubble(
-                                    message: msg,
-                                    showTimestamp: showTimestamps
-                                )
-                                .id(msg.id.uuidString)
-                                .onTapGesture {
-                                    withAnimation { showTimestamps.toggle() }
-                                }
-                                .accessibilityHint("Double tap to show or hide relative time")
-                            }
-                            if vm.isGenerating {
-                                HStack {
-                                    TypingIndicator()
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.leading, 12)
-                                .accessibilityLabel("Assistant is generating a response")
-                            }
-                        }
-                        .padding()
-                        .frame(maxWidth: AdaptiveLayout.conversationMaxWidth)
-                        .frame(maxWidth: .infinity)
-                        .accessibilityIdentifier("conversationList")
-                        .onChange(of: vm.chatMessages.count) { _ in
-                            scrollToLatest(proxy: proxy)
-                        }
-                        .onChange(of: vm.isGenerating) { _ in
-                            scrollToLatest(proxy: proxy)
-                        }
-                    }
-                }
-                .onAppear {
-                    scrollToLatest(proxy: proxy)
-                }
+                scrollContent(proxy: proxy)
             }
         }
     }
 
-    private func scrollToLatest(proxy: ScrollViewProxy) {
-        guard let last = vm.chatMessages.last else { return }
-        withAnimation {
-            proxy.scrollTo(last.id.uuidString, anchor: .bottom)
+    @ViewBuilder
+    private func scrollContent(proxy: ScrollViewProxy) -> some View {
+        let scroll = ScrollView {
+            if vm.chatMessages.isEmpty {
+                emptyState
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(vm.chatMessages) { msg in
+                        MessageBubble(
+                            message: msg,
+                            showTimestamp: showTimestamps
+                        )
+                        .id(msg.id.uuidString)
+                        .onTapGesture {
+                            withAnimation { showTimestamps.toggle() }
+                        }
+                        .accessibilityHint("Double tap to show or hide relative time")
+                    }
+                    if vm.isGenerating {
+                        HStack {
+                            TypingIndicator()
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.leading, 12)
+                        .accessibilityLabel("Assistant is generating a response")
+                    }
+                    // Always present after content so bulk history can pin to the end.
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomAnchorID)
+                        .accessibilityHidden(true)
+                }
+                .padding()
+                .frame(maxWidth: AdaptiveLayout.conversationMaxWidth)
+                .frame(maxWidth: .infinity)
+                .accessibilityIdentifier("conversationList")
+            }
+        }
+        .onChange(of: vm.chatMessages.count) { count in
+            let delta = abs(count - previousMessageCount)
+            previousMessageCount = count
+            // Bulk replace (history hydrate) needs multi-pass LazyVStack layout;
+            // single appends stay snappy so we do not fight a user who scrolled up.
+            let bulk = delta > 3
+            scrollToLatest(proxy: proxy, animated: !bulk, settleLayout: bulk)
+        }
+        .onChange(of: vm.chatMessages.last?.id) { _ in
+            // Token streaming updates the last bubble without changing count.
+            scrollToLatest(proxy: proxy, animated: true, settleLayout: false)
+        }
+        .onChange(of: vm.isGenerating) { _ in
+            scrollToLatest(proxy: proxy, animated: true, settleLayout: false)
+        }
+        .onAppear {
+            previousMessageCount = vm.chatMessages.count
+            // Local cache / already-hydrated history may exist before first paint.
+            scrollToLatest(
+                proxy: proxy,
+                animated: false,
+                settleLayout: vm.chatMessages.count > 3
+            )
+        }
+
+        if #available(iOS 17.0, *) {
+            scroll.defaultScrollAnchor(.bottom)
+        } else {
+            scroll
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 40))
+                .foregroundColor(.secondary.opacity(0.5))
+                .accessibilityHidden(true)
+            Text(vm.isSessionActive ? "No messages yet" : "Connect to Seneschal")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            Text(
+                vm.isSessionActive
+                    ? "Speak or type a message"
+                    : "Enter host and ports to begin"
+            )
+            .font(.body)
+            .foregroundColor(.secondary.opacity(0.85))
+            .multilineTextAlignment(.center)
+        }
+        .padding(.top, 80)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("conversationEmpty")
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Scroll to the end of the conversation.
+    /// - Parameter settleLayout: when true, re-scroll after LazyVStack lays out more cells
+    ///   (needed for bulk history replace on connect).
+    private func scrollToLatest(
+        proxy: ScrollViewProxy,
+        animated: Bool,
+        settleLayout: Bool
+    ) {
+        guard !vm.chatMessages.isEmpty else { return }
+
+        let jump = {
+            // Prefer the trailing anchor; also pin the last bubble for safety.
+            proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+            if let last = vm.chatMessages.last {
+                proxy.scrollTo(last.id.uuidString, anchor: .bottom)
+            }
+        }
+
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) { jump() }
+        } else {
+            jump()
+        }
+
+        guard settleLayout else { return }
+
+        // Only bulk loads own a multi-pass sequence; live token/single-message
+        // scrolls must not cancel it via generation bumps.
+        scrollGeneration &+= 1
+        let generation = scrollGeneration
+
+        // LazyVStack materialises cells as we approach them; a few deferred
+        // jumps walk the viewport to the true end after the bulk insert.
+        Task { @MainActor in
+            for delayNs in [50_000_000, 150_000_000, 350_000_000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: delayNs)
+                guard generation == scrollGeneration else { return }
+                guard !vm.chatMessages.isEmpty else { return }
+                jump()
+            }
         }
     }
 }
