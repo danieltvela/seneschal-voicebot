@@ -206,6 +206,8 @@ cargo check --features "remote,control"
 
 - Watch talks to **iPhone** via `WCSession` (`WatchRelayService`); iPhone owns host sockets.
 - PTT / audio session order: follow [APPLE_WATCH_CLIENT.md](APPLE_WATCH_CLIENT.md).
+- **Glance surface (PR8):** iPhone pushes `pipeline_state` (`idle`…`paused`), `last_line` (truncated assistant text), and `host_session` via live `sendMessage` + `updateApplicationContext`.
+- Watch UI: status color/text from pipeline token, last-line preview (2 lines), PTT mic.
 - No full timeline on watch; phone owns detail.
 - Always-listening on watch is **out of scope**.
 
@@ -246,4 +248,5 @@ cargo check --features "remote,control"
 | iOS PR5 | Timeline UI |
 | iOS PR6 | PermissionSheet (`option_id`) |
 | iOS PR7 | iPad split + a11y |
+| watchOS PR8 | Pipeline state + last-line glance via WCSession |
 | Docs PR9 | This document + ROADMAP M2.4 alignment |

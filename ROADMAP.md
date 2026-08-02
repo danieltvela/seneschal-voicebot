@@ -125,7 +125,7 @@ Ready for daily use by non-developers.
 
 ### M2.4: Mobile Companion App
 - [x] **iOS companion dual-channel (LAN)** — WS audio (`WS_PORT`) + Control SSE/REST (`CONTROL_PORT`); pipeline status, conversation, timeline, text input, mute, barge-in, agent PermissionSheet; iPad adaptive layout + a11y (issue #190; see [`doc/IOS_COMPANION.md`](doc/IOS_COMPANION.md))
-- [ ] **watchOS companion polish** — pipeline state surface + last-line preview on top of existing PTT relay (TN3135); full timeline remains phone-side
+- [x] **watchOS companion glance** — PTT relay + pipeline state color/text + last assistant line via iPhone `WCSession` (issue #190 PR8); full timeline remains phone-side
 - [ ] **Android companion app** — equivalent to iOS dual-channel companion
 - [ ] **WAN access** — Tailscale/tunnel + auth for away-from-home (explicitly out of #190)
 - [ ] **Push notifications** — proactive suggestions delivered to phone/watch (Live Activities optional)
@@ -196,7 +196,7 @@ M1.3 ░░░░░░░░░░░░░░░░░░░░   0%  User Exp
 M2.1 ░░░░░░░░░░░░░░░░░░░░   0%  API & Extensibility
 M2.2 ░░░░░░░░░░░░░░░░░░░░   0%  Multi-Platform
 M2.3 ░░░░░░░░░░░░░░░░░░░░   0%  Documentation
-M2.4 ████████░░░░░░░░░░░░  40%  Mobile Companion App (iOS LAN dual-channel shipped)
+M2.4 ██████████░░░░░░░░░░  50%  Mobile Companion App (iOS dual-channel + watch glance)
 M3.1 ░░░░░░░░░░░░░░░░░░░░   0%  Multi-User Support
 M3.2 ░░░░░░░░░░░░░░░░░░░░   0%  Advanced Intelligence
 M3.3 ░░░░░░░░░░░░░░░░░░░░   0%  Smart Home & IoT
