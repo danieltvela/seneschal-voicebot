@@ -86,4 +86,58 @@ struct TimelineItemTests {
         let state = ControlEvent.stateChanged(state: "idle", utteranceId: nil, pauseReason: nil)
         #expect(TimelineItem.from(controlEvent: state) == nil)
     }
+
+    @Test func permissionRequestedMapsToAgentRow() {
+        let event = ControlEvent.agentPermissionRequested(
+            taskId: "t1",
+            agentName: "hermes",
+            description: "bash: ls",
+            options: [PermissionOption(id: "allow", label: "Allow", kind: "allow")]
+        )
+        let item = TimelineItem.from(controlEvent: event)
+        #expect(item?.kind == .agentTask)
+        #expect(item?.agent?.status == "permission")
+        #expect(item?.agent?.taskId == "t1")
+    }
+
+    @Test func permissionResolvedMapsToAgentRow() {
+        let event = ControlEvent.agentPermissionResolved(taskId: "t1", optionId: "allow")
+        let item = TimelineItem.from(controlEvent: event)
+        #expect(item?.agent?.status == "permission_resolved")
+        #expect(item?.text.contains("allow") == true)
+    }
 }
+
+struct PermissionRequestTests {
+
+    @Test func permissionRequestIdentifiableByTaskId() {
+        let req = PermissionRequest(
+            taskId: "abc",
+            agentName: "hermes",
+            description: "run",
+            options: [
+                PermissionOption(id: "allow", label: "Allow once", kind: "allow"),
+                PermissionOption(id: "deny", label: "Deny", kind: "reject"),
+            ]
+        )
+        #expect(req.id == "abc")
+        #expect(req.options.count == 2)
+        #expect(req.options[0].id == "allow")
+    }
+
+    @Test func optionIdsAreDistinctFromLabels() throws {
+        // Wire contract: UI shows label, POST must use id.
+        let json = """
+        {"type":"agent_permission_requested","task_id":"t1","agent_name":"hermes","description":"x","options":[{"id":"allow","label":"Allow once","kind":"allow"}]}
+        """
+        let event = try ControlEvent.parseSSEJSON(json)
+        guard case .agentPermissionRequested(_, _, _, let options) = event else {
+            Issue.record("expected permission requested")
+            return
+        }
+        #expect(options[0].id == "allow")
+        #expect(options[0].label == "Allow once")
+        #expect(options[0].id != options[0].label)
+    }
+}
+

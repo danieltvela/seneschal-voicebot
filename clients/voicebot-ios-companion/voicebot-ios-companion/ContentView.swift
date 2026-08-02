@@ -46,10 +46,31 @@ struct ContentView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: permissionSheetBinding) {
+                if let request = viewModel.pendingPermission {
+                    PermissionSheet(request: request)
+                        .environmentObject(viewModel)
+                }
+            }
         }
         .onChange(of: scenePhase) { phase in
             viewModel.handleScenePhase(phase)
         }
+    }
+
+    /// Present PermissionSheet when host requests approval and user has not chosen "Later".
+    private var permissionSheetBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.shouldPresentPermissionSheet },
+            set: { presented in
+                if !presented {
+                    // Swipe-dismiss ≈ Later (keep pending for StatusBar chip).
+                    if viewModel.pendingPermission != nil {
+                        viewModel.permissionSheetDismissedByUser = true
+                    }
+                }
+            }
+        )
     }
 }
 

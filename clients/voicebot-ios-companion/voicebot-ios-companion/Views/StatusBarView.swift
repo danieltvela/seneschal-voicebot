@@ -103,27 +103,31 @@ struct StatusBarView: View {
                     .accessibilityIdentifier("controlBanner")
             }
 
-            if let pending = vm.pendingPermission {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Permission: \(pending.description)")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .accessibilityIdentifier("permissionDescription")
-                    HStack {
-                        ForEach(pending.options) { opt in
-                            Button(opt.label.isEmpty ? opt.id : opt.label) {
-                                vm.resolvePermission(optionId: opt.id)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.mini)
-                            .accessibilityIdentifier("permissionOption-\(opt.id)")
-                        }
+            // Compact chip when sheet was dismissed with "Later" (full UI is PermissionSheet).
+            if let pending = vm.pendingPermission, vm.permissionSheetDismissedByUser {
+                Button {
+                    vm.reopenPermissionSheet()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.raised.fill")
+                        Text("Permission pending")
+                            .fontWeight(.medium)
+                        Text("· \(pending.agentName.isEmpty ? pending.taskId : pending.agentName)")
+                            .lineLimit(1)
+                        Spacer()
+                        Text("Open")
+                            .fontWeight(.semibold)
                     }
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12))
+                    .cornerRadius(8)
                 }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.12))
-                .cornerRadius(8)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("permissionPendingChip")
+                .accessibilityLabel("Permission pending, open sheet")
             }
         }
         .padding()

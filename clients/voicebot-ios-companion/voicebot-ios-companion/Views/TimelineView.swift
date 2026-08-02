@@ -103,10 +103,20 @@ private struct TimelineRow: View {
                 Text(item.title)
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.primary)
+                if item.kind == .agentTask, let status = item.agent?.status {
+                    statusPill(status)
+                }
                 Spacer()
                 Text(Self.timeFormatter.string(from: item.timestamp))
                     .font(.caption2)
                     .foregroundColor(.secondary)
+            }
+
+            if item.kind == .agentTask, let taskId = item.agent?.taskId {
+                Text(taskId)
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .lineLimit(1)
             }
 
             Text(displayBody)
@@ -114,6 +124,7 @@ private struct TimelineRow: View {
                 .foregroundColor(.secondary)
                 .lineLimit(expanded ? nil : 3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
 
             if item.hasExpandableDetail || item.text.count > 120 {
                 Button(expanded ? "Show less" : "Show more") {
@@ -129,6 +140,17 @@ private struct TimelineRow: View {
         .cornerRadius(10)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.title). \(displayBody)")
+        .accessibilityIdentifier(item.kind == .agentTask ? "agentTimelineRow" : "timelineRow")
+    }
+
+    private func statusPill(_ status: String) -> some View {
+        Text(status.replacingOccurrences(of: "_", with: " "))
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(iconColor.opacity(0.15))
+            .foregroundColor(iconColor)
+            .clipShape(Capsule())
     }
 
     private var displayBody: String {
