@@ -9,6 +9,7 @@ import SwiftUI
 
 struct StatusBarView: View {
     @EnvironmentObject var vm: CompanionViewModel
+    var onOpenTimeline: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 6) {
@@ -28,6 +29,17 @@ struct StatusBarView: View {
                         .accessibilityLabel("Pipeline \(vm.pipelineState.rawValue)")
                 }
 
+                if let chip = vm.classificationChip {
+                    Text(chip)
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.indigo.opacity(0.12))
+                        .foregroundColor(.indigo)
+                        .clipShape(Capsule())
+                        .accessibilityIdentifier("classificationChip")
+                }
+
                 if vm.ttsMuted {
                     Image(systemName: "speaker.slash.fill")
                         .font(.caption)
@@ -36,6 +48,20 @@ struct StatusBarView: View {
                 }
 
                 Spacer()
+
+                Button {
+                    onOpenTimeline?()
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                    if !vm.timeline.isEmpty {
+                        Text("\(vm.timeline.count)")
+                            .font(.caption2.monospacedDigit())
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Open timeline")
+                .accessibilityIdentifier("timelineButton")
 
                 if vm.isControlConnectedOrReconnecting {
                     Button {
