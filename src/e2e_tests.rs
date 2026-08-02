@@ -285,6 +285,8 @@ impl E2eHarness {
                     Arc::new(std::sync::Mutex::new(
                         seneschal_core::pipeline::AnnouncementWindow::new(),
                     )),
+                    // No remote companion in e2e — local CPAL only.
+                    Arc::new(tokio::sync::Mutex::new(None)),
                 )
                 .await
             })

@@ -1038,12 +1038,11 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    #[cfg(feature = "remote")]
-    let remote_tts_tx: Arc<
-        tokio::sync::Mutex<
-            Option<tokio::sync::mpsc::Sender<seneschal_remote::remote::protocol::TtsAudioPacket>>,
-        >,
-    > = Arc::new(tokio::sync::Mutex::new(None));
+    // Shared slot for remote TTS routing. Always created so `tts_task` can check it
+    // without a feature gate in seneschal-core. The remote WebSocket server installs a
+    // sender while a companion client is connected; otherwise it stays None → local CPAL.
+    let remote_tts_tx: seneschal_core::pipeline::RemoteTtsTx =
+        Arc::new(tokio::sync::Mutex::new(None));
 
     #[cfg(feature = "tui")]
     let (tui_tx, tui_rx) =
@@ -1339,6 +1338,7 @@ async fn async_main() -> Result<()> {
         let play_cancel_c = Arc::clone(&play_cancel);
         let tts_muted_c = Arc::clone(&tts_muted);
         let announcement_window_c = Arc::clone(&announcement_window);
+        let remote_tts_tx_c = Arc::clone(&remote_tts_tx);
         tokio::spawn(async move {
             let has_audio_device = audio_out_c.has_device();
             tts_task(
@@ -1354,6 +1354,7 @@ async fn async_main() -> Result<()> {
                 has_audio_device,
                 tui_tx_tts,
                 announcement_window_c,
+                remote_tts_tx_c,
             )
             .await;
         });

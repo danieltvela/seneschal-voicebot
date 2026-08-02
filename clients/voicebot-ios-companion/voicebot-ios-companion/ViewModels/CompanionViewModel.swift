@@ -98,6 +98,8 @@ final class CompanionViewModel: ObservableObject {
     private var controlSSE: ControlSSEClient?
 
     private var audioTask: Task<Void, Never>?
+    /// Bumped on every stop/start so a finishing stream task cannot nil a newer one.
+    private var audioStreamGeneration: UInt64 = 0
     private var messageTask: Task<Void, Never>?
     private var controlTask: Task<Void, Never>?
     private var bindingTasks: [Task<Void, Never>] = []
@@ -511,13 +513,16 @@ final class CompanionViewModel: ObservableObject {
     // MARK: - Audio
 
     private func handleIncomingAudio(_ data: Data) {
+        // Relay may call from a background task; hop to main for AudioManager/UI state.
         Task { @MainActor in
             let samples = int16ToFloat(data)
+            guard !samples.isEmpty else { return }
             await self.audioManager.play(samples)
         }
     }
 
     private func stopMicOnly() {
+        audioStreamGeneration &+= 1
         audioTask?.cancel()
         audioTask = nil
         audioManager.stopCapture()
@@ -528,19 +533,54 @@ final class CompanionViewModel: ObservableObject {
         guard case .connected = audioLink else { return }
         guard audioTask == nil else { return }
 
-        audioTask = Task {
+        audioStreamGeneration &+= 1
+        let generation = audioStreamGeneration
+
+        audioTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    // Only clear if no newer start/stop has taken over.
+                    if self.audioStreamGeneration == generation {
+                        self.audioTask = nil
+                    }
+                }
+            }
             do {
-                try await audioManager.startCapture()
-                for await samples in audioManager.capturedAudio {
+                try await self.audioManager.startCapture()
+                for await samples in self.audioManager.capturedAudio {
                     guard !Task.isCancelled else { break }
-                    if case .connected = audioLink, let ws = webSocketManager {
+                    guard self.audioStreamGeneration == generation else { break }
+                    if case .connected = self.audioLink, let ws = self.webSocketManager {
                         let data = floatToInt16(samples)
-                        try? await ws.send(audioData: data)
+                        do {
+                            try await ws.send(audioData: data)
+                        } catch {
+                            NSLog("WS audio send failed: \(error.localizedDescription)")
+                            break
+                        }
                     }
                 }
             } catch {
-                if !Task.isCancelled {
-                    self.errorMessage = error.localizedDescription
+                if !Task.isCancelled, self.audioStreamGeneration == generation {
+                    let detail: String
+                    if let audioErr = error as? AudioError {
+                        switch audioErr {
+                        case .microphonePermissionDenied:
+                            detail = "Microphone permission denied"
+                        case .sessionConfigurationFailed:
+                            detail = "Audio session configuration failed"
+                        case .engineStartFailed:
+                            detail = "Audio engine failed to start"
+                        case .invalidInputFormat:
+                            detail = "Microphone route not ready — try reconnecting headphones"
+                        }
+                    } else {
+                        detail = error.localizedDescription
+                    }
+                    self.errorMessage = detail
+                    NSLog("startAudioStreaming failed: \(detail)")
                 }
             }
         }
@@ -757,8 +797,11 @@ final class CompanionViewModel: ObservableObject {
         case .responseEnd:
             await handleWSResponseEnd()
 
-        case .audioStart, .audioEnd:
+        case .audioStart:
             break
+        case .audioEnd:
+            // Host finished a TTS utterance — flush any batched 20 ms frames still pending.
+            audioManager.flushPlayback()
 
         case .sessionReady:
             // State also comes from $state publisher; ensure audio starts

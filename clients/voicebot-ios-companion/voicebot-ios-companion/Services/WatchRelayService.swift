@@ -10,18 +10,22 @@ import WatchConnectivity
 
 /// Bridges audio + glance state between the Watch (WCSession) and Seneschal (WebSocket/Control).
 ///
-/// Routes audio based on Watch connectivity:
-/// - Watch connected: Forwards WebSocket audio → Watch speaker
-/// - Watch disconnected: Calls audioCallback for iPhone playback
+/// TTS downlink:
+/// - **Always** plays on the local companion (iPhone / iPad + AirPods / speaker) via `audioCallback`.
+/// - **Also** forwards frames to the Watch when it is reachable (glance / wrist speaker).
 ///
-/// Also forwards Watch audio → WebSocket for STT, and pushes pipeline state / last assistant line.
+/// Previously, `isReachable == true` *stole* audio from the phone and sent it only to the Watch,
+/// which left AirPods silent whenever a paired Watch was nearby.
+///
+/// Also forwards Watch mic audio → WebSocket for STT, and pushes pipeline state / last assistant line.
 final class WatchRelayService: NSObject {
     
     private let websocketManager: WebSocketManager
-    private let session: WCSession
+    private let session: WCSession?
     private var audioRoutingTask: Task<Void, Never>?
+    private var audioRoutingGeneration: UInt64 = 0
     
-    /// Callback for iPhone audio playback (when Watch is disconnected).
+    /// Callback for local companion TTS playback (iPhone / iPad).
     private var audioCallback: ((Data) -> Void)?
 
     /// Last values pushed to the watch (application context + live messages).
@@ -31,7 +35,12 @@ final class WatchRelayService: NSObject {
     
     init(websocketManager: WebSocketManager) {
         self.websocketManager = websocketManager
-        self.session = WCSession.default
+        // WCSession is iPhone↔Watch; on iPad (and when unsupported) skip activation.
+        if WCSession.isSupported() {
+            self.session = WCSession.default
+        } else {
+            self.session = nil
+        }
         super.init()
         configureSession()
     }
@@ -39,12 +48,15 @@ final class WatchRelayService: NSObject {
     // MARK: - Configuration
     
     private func configureSession() {
+        guard let session else {
+            NSLog("WatchRelayService: WCSession not supported on this device — local audio only")
+            return
+        }
         session.delegate = self
         session.activate()
     }
     
-    /// Set callback for iPhone audio playback.
-    /// Called when Watch is disconnected and audio should play on iPhone.
+    /// Set callback for local companion TTS playback.
     func setAudioCallback(_ callback: @escaping (Data) -> Void) {
         self.audioCallback = callback
     }
@@ -52,16 +64,21 @@ final class WatchRelayService: NSObject {
     /// Start the relay. Call when WebSocket connects.
     func startRelay() {
         guard audioRoutingTask == nil else { return }
+
+        audioRoutingGeneration &+= 1
+        let generation = audioRoutingGeneration
         
         audioRoutingTask = Task {
             for await audioData in self.websocketManager.audioData {
-                // Route audio based on Watch connectivity
-                if self.session.isReachable {
-                    // Watch connected - forward to Watch
+                guard !Task.isCancelled else { break }
+                guard generation == self.audioRoutingGeneration else { break }
+
+                // Always play on the local device (AirPods / speaker / built-in).
+                self.audioCallback?(audioData)
+
+                // Optionally mirror to Watch when reachable.
+                if let session = self.session, session.isReachable {
                     self.forwardToWatch(audioData)
-                } else {
-                    // Watch disconnected - play on iPhone
-                    self.audioCallback?(audioData)
                 }
             }
         }
@@ -69,6 +86,7 @@ final class WatchRelayService: NSObject {
     
     /// Stop the relay. Call when WebSocket disconnects.
     func stopRelay() {
+        audioRoutingGeneration &+= 1
         audioRoutingTask?.cancel()
         audioRoutingTask = nil
     }
@@ -128,7 +146,7 @@ final class WatchRelayService: NSObject {
     }
 
     private func sendWatchMessage(_ payload: [String: Any]) {
-        guard session.activationState == .activated else { return }
+        guard let session, session.activationState == .activated else { return }
         guard session.isReachable else { return }
         session.sendMessage(
             payload,
@@ -141,7 +159,7 @@ final class WatchRelayService: NSObject {
 
     /// Persist glance state for when the watch wakes offline from the phone UI.
     private func pushApplicationContext() {
-        guard session.activationState == .activated else { return }
+        guard let session, session.activationState == .activated else { return }
         let ctx: [String: Any] = [
             "pipeline_state": lastPipelineState,
             "last_line": lastAssistantLine,
@@ -156,7 +174,7 @@ final class WatchRelayService: NSObject {
     
     /// Forward audio to Watch.
     private func forwardToWatch(_ audioData: Data) {
-        guard session.isReachable else { return }
+        guard let session, session.isReachable else { return }
         
         let tempDir = FileManager.default.temporaryDirectory
         let fileURL = tempDir.appendingPathComponent("voicebot_audio_\(UUID().uuidString).dat")

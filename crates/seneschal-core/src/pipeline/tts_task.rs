@@ -9,7 +9,16 @@ use super::state::PipelineEvents;
 use crate::audio::output::AudioOutput;
 use crate::pipeline::frames::PipelineFrame;
 use crate::tts::TtsEngine;
+use seneschal_common::TtsAudioPacket;
 use seneschal_common::tui_events::{TuiEvent, TuiEventTx};
+use tracing::info;
+
+/// Shared handle for optional remote TTS routing.
+///
+/// When a remote WebSocket client connects, the remote server installs a sender here.
+/// `tts_task` then forwards synthesized audio to that client instead of local CPAL.
+pub type RemoteTtsTx =
+    Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<TtsAudioPacket>>>>;
 
 /// TTS task: receives sentences from sen_task (and llm_task error paths) via typed channel,
 /// synthesizes and plays each one.
@@ -33,12 +42,9 @@ pub async fn tts_task(
     has_audio_device: bool,
     tui_tx: Option<TuiEventTx>,
     announcement_window: Arc<Mutex<crate::pipeline::announcement_window::AnnouncementWindow>>,
-    #[cfg(feature = "remote")] remote_tts_tx: Arc<
-        tokio::sync::Mutex<
-            Option<tokio::sync::mpsc::Sender<crate::remote::protocol::TtsAudioPacket>>,
-        >,
-    >,
-    #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
+    // When Some(sender) is installed (remote client connected), TTS is routed there
+    // instead of the local speaker. Always present so core does not need a `remote` feature.
+    remote_tts_tx: RemoteTtsTx,
 ) {
     let mut cancel_rx = events.barge_in_tx.subscribe();
     let mut play_handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>> = None;
@@ -114,9 +120,6 @@ pub async fn tts_task(
                         ))
                         .ok();
                     }
-                    #[cfg(feature = "control")]
-                    control_broadcast
-                        .send(crate::control::broadcast::ControlEvent::TtsStart { utterance_id });
                 }
 
                 // Ensure previous playback fully stops before starting next sentence.
@@ -204,17 +207,25 @@ pub async fn tts_task(
                     }
                 }
 
-                #[cfg(feature = "remote")]
+                // Prefer remote client when one is connected (exclusive TTS routing).
                 {
                     let maybe_tx = remote_tts_tx.lock().await.clone();
                     if let Some(tx) = maybe_tx {
-                        let packet = crate::remote::protocol::TtsAudioPacket {
+                        let n = samples.len();
+                        let packet = TtsAudioPacket {
                             samples,
                             sample_rate: tts_sample_rate,
                         };
+                        info!(
+                            target: "remote",
+                            "Routing TTS to remote client ({n} samples @ {tts_sample_rate} Hz)"
+                        );
                         if tx.send(packet).await.is_err() {
                             tracing::warn!(target: "remote", "Remote TTS channel closed");
                         }
+                        // Remote sink owns playback duration; don't block on local CPAL.
+                        announcement_window.lock().unwrap().start_playback();
+                        announcement_window.lock().unwrap().finish_playback();
                         continue;
                     }
                 }

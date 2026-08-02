@@ -41,9 +41,7 @@ pub enum ServerMessage {
 }
 
 /// TTS audio packet sent from the pipeline to the WebSocket sink task.
-pub struct TtsAudioPacket {
-    /// Mono f32 samples at `sample_rate`.
-    pub samples: Vec<f32>,
-    /// Sample rate of the audio.
-    pub sample_rate: u32,
-}
+///
+/// Defined in `seneschal-common` so the core pipeline can produce packets without a
+/// circular dependency on this crate.
+pub use seneschal_common::TtsAudioPacket;

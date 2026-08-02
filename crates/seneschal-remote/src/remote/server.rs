@@ -101,6 +101,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
     {
         let mut guard = state.tts_audio_tx.lock().await;
         *guard = Some(tts_tx);
+        info!(target: "remote", "Remote TTS sink installed — host speakers muted for this client");
     }
 
     // We need to split ws_read into two paths:
@@ -202,6 +203,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
 
         while let Some(packet) = tts_rx.recv().await {
             if play_cancel_sink.load(Ordering::Relaxed) {
+                warn!(target: "remote", "Dropping remote TTS packet (play_cancel set)");
                 continue;
             }
 
@@ -217,6 +219,13 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
                 packet.samples
             };
 
+            info!(
+                target: "remote",
+                "Sending TTS to remote client: {} samples ({} ms @ 16 kHz)",
+                mono.len(),
+                mono.len() / 16
+            );
+
             let mut tx = ws_write_sink.lock().await;
 
             // audio.start
@@ -226,6 +235,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
             }
 
             // Send audio in 20ms frames (320 samples @ 16kHz = 640 bytes).
+            let mut frames = 0usize;
             for chunk in mono.chunks(320) {
                 if play_cancel_sink.load(Ordering::Relaxed) {
                     break;
@@ -239,6 +249,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
                 {
                     return;
                 }
+                frames += 1;
             }
 
             // audio.end
@@ -246,6 +257,7 @@ async fn handle_connection(socket: WebSocket, state: Arc<RemoteState>) {
             if tx.send(Message::Text(end_json.into())).await.is_err() {
                 break;
             }
+            info!(target: "remote", "Remote TTS packet sent ({frames} binary frames)");
         }
     });
 

@@ -9,6 +9,7 @@
 // It is a leaf dependency — it does NOT depend on any other workspace crate.
 
 pub mod acp_writer;
+pub mod audio;
 pub mod classifier;
 pub mod config;
 pub mod db;
@@ -17,6 +18,8 @@ pub mod i18n;
 pub mod permission;
 pub mod tools;
 pub mod tui_events;
+
+pub use audio::TtsAudioPacket;
 
 // Re-export the most commonly used types for convenience.
 pub use classifier::{

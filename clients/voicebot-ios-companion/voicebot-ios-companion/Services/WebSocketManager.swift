@@ -175,7 +175,7 @@ final class WebSocketManager: ObservableObject {
         switch webSocketMessage {
         case .data(let data):
             // The server sends TTS audio as binary frames. JSON messages arrive as .string.
-//            Self.logger.debug("WS recv binary: \(data.count) bytes \(Self.formatBuffer(data))")
+            Self.logger.info("WS recv binary: \(data.count) bytes")
             audioContinuation?.yield(data)
             
         case .string(let string):
