@@ -40,8 +40,12 @@ async fn main() -> anyhow::Result<()> {
                     ClientControlEvent::StateChanged {
                         state,
                         utterance_id,
+                        pause_reason,
                     } => {
-                        println!("[State] {} (utterance: {:?})", state, utterance_id);
+                        println!(
+                            "[State] {} (utterance: {:?}, pause_reason: {:?})",
+                            state, utterance_id, pause_reason
+                        );
                     }
                     ClientControlEvent::Transcript { utterance_id, text } => {
                         println!("[Transcript] utterance {}: '{}'", utterance_id, text);
@@ -86,6 +90,50 @@ async fn main() -> anyhow::Result<()> {
                     }
                     ClientControlEvent::Error { message } => {
                         println!("[Error] {}", message);
+                    }
+                    ClientControlEvent::SystemNotification { text } => {
+                        println!("[System] {}", text);
+                    }
+                    ClientControlEvent::McpNotification {
+                        server_name,
+                        method,
+                        ..
+                    } => {
+                        println!("[MCP] {} {}", server_name, method);
+                    }
+                    ClientControlEvent::Classification { intent, level, .. } => {
+                        println!("[Classification] {} ({})", intent, level);
+                    }
+                    ClientControlEvent::AgentTaskStarted {
+                        task_id,
+                        agent_name,
+                        objective,
+                    } => {
+                        println!("[Agent] started {} {} {:?}", task_id, agent_name, objective);
+                    }
+                    ClientControlEvent::AgentTaskRunning { task_id, objective }
+                    | ClientControlEvent::AgentTaskDelegated { task_id, objective }
+                    | ClientControlEvent::AgentTaskFinalizing { task_id, objective } => {
+                        println!("[Agent] {} {:?}", task_id, objective);
+                    }
+                    ClientControlEvent::AgentTaskCompleted {
+                        task_id, objective, ..
+                    } => {
+                        println!("[Agent] completed {} {:?}", task_id, objective);
+                    }
+                    ClientControlEvent::AgentTaskFailed { task_id, message } => {
+                        println!("[Agent] failed {} {}", task_id, message);
+                    }
+                    ClientControlEvent::AgentPermissionRequested {
+                        task_id,
+                        agent_name,
+                        description,
+                        ..
+                    } => {
+                        println!("[Permission] {} {} {}", task_id, agent_name, description);
+                    }
+                    ClientControlEvent::AgentPermissionResolved { task_id, option_id } => {
+                        println!("[Permission] resolved {} -> {}", task_id, option_id);
                     }
                 }
 

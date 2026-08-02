@@ -997,8 +997,9 @@ async fn async_main() -> Result<()> {
                 #[cfg(feature = "control")]
                 ctrl.send(
                     seneschal_control::control::broadcast::ControlEvent::StateChanged {
-                        state: format!("{state:?}"),
+                        state: state.control_wire_state().to_string(),
                         utterance_id: state.utterance_id(),
+                        pause_reason: state.control_pause_reason().map(str::to_string),
                     },
                 );
             }

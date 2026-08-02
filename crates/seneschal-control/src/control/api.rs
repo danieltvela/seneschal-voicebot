@@ -20,8 +20,6 @@ use super::broadcast::ControlEvent;
 use super::state::ControlState;
 use seneschal_core::pipeline::frames::PipelineFrame;
 
-const MAX_SSE_BUFFER_SIZE: usize = 1024 * 1024;
-
 pub fn router(state: Arc<ControlState>) -> Router {
     Router::new()
         .route("/control/sessions", get(get_sessions))
@@ -45,46 +43,50 @@ pub async fn start_control_server(port: u16, state: Arc<ControlState>) -> anyhow
     Ok(())
 }
 
+/// SSE event stream from a control broadcast subscription.
+///
+/// No cumulative byte cap: long sessions stay open. Lagging subscribers get an
+/// `Error { Missed N events }` event and should resync via `GET /control/state`.
+pub(crate) fn control_event_sse_stream(
+    rx: tokio::sync::broadcast::Receiver<ControlEvent>,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    futures_util::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(event) => {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                Some((Ok(Event::default().data(json)), rx))
+            }
+            Err(RecvError::Lagged(n)) => {
+                let err = ControlEvent::Error {
+                    message: format!("Missed {n} events (subscriber lagged)"),
+                };
+                let json = serde_json::to_string(&err).unwrap_or_default();
+                Some((Ok(Event::default().data(json)), rx))
+            }
+            Err(RecvError::Closed) => None,
+        }
+    })
+}
+
 async fn sse_events(
     State(state): State<Arc<ControlState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.broadcast.subscribe();
-    let total_bytes_sent = 0usize;
-    let stream = futures_util::stream::unfold(
-        (rx, total_bytes_sent),
-        |(mut rx, mut total_bytes)| async move {
-            if total_bytes >= MAX_SSE_BUFFER_SIZE {
-                return None;
-            }
-            match rx.recv().await {
-                Ok(event) => {
-                    let json = serde_json::to_string(&event).unwrap_or_default();
-                    total_bytes += json.len();
-                    Some((Ok(Event::default().data(json)), (rx, total_bytes)))
-                }
-                Err(RecvError::Lagged(n)) => {
-                    let err = ControlEvent::Error {
-                        message: format!("Missed {n} events (subscriber lagged)"),
-                    };
-                    let json = serde_json::to_string(&err).unwrap_or_default();
-                    total_bytes += json.len();
-                    Some((Ok(Event::default().data(json)), (rx, total_bytes)))
-                }
-                Err(RecvError::Closed) => None,
-            }
-        },
-    );
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(control_event_sse_stream(rx)).keep_alive(KeepAlive::default())
 }
 
 async fn get_state(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
     let ps = state.pipeline_state_rx.borrow().clone();
     let muted = state.tts_muted.load(Ordering::SeqCst);
-    Json(serde_json::json!({
-        "state": format!("{ps:?}"),
+    let mut body = serde_json::json!({
+        "state": ps.control_wire_state(),
         "utterance_id": ps.utterance_id(),
         "tts_muted": muted,
-    }))
+    });
+    if let Some(reason) = ps.control_pause_reason() {
+        body["pause_reason"] = serde_json::json!(reason);
+    }
+    Json(body)
 }
 
 async fn get_history(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
@@ -211,5 +213,43 @@ async fn get_session_messages(
             tracing::error!(target: "control", "Failed to get messages for session {session_id_str}: {e}");
             Json(Vec::<MessageListEntry>::new())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::broadcast::ControlBroadcast;
+    use futures_util::StreamExt;
+
+    /// Regression: former `MAX_SSE_BUFFER_SIZE = 1 MiB` closed the stream mid-session.
+    #[tokio::test]
+    async fn sse_stream_survives_over_1_mib() {
+        let broadcast = ControlBroadcast::new(4096);
+        let mut stream = std::pin::pin!(control_event_sse_stream(broadcast.subscribe()));
+
+        // ~2 KiB token × 600 events > 1 MiB of payload alone (plus JSON framing).
+        let payload = "x".repeat(2048);
+        const N: usize = 600;
+        assert!(N * payload.len() > 1024 * 1024);
+
+        for i in 0..N {
+            broadcast.send(ControlEvent::LlmToken {
+                utterance_id: i as u64,
+                token: payload.clone(),
+            });
+        }
+
+        let mut received = 0usize;
+        while received < N {
+            let _item = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                .await
+                .expect("SSE stream stalled")
+                .expect("SSE stream closed early before delivering all events")
+                .expect("infallible");
+            received += 1;
+        }
+
+        assert_eq!(received, N);
     }
 }
