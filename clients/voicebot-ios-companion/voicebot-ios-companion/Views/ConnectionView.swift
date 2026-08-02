@@ -37,7 +37,7 @@ struct ConnectionControlsView: View {
             }
 
             Section {
-                Button("Connect") {
+                Button(vm.isConnecting ? "Connecting…" : "Connect") {
                     dismissKeyboard()
                     saveConnectionSettings()
                     vm.selectedHost = tempHost
@@ -46,7 +46,7 @@ struct ConnectionControlsView: View {
                     Task { await vm.connect() }
                 }
                 .accessibilityIdentifier("connectButton")
-                .disabled(tempHost.isEmpty)
+                .disabled(tempHost.isEmpty || vm.isConnecting)
             }
 
             if let error = vm.errorMessage {
@@ -57,6 +57,7 @@ struct ConnectionControlsView: View {
                 }
             }
         }
+        .navigationTitle("Connect to Seneschal")
         .onAppear(perform: loadConnectionSettings)
     }
 
@@ -77,84 +78,10 @@ struct ConnectionControlsView: View {
     }
 }
 
-struct ConnectedHeaderView: View {
-    @EnvironmentObject var vm: CompanionViewModel
-
-    var body: some View {
-        VStack(spacing: 6) {
-            HStack {
-                ConnectionStateBadge(state: vm.connectionState)
-                if vm.pipelineState != .unknown {
-                    Text(vm.pipelineState.rawValue.capitalized)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(pipelineColor.opacity(0.15))
-                        .foregroundColor(pipelineColor)
-                        .clipShape(Capsule())
-                        .accessibilityIdentifier("pipelineStateBadge")
-                }
-                if vm.ttsMuted {
-                    Image(systemName: "speaker.slash.fill")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .accessibilityLabel("TTS muted")
-                }
-                Spacer()
-                Button("Disconnect") {
-                    vm.disconnect()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            if let banner = vm.controlBanner {
-                Text(banner)
-                    .font(.caption2)
-                    .foregroundColor(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if let pending = vm.pendingPermission {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Permission: \(pending.description)")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                    HStack {
-                        ForEach(pending.options) { opt in
-                            Button(opt.label) {
-                                vm.resolvePermission(optionId: opt.id)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.mini)
-                        }
-                    }
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.12))
-                .cornerRadius(8)
-            }
-        }
-        .padding()
-        .background(Color(.systemGray6))
-    }
-
-    private var pipelineColor: Color {
-        switch vm.pipelineState {
-        case .idle: return .secondary
-        case .listening: return .green
-        case .thinking: return .blue
-        case .speaking: return .purple
-        case .paused: return .orange
-        case .unknown: return .gray
-        }
-    }
-}
-
 // MARK: - Conversation View
 
 struct ConversationView: View {
     @EnvironmentObject var vm: CompanionViewModel
-    @State private var scrollID: String?
     @State private var showTimestamps = false
 
     var body: some View {
@@ -165,12 +92,16 @@ struct ConversationView: View {
                         Image(systemName: "bubble.left.and.bubble.right")
                             .font(.system(size: 40))
                             .foregroundColor(.secondary.opacity(0.5))
-                        Text("No messages yet")
+                        Text(vm.isSessionActive ? "No messages yet" : "Connect to Seneschal")
                             .font(.headline)
                             .foregroundColor(.secondary)
-                        Text("Connect to start a conversation")
-                            .font(.caption)
-                            .foregroundColor(.secondary.opacity(0.7))
+                        Text(
+                            vm.isSessionActive
+                                ? "Speak or type a message"
+                                : "Enter host and ports to begin"
+                        )
+                        .font(.caption)
+                        .foregroundColor(.secondary.opacity(0.7))
                     }
                     .padding(.top, 80)
                     .frame(maxWidth: .infinity)
@@ -182,7 +113,7 @@ struct ConversationView: View {
                                 showTimestamp: showTimestamps
                             )
                             .id(msg.id.uuidString)
-                            .onTapGesture { index in
+                            .onTapGesture {
                                 withAnimation { showTimestamps.toggle() }
                             }
                         }
@@ -203,21 +134,6 @@ struct ConversationView: View {
             }
             .onAppear {
                 scrollToLatest(proxy: proxy)
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                ConnectionStateBadge(state: vm.connectionState)
-                    .accessibilityIdentifier("statusBadge")
-            }
-            if vm.connectionState == .connected {
-                ToolbarItem {
-                    Button {
-                        vm.bargeIn()
-                    } label: {
-                        Image(systemName: "mic.slash")
-                    }
-                }
             }
         }
     }
@@ -326,6 +242,7 @@ struct ConnectionStateBadge: View {
         case .connecting: return .yellow
         case .disconnected: return .gray
         case .failed: return .red
+        case .conflict: return .orange
         }
     }
 
@@ -335,6 +252,7 @@ struct ConnectionStateBadge: View {
         case .connecting: return "Connecting..."
         case .disconnected: return "Disconnected"
         case .failed: return "Error"
+        case .conflict: return "Audio busy"
         }
     }
 }

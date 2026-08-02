@@ -63,14 +63,28 @@ struct PermissionRequest: Equatable, Sendable, Identifiable {
     var id: String { taskId }
 }
 
-// MARK: - Control link / health
+// MARK: - Dual-channel link state (design #190)
 
-enum ControlLinkState: Equatable, Sendable {
+/// Shared shape for audio (WS) and control (SSE/REST) links.
+enum LinkState: Equatable, Sendable {
     case disconnected
     case connecting
     case connected
+    case reconnecting(attempt: Int)
     case failed(String)
+    /// WS only: host HTTP 409 — another remote client holds exclusive audio.
+    case conflict
+
+    var isUsableForControl: Bool {
+        switch self {
+        case .connected, .reconnecting: return true
+        default: return false
+        }
+    }
 }
+
+/// Back-compat alias used by PR3 code paths.
+typealias ControlLinkState = LinkState
 
 struct ControlHealthResponse: Codable, Equatable, Sendable {
     let status: String
