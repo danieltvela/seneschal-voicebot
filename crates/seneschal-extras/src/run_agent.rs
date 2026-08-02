@@ -1008,15 +1008,15 @@ impl std::fmt::Debug for AgentTaskHandle {
 }
 
 /// Entry for an agent-initiated interaction that requires user input.
-/// Stored until the next user utterance arrives, at which point the answer
-/// is sent back via `response_tx`.
+/// Prefer [`seneschal_common::PermissionGate`] for new code; this type remains
+/// for any external callers that still build a local FIFO.
 #[derive(Debug)]
 pub struct PendingInteractionEntry {
     pub task_id: String,
     pub agent_name: String,
     pub server_request_id: u64,
     pub question: String,
-    pub options: Vec<String>,
+    pub options: Vec<seneschal_common::PermissionOptionWire>,
     pub response_tx: tokio::sync::oneshot::Sender<String>,
 }
 
@@ -1154,23 +1154,9 @@ async fn collect_acp_response(
             {
                 let params = params.unwrap_or_default();
 
-                // Extract permission options for the user
-                let options: Vec<String> = params["options"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .map(|o| {
-                                let id = o["optionId"].as_str().unwrap_or("?");
-                                let label =
-                                    o["label"].as_str().or_else(|| o["description"].as_str());
-                                match label {
-                                    Some(l) if !l.is_empty() => format!("{l} ({id})"),
-                                    _ => id.to_string(),
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                // Structured ACP options (optionId + label + kind) for Control / voice.
+                let options =
+                    seneschal_common::permission_options_from_acp_json(&params["options"]);
 
                 // Build a description from the toolCall info
                 let tool_call = &params["toolCall"];
@@ -1197,7 +1183,7 @@ async fn collect_acp_response(
                         task_id: task_id.clone(),
                         agent_name: agent_name.clone(),
                         question: description,
-                        options: options.clone(),
+                        options,
                         response_tx: resp_tx,
                     })
                     .await;

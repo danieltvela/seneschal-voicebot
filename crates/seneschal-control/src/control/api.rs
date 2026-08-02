@@ -31,6 +31,8 @@ pub fn router(state: Arc<ControlState>) -> Router {
         .route("/control/mute", post(post_mute))
         .route("/control/barge_in", post(post_barge_in))
         .route("/control/input", post(post_input))
+        .route("/control/permissions", get(get_permissions))
+        .route("/control/permission", post(post_permission))
         .with_state(state)
 }
 
@@ -131,6 +133,12 @@ async fn post_input(
     State(state): State<Arc<ControlState>>,
     Json(body): Json<InputBody>,
 ) -> StatusCode {
+    if state.permission_gate.has_pending_or_resolving() {
+        state.broadcast.send(ControlEvent::Error {
+            message: "permission pending — use POST /control/permission".into(),
+        });
+        return StatusCode::CONFLICT;
+    }
     if state
         .transcript_tx
         .send(PipelineFrame::TextInput { text: body.text })
@@ -141,6 +149,46 @@ async fn post_input(
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     StatusCode::NO_CONTENT
+}
+
+async fn get_permissions(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
+    Json(state.permission_gate.list())
+}
+
+#[derive(Deserialize)]
+struct PermissionBody {
+    task_id: String,
+    option_id: String,
+}
+
+async fn post_permission(
+    State(state): State<Arc<ControlState>>,
+    Json(body): Json<PermissionBody>,
+) -> StatusCode {
+    use seneschal_common::HttpPermissionResult;
+
+    match state
+        .permission_gate
+        .try_resolve_http(&body.task_id, &body.option_id)
+    {
+        HttpPermissionResult::Ok => {
+            state.broadcast.send(ControlEvent::AgentPermissionResolved {
+                task_id: body.task_id,
+                option_id: body.option_id,
+            });
+            StatusCode::NO_CONTENT
+        }
+        HttpPermissionResult::ClosedCancelled => {
+            state.broadcast.send(ControlEvent::AgentPermissionResolved {
+                task_id: body.task_id,
+                option_id: "cancelled".into(),
+            });
+            StatusCode::CONFLICT
+        }
+        HttpPermissionResult::NotFound => StatusCode::NOT_FOUND,
+        HttpPermissionResult::Conflict => StatusCode::CONFLICT,
+        HttpPermissionResult::BadOption => StatusCode::BAD_REQUEST,
+    }
 }
 
 // ── History API responses ────────────────────────────────────────────────────
