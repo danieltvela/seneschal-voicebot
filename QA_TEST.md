@@ -24,15 +24,16 @@ An AI agent should execute these tests and report any failures as issues in Gite
 
 1. **Environment**: Work within the repo root (`./mac-seneschal.sh`).
 2. **Execution**: Launch with `./mac-seneschal.sh`. Prefer a **PTY harness** over GUI automation for Terminal TUIs (ratatui is not AX-friendly; Screen Recording of Terminal often fails).
-3. **Boot ready**: Wait until **all** of these appear (do **not** match bare `seneschal` — cargo compile paths also contain it):
+3. **Maximize Terminal first**: As soon as the Terminal window/screen is up — and **before any test scenario** — maximize (or fullscreen) that Terminal so the TUI has a full viewport. Do this immediately after launch; do not start Test 01 (or later tests) until the window is maximized. For a pure PTY harness with no GUI window, set a large PTY size (e.g. ≥ 200×50) to approximate a maximized terminal.
+4. **Boot ready**: Wait until **all** of these appear (do **not** match bare `seneschal` — cargo compile paths also contain it):
    - status brand `seneschal`
    - `● IDLE` (or later pipeline states)
    - `INSERT` or `NORMAL`
    - shortcuts `Ctrl+M force` and `Ctrl+C quit`
-4. **Between turns**: Wait until status shows **IDLE** (and no `[streaming]`) before typing the next prompt. Do not send `i` if already in INSERT (prefixes the message).
-5. **Verification**: Capture TUI text buffer (PTY strip-ANSI) and/or screenshots; assert status-bar labels and chat roles.
-6. **Reporting**: On failure, save a TUI snapshot + last 50 lines of process log, then create a Gitea issue.
-7. **Ctrl+M note**: In raw PTY, byte `0x0D` is Enter, not Control+M. Prefer a real Terminal, or kitty/CSI-u sequences, or accept unit coverage for the keybinding and only assert force via a real keyboard path when available.
+5. **Between turns**: Wait until status shows **IDLE** (and no `[streaming]`) before typing the next prompt. Do not send `i` if already in INSERT (prefixes the message).
+6. **Verification**: Capture TUI text buffer (PTY strip-ANSI) and/or screenshots; assert status-bar labels and chat roles.
+7. **Reporting**: On failure, save a TUI snapshot + last 50 lines of process log, then create a Gitea issue.
+8. **Ctrl+M note**: In raw PTY, byte `0x0D` is Enter, not Control+M. Prefer a real Terminal, or kitty/CSI-u sequences, or accept unit coverage for the keybinding and only assert force via a real keyboard path when available.
 
 ---
 
