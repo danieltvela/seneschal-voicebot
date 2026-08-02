@@ -12,6 +12,7 @@ pub mod acp_writer;
 pub mod audio;
 pub mod classifier;
 pub mod config;
+pub mod control_broadcast;
 pub mod db;
 pub mod events;
 pub mod i18n;
@@ -20,6 +21,7 @@ pub mod tools;
 pub mod tui_events;
 
 pub use audio::TtsAudioPacket;
+pub use control_broadcast::{ControlBroadcast, ControlEvent};
 
 // Re-export the most commonly used types for convenience.
 pub use classifier::{

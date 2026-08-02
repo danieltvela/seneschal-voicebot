@@ -8,6 +8,8 @@ use super::frames::PipelineFrame;
 use super::fsm::PipelineState;
 use super::state::PipelineEvents;
 use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken, ToolChoice};
+use seneschal_common::ControlBroadcast;
+use seneschal_common::ControlEvent;
 use seneschal_common::classifier::{
     ClassifierForceMode, ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent,
 };
@@ -49,7 +51,9 @@ pub async fn llm_task(
     llm_tools_strict: bool,
     tui_tx: Option<TuiEventTx>,
     classifier_force: Arc<Mutex<ClassifierForceMode>>,
-    #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
+    // Optional Control/SSE bus. When Some, live transcript/tokens/tools are published
+    // for companions and dashboards. Always typed in common (no feature gate).
+    control_broadcast: Option<ControlBroadcast>,
 ) {
     let pipeline_id = PIPELINE_RUN_ID.fetch_add(1, Ordering::SeqCst);
     let mut cancel_rx = events.barge_in_tx.subscribe();
@@ -124,12 +128,13 @@ pub async fn llm_task(
             ))
             .ok();
         }
-        #[cfg(feature = "control")]
         if !tool_continuation && !is_system_notification {
-            control_broadcast.send(crate::control::broadcast::ControlEvent::Transcript {
-                utterance_id: pipeline_id,
-                text: text.clone(),
-            });
+            if let Some(ref ctrl) = control_broadcast {
+                ctrl.send(ControlEvent::Transcript {
+                    utterance_id: pipeline_id,
+                    text: text.clone(),
+                });
+            }
         }
 
         if is_system_notification {
@@ -137,10 +142,11 @@ pub async fn llm_task(
                 tx.send(TuiEvent::SystemNotification { text: text.clone() })
                     .ok();
             }
-            #[cfg(feature = "control")]
-            control_broadcast.send(
-                crate::control::broadcast::ControlEvent::SystemNotification { text: text.clone() },
-            );
+            if let Some(ref ctrl) = control_broadcast {
+                ctrl.send(ControlEvent::SystemNotification {
+                    text: text.clone(),
+                });
+            }
             {
                 let mut s = llm_session.lock().unwrap();
                 s.add_internal_notification(&text);
@@ -400,11 +406,12 @@ pub async fn llm_task(
                                     if let Some(ref tx) = tui_tx {
                                         tx.send(TuiEvent::AssistantToken(t.clone())).ok();
                                     }
-                                    #[cfg(feature = "control")]
-                                    control_broadcast.send(crate::control::broadcast::ControlEvent::LlmToken {
-                                        utterance_id: pipeline_id,
-                                        token: t,
-                                    });
+                                    if let Some(ref ctrl) = control_broadcast {
+                                        ctrl.send(ControlEvent::LlmToken {
+                                            utterance_id: pipeline_id,
+                                            token: t,
+                                        });
+                                    }
                                 }
                                 Some(StreamToken::ToolCall { name, args }) => {
                                     info!(target: "pipeline", "ToolCall received: name={} args={}", name, args);
@@ -420,11 +427,12 @@ pub async fn llm_task(
                                     if let Some(ref tx) = tui_tx {
                                         tx.send(TuiEvent::AssistantDone).ok();
                                     }
-                                    #[cfg(feature = "control")]
-                                    control_broadcast.send(crate::control::broadcast::ControlEvent::LlmDone {
-                                        utterance_id: pipeline_id,
-                                        full_text: llm_text.clone(),
-                                    });
+                                    if let Some(ref ctrl) = control_broadcast {
+                                        ctrl.send(ControlEvent::LlmDone {
+                                            utterance_id: pipeline_id,
+                                            full_text: llm_text.clone(),
+                                        });
+                                    }
                                     break;
                                 }
                             }
@@ -613,11 +621,12 @@ pub async fn llm_task(
                             })
                             .ok();
                         }
-                        #[cfg(feature = "control")]
-                        control_broadcast.send(crate::control::broadcast::ControlEvent::ToolCall {
-                            name: name.clone(),
-                            result: result.clone(),
-                        });
+                        if let Some(ref ctrl) = control_broadcast {
+                            ctrl.send(ControlEvent::ToolCall {
+                                name: name.clone(),
+                                result: result.clone(),
+                            });
+                        }
 
                         // Flush sentence splitter between pre-tool narration and post-tool response
                         let _ = llm_tx

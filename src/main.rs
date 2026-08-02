@@ -1283,6 +1283,10 @@ async fn async_main() -> Result<()> {
         let llm_think_complex = config.llm_thinking_complex;
         let llm_strict = config.llm_tools_strict;
         let classifier_force_c = Arc::clone(&classifier_force);
+        #[cfg(feature = "control")]
+        let control_broadcast_llm = Some(control_broadcast.clone());
+        #[cfg(not(feature = "control"))]
+        let control_broadcast_llm = None;
         tokio::spawn(async move {
             llm_task(
                 events_c,
@@ -1309,6 +1313,7 @@ async fn async_main() -> Result<()> {
                 llm_strict,
                 tui_tx_llm,
                 classifier_force_c,
+                control_broadcast_llm,
             )
             .await;
         });
