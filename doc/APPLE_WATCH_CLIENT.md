@@ -2,7 +2,8 @@
 
 Guide for building a watchOS app that connects to the Seneschal WebSocket server, streams microphone audio, and plays back TTS responses.
 
-> **Related:** see issue #37 for the full feasibility investigation (latency matrix, NECP/TN3135 context, phased implementation plan).
+> **Related:** see issue #37 for the full feasibility investigation (latency matrix, NECP/TN3135 context, phased implementation plan).  
+> **Shipping companion:** the production iPhone app relays watch audio via `WCSession` and owns host sockets (WS + Control). Full product architecture, ports, and QA: **[IOS_COMPANION.md](IOS_COMPANION.md)**. Watch remains PTT + glance status — not a full timeline surface.
 
 ## Prerequisites
 

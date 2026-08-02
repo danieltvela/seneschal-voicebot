@@ -50,7 +50,8 @@ Read from `.env` (dotenvy loads automatically):
 | `SEARXNG_URL` | — | SearXNG base URL (enables web_search) |
 | `SEARXNG_SECRET` | — | SearXNG bearer token |
 | `SPEAKER_ENABLED` | `true` | Enable/disable speaker verification at runtime (`0`/`false` = disabled, `1`/`true` = enabled). When disabled, the speaker model is not loaded and the associated 50-200ms latency per utterance is avoided. |
-| `WS_PORT` | `9090` | WebSocket server port |
+| `WS_PORT` | `9090` | WebSocket server port for remote audio (`--features remote`). Companion mic/TTS path. |
+| `CONTROL_PORT` | — (optional) | HTTP/SSE Control API port (`--features control`). Recommended **9001** for iOS companion dual-channel. Binds `0.0.0.0`. See [`IOS_COMPANION.md`](IOS_COMPANION.md). |
 | `S_DREAM_INTERVAL_SECS` | `3600` | Seconds between consolidation cycles (0 = disabled) |
 | `S_DREAM_ON_IDLE` | `1` | Trigger consolidation when user is idle (1 = true) |
 | `S_DREAM_IDLE_THRESHOLD_SECS` | `600` | Idle seconds before consolidation triggers |

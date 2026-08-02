@@ -312,15 +312,19 @@ Available when compiled with `--features control`. Served on port from `CONTROL_
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/control/events` | GET | SSE stream of pipeline events (state changes, speech detected, etc.) |
-| `/control/state` | GET | Current pipeline state, utterance ID, mute status |
+| `/control/events` | GET | SSE stream of `ControlEvent` JSON (state, tokens, tools, agents, permissions, …). No cumulative byte cap; lag → `Error` miss notice |
+| `/control/state` | GET | Structured state token (`idle`/`listening`/…), `utterance_id`, optional `pause_reason`, `tts_muted` |
 | `/control/history` | GET | Retrieve conversation history |
 | `/control/sessions` | GET | List conversation sessions |
 | `/control/sessions/{id}/messages` | GET | Messages for a specific session |
 | `/control/health` | GET | Health check endpoint (returns 200) |
 | `/control/barge_in` | POST | Trigger barge-in from external client |
-| `/control/mute` | POST | Toggle TTS mute state |
-| `/control/input` | POST | Submit a text transcript to the pipeline (JSON: `{"text": "..."}`) |
+| `/control/mute` | POST | Toggle TTS mute state (`{"muted":bool}`) |
+| `/control/input` | POST | Submit text (`{"text":"…"}`). **409** if an agent permission is pending |
+| `/control/permissions` | GET | Pending/resolving agent permission slots (structured options) |
+| `/control/permission` | POST | Resolve permission (`{"task_id","option_id"}` — ACP optionId) |
+
+Binds `0.0.0.0` on `CONTROL_PORT` (default often **9001**). Mobile clients also use `WS_PORT` (**9090**) for remote audio — see [`IOS_COMPANION.md`](IOS_COMPANION.md).
 
 ---
 
