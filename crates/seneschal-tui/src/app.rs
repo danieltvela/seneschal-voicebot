@@ -135,6 +135,46 @@ impl App {
         "→ Seneschal".to_string()
     }
 
+    /// Hard cap for UI history rehydration so large sessions do not freeze the TUI.
+    pub const UI_HISTORY_HARD_CAP: usize = 100;
+
+    /// Seed the chat buffer with messages restored from persistent session history.
+    ///
+    /// Roles are matched case-insensitively (`User`/`user`, etc.). `ToolExchanges`
+    /// and other non-display roles are skipped. When `history` exceeds
+    /// [`UI_HISTORY_HARD_CAP`], only the most recent messages are kept.
+    ///
+    /// Returns the number of messages actually appended.
+    pub fn seed_history(&mut self, history: &[(String, String)]) -> usize {
+        let slice = if history.len() > Self::UI_HISTORY_HARD_CAP {
+            &history[history.len() - Self::UI_HISTORY_HARD_CAP..]
+        } else {
+            history
+        };
+
+        let mut seeded = 0usize;
+        for (role, content) in slice {
+            if content.is_empty() {
+                continue;
+            }
+            let chat_role = match role.trim().to_ascii_lowercase().as_str() {
+                "user" => Role::User(InputSource::Text),
+                "assistant" => Role::Assistant,
+                "system" => Role::System,
+                // Skip ToolExchanges and any unknown role to avoid dumping JSON blobs.
+                _ => continue,
+            };
+            self.messages.push(ChatMessage {
+                role: chat_role,
+                content: content.clone(),
+                timestamp: chrono::Local::now(),
+                agent_task: None,
+            });
+            seeded += 1;
+        }
+        seeded
+    }
+
     /// Find an existing agent task message by task_id, returning a mutable reference.
     fn find_agent_task_mut(&mut self, task_id: &str) -> Option<&mut ChatMessage> {
         self.messages
@@ -583,5 +623,52 @@ mod tests {
         });
         assert_eq!(app.last_intent, Some(Intent::Complex));
         assert!(app.last_intent_forced);
+    }
+
+    #[test]
+    fn seed_history_maps_roles_case_insensitive() {
+        let mut app = test_app();
+        let history = vec![
+            ("User".into(), "hola".into()),
+            ("assistant".into(), "buenos dias".into()),
+            ("SYSTEM".into(), "note".into()),
+            ("ToolExchanges".into(), r#"[{"role":"tool"}]"#.into()),
+            ("unknown".into(), "skip me".into()),
+            ("User".into(), "".into()), // empty skipped
+        ];
+        let n = app.seed_history(&history);
+        assert_eq!(n, 3);
+        assert_eq!(app.messages.len(), 3);
+        assert!(matches!(app.messages[0].role, Role::User(InputSource::Text)));
+        assert_eq!(app.messages[0].content, "hola");
+        assert_eq!(app.messages[1].role, Role::Assistant);
+        assert_eq!(app.messages[1].content, "buenos dias");
+        assert_eq!(app.messages[2].role, Role::System);
+        assert_eq!(app.messages[2].content, "note");
+    }
+
+    #[test]
+    fn seed_history_empty_is_noop() {
+        let mut app = test_app();
+        assert_eq!(app.seed_history(&[]), 0);
+        assert!(app.messages.is_empty());
+    }
+
+    #[test]
+    fn seed_history_hard_cap_keeps_most_recent() {
+        let mut app = test_app();
+        let mut history = Vec::new();
+        for i in 0..(App::UI_HISTORY_HARD_CAP + 25) {
+            history.push(("User".into(), format!("msg {i}")));
+        }
+        let n = app.seed_history(&history);
+        assert_eq!(n, App::UI_HISTORY_HARD_CAP);
+        assert_eq!(app.messages.len(), App::UI_HISTORY_HARD_CAP);
+        // First kept message is the 26th overall (index 25).
+        assert_eq!(app.messages[0].content, "msg 25");
+        assert_eq!(
+            app.messages.last().unwrap().content,
+            format!("msg {}", App::UI_HISTORY_HARD_CAP + 24)
+        );
     }
 }

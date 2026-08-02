@@ -162,8 +162,11 @@ These are specified for a later pass; implement when P0 is green.
 ### Test 12: Session restore
 1. Tell a unique fact (`recuerda el código AZUL-42`).
 2. Quit cleanly; relaunch.
-3. Ask for the code.
-- **Expected**: fact recovered via memory/session context (document if chat history is not rehydrated in UI but model still recalls).
+3. **Before** asking again, inspect the TUI: prior turns (or a `Session restored (N messages)` banner) should be visible.
+4. Ask for the code.
+- **Expected (UI)**: chat buffer rehydrated from DB — prior `You` / `seneschal` turns and/or explicit restore banner.
+- **Expected (model)**: fact recovered via loaded chat history and/or long-term memory.
+- **Scoring**: PASS = UI rehydrate + model recall; PARTIAL = only one of the two; FAIL = neither (or panic).
 
 ### Test 13: LLM unavailable
 1. Point LLM URL at a dead endpoint (or stop the server).

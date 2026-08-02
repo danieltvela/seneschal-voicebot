@@ -26,6 +26,7 @@ async_main()
   ├─ Init DB (SQLite) — load session, history, profile facts, memories
   ├─ Build system prompt (base + [USER PROFILE] + [MEMORIES] + tools)
   ├─ Init LLM session (LlmSession::from_history)
+  │     same history slice is later seeded into the TUI (hard-capped at 100)
   ├─ Self-managed LLM process (optional — start + supervise if llm_self_managed)
   ├─ Init primary LLM client (OpenAIClient → /v1/chat/completions)
   ├─ InferenceDaemon (optional — background reasoning at fixed interval)
@@ -39,7 +40,7 @@ async_main()
   ├─ Pipeline FSM state (watch channel: PipelineState)
   ├─ Spawn permanent pipeline tasks: llm_task, sen_task, tts_task, consolidation_task
   ├─ Spawn FSM observer (logs state transitions + control broadcast)
-  ├─ Spawn TUI (feature flag)
+  ├─ Spawn TUI (feature flag) — rehydrates chat from session history + Splash
   ├─ Spawn Remote WebSocket server (feature flag)
   ├─ Spawn Control API HTTP+SSE server (feature flag)
   ├─ Startup consolidation (if context already exceeds idle threshold)
@@ -264,6 +265,8 @@ DB (SQLite)
 On startup:
   DB → load history, summary, profile, memories
      → build_system_prompt() → LlmSession
+     → TUI seed_history(history)  # visual rehydration; cap 100 messages
+       + optional "Session restored (N messages)" system line
 
 After each turn:
   persist user transcript + assistant response → DB

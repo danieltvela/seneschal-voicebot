@@ -29,6 +29,11 @@ use seneschal_core::pipeline::PipelineFrame;
 const TICK_MS: u64 = 33; // ~30fps
 
 /// Run the TUI event loop. Blocks until the user quits.
+///
+/// `initial_history` is the session message list already loaded from the DB
+/// (`role`, `content` pairs — same shape as `get_session_context`). It is
+/// seeded into the chat buffer after the splash so a relaunch rehydrates the
+/// previous conversation instead of starting empty.
 pub async fn run(
     mut event_rx: TuiEventRx,
     transcript_tx: mpsc::Sender<PipelineFrame>,
@@ -36,6 +41,7 @@ pub async fn run(
     conv_mode: Arc<Mutex<ConversationMode>>,
     prompt_build_state: Arc<Mutex<PromptBuildState>>,
     classifier_force: Arc<Mutex<ClassifierForceMode>>,
+    initial_history: Vec<(String, String)>,
 ) -> Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
@@ -53,6 +59,19 @@ pub async fn run(
     let tick = tokio::time::Duration::from_millis(TICK_MS);
 
     app.handle_tui_event(TuiEvent::Splash);
+
+    // Rehydrate prior session turns so quit/relaunch shows conversation context.
+    let seeded = app.seed_history(&initial_history);
+    if seeded > 0 {
+        app.handle_tui_event(TuiEvent::SystemNotification {
+            text: format!("Session restored ({seeded} messages)"),
+        });
+        tracing::info!(
+            target: "tui",
+            seeded,
+            "Rehydrated chat history from previous session"
+        );
+    }
 
     loop {
         // Render to terminal - fullscreen viewport always fills the screen

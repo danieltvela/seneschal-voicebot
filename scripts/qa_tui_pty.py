@@ -1302,6 +1302,28 @@ def test_12_session_restore(h: Harness) -> None:
         return
 
     wait_idle_simple(h, 30)
+    # --- UI rehydration (independent of model recall) ---
+    h.drain(0.5)
+    t_boot = h.recent_text()
+    if has_panic(t_boot):
+        h.record(tid, name, "FAIL", "panic after relaunch")
+        return
+
+    def _code_in(blob: str) -> bool:
+        if code in blob:
+            return True
+        compact = blob.replace("-", "").replace(" ", "")
+        if code.replace("-", "") in compact:
+            return True
+        return code.split("-")[0] in blob and code.split("-")[-1] in blob
+
+    ui_rehydrated = (
+        _code_in(t_boot)
+        or "Session restored" in t_boot
+        or "Sesión restaurada" in t_boot
+        or "Sesion restaurada" in t_boot
+    )
+
     ensure_insert(h)
     h.type_text(
         "Cual es el codigo secreto de sesion que te pedi recordar? "
@@ -1310,31 +1332,48 @@ def test_12_session_restore(h: Harness) -> None:
     h.enter()
     wait_idle_after_turn(h, 120)
     t2 = h.recent_text()
-    # Code may appear with or without hyphen spacing; only look after relaunch content
-    blob = t2
-    found = code in blob or code.replace("-", "") in blob.replace("-", "").replace(" ", "")
-    # Also accept partial token AZUL + digits
-    found = found or (
-        code.split("-")[0] in blob and code.split("-")[-1] in blob
-    )
-    if found and not has_panic(t2):
-        h.record(tid, name, "PASS", f"fact {code} recovered after relaunch")
-    elif not has_panic(t2) and has_idle(t2):
+    model_recall = _code_in(t2) and not has_panic(t2)
+
+    if has_panic(t2):
+        h.record(
+            tid,
+            name,
+            "FAIL",
+            f"panic after recall; ui_rehydrate={ui_rehydrated}",
+            expected=f"ui rehydrate + recall {code}",
+            actual=t2[-2000:],
+        )
+    elif ui_rehydrated and model_recall:
+        h.record(
+            tid,
+            name,
+            "PASS",
+            f"UI rehydrated + fact {code} recalled after relaunch",
+        )
+    elif ui_rehydrated:
         h.record(
             tid,
             name,
             "PARTIAL",
-            f"got reply but code {code} not clearly recovered — may be memory-only not UI history",
+            f"UI rehydrated but model did not clearly recall {code}",
         )
         h.save_failure(tid, name, f"recall {code}", t2[-2000:])
+    elif model_recall:
+        h.record(
+            tid,
+            name,
+            "PARTIAL",
+            f"model recalled {code} but UI did not show prior history/banner",
+        )
+        h.save_failure(tid, name, "ui rehydrate", t_boot[-2000:])
     else:
         h.record(
             tid,
             name,
             "FAIL",
-            f"code {code} not found",
-            expected=f"recall {code}",
-            actual=t2[-2000:],
+            f"neither UI rehydrate nor recall of {code}",
+            expected=f"Session restored banner and/or {code} in history",
+            actual=(t_boot[-1000:] + "\n---\n" + t2[-1000:]),
         )
 
 

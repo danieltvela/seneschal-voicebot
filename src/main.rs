@@ -1341,6 +1341,16 @@ async fn async_main() -> Result<()> {
         let conv_mode_c = Arc::clone(&conv_mode);
         let prompt_build_c = Arc::clone(&prompt_build_state);
         let classifier_force_c = Arc::clone(&classifier_force);
+        // Same history slice loaded into LlmSession — UI hard-caps inside seed_history.
+        let tui_history = history.clone();
+        if !tui_history.is_empty() {
+            info!(
+                target: "tui",
+                count = tui_history.len(),
+                "Passing {} history messages to TUI for rehydration",
+                tui_history.len()
+            );
+        }
         tokio::spawn(async move {
             if let Err(e) = seneschal_tui::run(
                 tui_rx,
@@ -1349,6 +1359,7 @@ async fn async_main() -> Result<()> {
                 conv_mode_c,
                 prompt_build_c,
                 classifier_force_c,
+                tui_history,
             )
             .await
             {
