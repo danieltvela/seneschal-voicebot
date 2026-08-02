@@ -81,17 +81,72 @@ struct ConnectedHeaderView: View {
     @EnvironmentObject var vm: CompanionViewModel
 
     var body: some View {
-        HStack {
-            ConnectionStateBadge(state: vm.connectionState)
-            Spacer()
-            Button("Disconnect") {
-                vm.disconnect()
+        VStack(spacing: 6) {
+            HStack {
+                ConnectionStateBadge(state: vm.connectionState)
+                if vm.pipelineState != .unknown {
+                    Text(vm.pipelineState.rawValue.capitalized)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(pipelineColor.opacity(0.15))
+                        .foregroundColor(pipelineColor)
+                        .clipShape(Capsule())
+                        .accessibilityIdentifier("pipelineStateBadge")
+                }
+                if vm.ttsMuted {
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .accessibilityLabel("TTS muted")
+                }
+                Spacer()
+                Button("Disconnect") {
+                    vm.disconnect()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            if let banner = vm.controlBanner {
+                Text(banner)
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let pending = vm.pendingPermission {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Permission: \(pending.description)")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    HStack {
+                        ForEach(pending.options) { opt in
+                            Button(opt.label) {
+                                vm.resolvePermission(optionId: opt.id)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.mini)
+                        }
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(8)
+            }
         }
         .padding()
         .background(Color(.systemGray6))
+    }
+
+    private var pipelineColor: Color {
+        switch vm.pipelineState {
+        case .idle: return .secondary
+        case .listening: return .green
+        case .thinking: return .blue
+        case .speaking: return .purple
+        case .paused: return .orange
+        case .unknown: return .gray
+        }
     }
 }
 

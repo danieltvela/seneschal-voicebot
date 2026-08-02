@@ -27,8 +27,16 @@ final class CompanionViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var selectedHost: String = ""
     @Published var selectedPort: String = "9090"
-    @Published var selectedControlPort: String = "9090"
+    /// Default Control API port (host `CONTROL_PORT=9001`).
+    @Published var selectedControlPort: String = "9001"
     @Published var isGenerating = false
+
+    // MARK: Control plane (PR3 networking; UI polish in PR4+)
+    @Published var controlLink: ControlLinkState = .disconnected
+    @Published var pipelineState: CompanionPipelineState = .unknown
+    @Published var ttsMuted: Bool = false
+    @Published var pendingPermission: PermissionRequest?
+    @Published var controlBanner: String?
 
     private let discoveryManager: DiscoveryManager
     private let messageStore: MessageStore
@@ -36,9 +44,12 @@ final class CompanionViewModel: ObservableObject {
     private var relayService: WatchRelayService?
     private let audioManager: AudioManager
     private var historyClient: HistoryClient?
+    private var controlClient: ControlClient?
+    private var controlSSE: ControlSSEClient?
     private var cancellables = Set<AnyCancellable>()
     private var audioTask: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
+    private var controlTask: Task<Void, Never>?
     private var bindingTasks: [Task<Void, Never>] = []
 
     init(discoveryManager: DiscoveryManager? = nil, audioManager: AudioManager? = nil) {
@@ -75,7 +86,10 @@ final class CompanionViewModel: ObservableObject {
         }
         relayService?.startRelay()
         historyClient = HistoryClient(host: selectedHost, controlPort: selectedControlPort)
+        controlClient = ControlClient(host: selectedHost, controlPort: selectedControlPort)
+        controlSSE = ControlSSEClient(host: selectedHost, controlPort: selectedControlPort)
         setupBindings()
+        startControlPlane()
         
         messageTask = Task {
             await webSocketManager?.connect()
@@ -89,9 +103,15 @@ final class CompanionViewModel: ObservableObject {
         audioTask = nil
         messageTask?.cancel()
         messageTask = nil
+        controlTask?.cancel()
+        controlTask = nil
 
         bindingTasks.forEach { $0.cancel() }
         bindingTasks.removeAll()
+
+        controlSSE?.stop()
+        controlSSE = nil
+        controlClient = nil
 
         relayService?.stopRelay()
         webSocketManager?.disconnect()
@@ -100,15 +120,73 @@ final class CompanionViewModel: ObservableObject {
 
         webSocketManager = nil
         relayService = nil
+        historyClient = nil
         connectionState = .disconnected
+        controlLink = .disconnected
+        pipelineState = .unknown
+        pendingPermission = nil
+        controlBanner = nil
     }
 
     func bargeIn() {
         Task {
+            // Prefer Control REST; fall back to WebSocket barge_in.
+            if let client = controlClient {
+                do {
+                    try await client.bargeIn()
+                    return
+                } catch {
+                    NSLog("Control barge_in failed, falling back to WS: \(error.localizedDescription)")
+                }
+            }
             do {
                 try await webSocketManager?.bargeIn()
             } catch {
                 self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func setMute(_ muted: Bool) {
+        Task {
+            do {
+                try await controlClient?.setMute(muted)
+                // Optimistic; SSE MuteChanged will confirm.
+                ttsMuted = muted
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func sendTextInput(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if pendingPermission != nil {
+            errorMessage = "Permission pending — answer the agent request first"
+            return
+        }
+        Task {
+            do {
+                try await controlClient?.sendInput(trimmed)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func resolvePermission(optionId: String) {
+        guard let pending = pendingPermission else { return }
+        Task {
+            do {
+                try await controlClient?.resolvePermission(
+                    taskId: pending.taskId,
+                    optionId: optionId
+                )
+                // Cleared on agent_permission_resolved; clear optimistically too.
+                pendingPermission = nil
+            } catch {
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -186,6 +264,82 @@ final class CompanionViewModel: ObservableObject {
         Task { @MainActor in
             let samples = int16ToFloat(data)
             await self.audioManager.play(samples)
+        }
+    }
+
+    // MARK: - Control plane
+
+    private func startControlPlane() {
+        guard let client = controlClient, let sse = controlSSE else { return }
+        controlLink = .connecting
+        controlTask = Task { [weak self] in
+            guard let self else { return }
+            // Health probe — non-fatal if WS works but Control is wrong port.
+            do {
+                let health = try await client.healthCheck()
+                if Task.isCancelled { return }
+                if health.status == "healthy" {
+                    controlLink = .connected
+                    controlBanner = nil
+                    if let state = try? await client.getState() {
+                        pipelineState = state.pipelineState
+                        ttsMuted = state.ttsMuted
+                    }
+                } else {
+                    controlLink = .failed("unexpected health status")
+                }
+            } catch {
+                if Task.isCancelled { return }
+                controlLink = .failed(error.localizedDescription)
+                controlBanner =
+                    "Check Control port (often 9001) — WS may still work without it."
+                NSLog("Control health failed: \(error.localizedDescription)")
+            }
+
+            for await event in sse.events() {
+                if Task.isCancelled { break }
+                await handleControlEvent(event)
+            }
+        }
+    }
+
+    private func handleControlEvent(_ event: ControlEvent) async {
+        switch event {
+        case .stateChanged(let state, _, _):
+            pipelineState = CompanionPipelineState(hostToken: state)
+            if controlLink != .connected {
+                controlLink = .connected
+                controlBanner = nil
+            }
+        case .muteChanged(let muted):
+            ttsMuted = muted
+        case .llmToken, .llmDone:
+            // Tokens will drive conversation UI in PR4; mark generating for now.
+            if case .llmToken = event { isGenerating = true }
+            if case .llmDone = event { isGenerating = false }
+        case .agentPermissionRequested(let taskId, let agentName, let description, let options):
+            pendingPermission = PermissionRequest(
+                taskId: taskId,
+                agentName: agentName,
+                description: description,
+                options: options
+            )
+        case .agentPermissionResolved(let taskId, _):
+            if pendingPermission?.taskId == taskId {
+                pendingPermission = nil
+            }
+        case .error(let message):
+            if message.contains("Missed") {
+                // Lag — non-fatal; resync state.
+                if let state = try? await controlClient?.getState() {
+                    pipelineState = state.pipelineState
+                    ttsMuted = state.ttsMuted
+                }
+            } else {
+                errorMessage = message
+            }
+        default:
+            break
         }
     }
 

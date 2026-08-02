@@ -23,7 +23,8 @@ final class DiscoveryManager: ObservableObject, Sendable {
     @Published var discoveredServices: [VoicebotService] = []
     @Published var selectedHost: String = ""
     @Published var selectedPort: String = "9090"
-    @Published var selectedControlPort: String = "9090"
+    /// Host default `CONTROL_PORT` (see design #190). WS remains 9090.
+    @Published var selectedControlPort: String = "9001"
     
     init() {
         loadLastUsedHost()
