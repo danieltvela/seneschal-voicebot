@@ -69,8 +69,8 @@ class TestResult:
 class Harness:
     repo: Path
     out_dir: Path
-    cols: int = 140
-    rows: int = 40
+    cols: int = 200  # approximate maximized terminal (QA_TEST.md)
+    rows: int = 50
     master_fd: Optional[int] = None
     child_pid: Optional[int] = None
     buf: bytearray = field(default_factory=bytearray)
