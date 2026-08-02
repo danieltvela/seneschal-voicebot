@@ -97,7 +97,6 @@ struct ConnectionControlsView: View {
 
 struct ConversationView: View {
     @EnvironmentObject var vm: CompanionViewModel
-    @State private var showTimestamps = false
     /// Cancels in-flight multi-pass scroll when a newer message batch arrives.
     @State private var scrollGeneration: UInt64 = 0
     /// Used to detect bulk history hydrate (large count jump) vs single appends.
@@ -148,15 +147,8 @@ struct ConversationView: View {
             } else {
                 LazyVStack(spacing: 10) {
                     ForEach(vm.chatMessages) { msg in
-                        MessageBubble(
-                            message: msg,
-                            showTimestamp: showTimestamps
-                        )
+                        MessageBubble(message: msg)
                         .id(msg.id.uuidString)
-                        .onTapGesture {
-                            withAnimation { showTimestamps.toggle() }
-                        }
-                        .accessibilityHint("Double tap to show or hide relative time")
                     }
                     if vm.isGenerating {
                         HStack {
@@ -284,13 +276,19 @@ struct ConversationView: View {
 
 private struct MessageBubble: View {
     let message: ChatMessage
-    let showTimestamp: Bool
 
-    private static let formatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
+    /// Absolute date + time from the host DB `messages.timestamp` (or local clock for live turns).
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        f.dateStyle = .medium
+        f.timeStyle = .short
         return f
     }()
+
+    private var timestampText: String {
+        Self.dateTimeFormatter.string(from: message.timestamp)
+    }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
@@ -303,19 +301,15 @@ private struct MessageBubble: View {
                     Spacer(minLength: 24)
                 }
             }
-            if showTimestamp {
-                Text(Self.formatter.localizedString(for: message.timestamp, relativeTo: Date()))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 4)
-                    .accessibilityLabel(
-                        "Sent \(Self.formatter.localizedString(for: message.timestamp, relativeTo: Date()))"
-                    )
-            }
+            Text(timestampText)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 4)
+                .accessibilityLabel("Sent \(timestampText)")
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(message.role == .user ? "You" : "Seneschal"): \(message.text)"
+            "\(message.role == .user ? "You" : "Seneschal"): \(message.text). \(timestampText)"
         )
     }
 }
