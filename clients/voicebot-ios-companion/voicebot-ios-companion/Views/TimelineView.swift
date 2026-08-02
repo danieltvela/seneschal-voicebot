@@ -37,6 +37,7 @@ struct TimelineView: View {
                         .padding()
                     }
                     .accessibilityIdentifier("timelineList")
+                    .accessibilityLabel("Event timeline")
                     .onChange(of: vm.timeline.count) { _ in
                         if let last = vm.timeline.last {
                             withAnimation {
@@ -56,6 +57,8 @@ struct TimelineView: View {
                         vm.clearTimeline()
                     }
                     .accessibilityIdentifier("clearTimelineButton")
+                    .accessibilityLabel("Clear timeline")
+                    .accessibilityHint("Removes all timeline events from this session")
                 }
             }
         }
@@ -66,17 +69,19 @@ struct TimelineView: View {
             Image(systemName: "list.bullet.rectangle")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary.opacity(0.5))
+                .accessibilityHidden(true)
             Text("No events yet")
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .foregroundColor(.secondary)
             Text("Tool calls, system notices, and agent activity appear here")
-                .font(.caption)
-                .foregroundColor(.secondary.opacity(0.7))
+                .font(.body)
+                .foregroundColor(.secondary.opacity(0.85))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("timelineEmpty")
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -25,17 +25,20 @@ struct ComposerView: View {
     var body: some View {
         VStack(spacing: 0) {
             Divider()
-            HStack(spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
                 TextField(
                     placeholder,
                     text: $vm.composerText,
                     axis: .vertical
                 )
-                .lineLimit(1 ... 4)
+                .lineLimit(1 ... 6)
+                .font(.body)
                 .textFieldStyle(.roundedBorder)
                 .focused($focused)
                 .disabled(!controlUp)
                 .accessibilityIdentifier("composerTextField")
+                .accessibilityLabel("Message to Seneschal")
+                .accessibilityHint(placeholder)
                 .onSubmit {
                     if canSend { vm.sendComposerText() }
                 }
@@ -46,15 +49,24 @@ struct ComposerView: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
+                        .symbolRenderingMode(.hierarchical)
                 }
                 .disabled(!canSend)
                 .accessibilityIdentifier("sendButton")
                 .accessibilityLabel("Send message")
+                .accessibilityHint(
+                    canSend
+                        ? "Sends the text to the host Control API"
+                        : "Unavailable until Control is connected and text is entered"
+                )
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
+            .frame(maxWidth: AdaptiveLayout.conversationMaxWidth)
+            .frame(maxWidth: .infinity)
             .background(Color(.systemBackground))
         }
+        .accessibilityElement(children: .contain)
     }
 
     private var controlUp: Bool {

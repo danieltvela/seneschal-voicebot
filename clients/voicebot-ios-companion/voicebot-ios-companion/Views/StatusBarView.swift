@@ -10,89 +10,22 @@ import SwiftUI
 struct StatusBarView: View {
     @EnvironmentObject var vm: CompanionViewModel
     var onOpenTimeline: (() -> Void)?
+    /// Compact layouts open timeline as a sheet; regular width shows a live column.
+    var showsTimelineButton: Bool = true
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                linkDot(vm.audioLink, label: "Audio")
-                linkDot(vm.controlLink, label: "Control")
-
-                if vm.pipelineState != .unknown {
-                    Text(vm.pipelineState.rawValue.capitalized)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(pipelineColor.opacity(0.15))
-                        .foregroundColor(pipelineColor)
-                        .clipShape(Capsule())
-                        .accessibilityIdentifier("pipelineStateBadge")
-                        .accessibilityLabel("Pipeline \(vm.pipelineState.rawValue)")
+            // Status chips wrap under large Dynamic Type; controls stay tappable.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    statusCluster
+                    Spacer(minLength: 4)
+                    controlCluster
                 }
-
-                if let chip = vm.classificationChip {
-                    Text(chip)
-                        .font(.caption2.weight(.medium))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.indigo.opacity(0.12))
-                        .foregroundColor(.indigo)
-                        .clipShape(Capsule())
-                        .accessibilityIdentifier("classificationChip")
+                VStack(alignment: .leading, spacing: 8) {
+                    statusCluster
+                    controlCluster
                 }
-
-                if vm.ttsMuted {
-                    Image(systemName: "speaker.slash.fill")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .accessibilityLabel("TTS muted")
-                }
-
-                Spacer()
-
-                Button {
-                    onOpenTimeline?()
-                } label: {
-                    Image(systemName: "list.bullet.rectangle")
-                    if !vm.timeline.isEmpty {
-                        Text("\(vm.timeline.count)")
-                            .font(.caption2.monospacedDigit())
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Open timeline")
-                .accessibilityIdentifier("timelineButton")
-
-                if vm.isControlConnectedOrReconnecting {
-                    Button {
-                        vm.toggleMute()
-                    } label: {
-                        Image(systemName: vm.ttsMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel(vm.ttsMuted ? "Unmute TTS" : "Mute TTS")
-                    .accessibilityIdentifier("muteButton")
-                }
-
-                if vm.hasAudioPath {
-                    Button {
-                        vm.bargeIn()
-                    } label: {
-                        Image(systemName: "waveform.badge.mic")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel("Barge in")
-                    .accessibilityIdentifier("bargeInButton")
-                }
-
-                Button("Disconnect") {
-                    vm.disconnect()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityIdentifier("disconnectButton")
             }
 
             if let banner = vm.controlBanner {
@@ -118,32 +51,134 @@ struct StatusBarView: View {
                         Text("Open")
                             .fontWeight(.semibold)
                     }
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundColor(.orange)
-                    .padding(8)
+                    .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.orange.opacity(0.12))
                     .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("permissionPendingChip")
-                .accessibilityLabel("Permission pending, open sheet")
+                .accessibilityLabel("Permission pending from \(pending.agentName)")
+                .accessibilityHint("Opens the permission approval sheet")
             }
         }
         .padding()
         .background(Color(.systemGray6))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var statusCluster: some View {
+        HStack(spacing: 8) {
+            linkDot(vm.audioLink, label: "Audio")
+            linkDot(vm.controlLink, label: "Control")
+
+            if vm.pipelineState != .unknown {
+                Text(vm.pipelineState.rawValue.capitalized)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(pipelineColor.opacity(0.15))
+                    .foregroundColor(pipelineColor)
+                    .clipShape(Capsule())
+                    .accessibilityIdentifier("pipelineStateBadge")
+                    .accessibilityLabel("Pipeline state \(vm.pipelineState.rawValue)")
+            }
+
+            if let chip = vm.classificationChip {
+                Text(chip)
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.indigo.opacity(0.12))
+                    .foregroundColor(.indigo)
+                    .clipShape(Capsule())
+                    .accessibilityIdentifier("classificationChip")
+                    .accessibilityLabel("Classification \(chip)")
+            }
+
+            if vm.ttsMuted {
+                Image(systemName: "speaker.slash.fill")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("TTS is muted")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var controlCluster: some View {
+        HStack(spacing: 8) {
+            if showsTimelineButton {
+                Button {
+                    onOpenTimeline?()
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                    if !vm.timeline.isEmpty {
+                        Text("\(vm.timeline.count)")
+                            .font(.caption.monospacedDigit())
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .accessibilityLabel(
+                    vm.timeline.isEmpty
+                        ? "Open timeline"
+                        : "Open timeline, \(vm.timeline.count) events"
+                )
+                .accessibilityHint("Shows tools, system, and agent events")
+                .accessibilityIdentifier("timelineButton")
+            }
+
+            if vm.isControlConnectedOrReconnecting {
+                Button {
+                    vm.toggleMute()
+                } label: {
+                    Image(systemName: vm.ttsMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .accessibilityLabel(vm.ttsMuted ? "Unmute TTS" : "Mute TTS")
+                .accessibilityHint("Toggles text-to-speech playback on the host")
+                .accessibilityIdentifier("muteButton")
+            }
+
+            if vm.hasAudioPath {
+                Button {
+                    vm.bargeIn()
+                } label: {
+                    Image(systemName: "waveform.badge.mic")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .accessibilityLabel("Barge in")
+                .accessibilityHint("Interrupts the current spoken response")
+                .accessibilityIdentifier("bargeInButton")
+            }
+
+            Button("Disconnect") {
+                vm.disconnect()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .accessibilityIdentifier("disconnectButton")
+            .accessibilityHint("Closes audio and control connections")
+        }
     }
 
     private func linkDot(_ state: LinkState, label: String) -> some View {
         HStack(spacing: 3) {
             Circle()
                 .fill(color(for: state))
-                .frame(width: 7, height: 7)
+                .frame(width: 8, height: 8)
+                .accessibilityHidden(true)
             Text(label)
-                .font(.caption2)
+                .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .accessibilityLabel("\(label) \(linkLabel(state))")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) link \(linkLabel(state))")
     }
 
     private func color(for state: LinkState) -> Color {
