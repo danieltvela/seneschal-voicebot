@@ -14,6 +14,8 @@ enum ConnectionState: Equatable, Sendable {
     case connecting
     case connected
     case failed(String)
+    /// Host rejected WS because another remote client is already connected (HTTP 409).
+    case conflict
 }
 
 enum WebSocketError: Error, Sendable {
@@ -203,10 +205,18 @@ final class WebSocketManager: ObservableObject {
         let nsError = error as NSError
         // NSURLErrorBadServerResponse (-1011) is what URLSession reports when the
         // server returns a non-101 status code during the WebSocket handshake.
-        // Voicebot returns HTTP 409 Conflict when another remote client is already connected.
-        if nsError.code == 409 || nsError.code == NSURLErrorBadServerResponse {
-            errorMessage = "Voicebot is already connected from another device"
-            state = .failed(errorMessage ?? "Connection failed")
+        // Seneschal returns HTTP 409 when another remote client holds exclusive audio.
+        // Also check localized description for "409" / "Conflict" when code is opaque.
+        let desc = nsError.localizedDescription.lowercased()
+        let looksLikeConflict =
+            nsError.code == 409
+            || (nsError.code == NSURLErrorBadServerResponse && (desc.contains("409") || desc.contains("conflict")))
+            || desc.contains("already connected")
+        if looksLikeConflict {
+            errorMessage =
+                "Seneschal is already connected from another device — Control-only mode"
+            state = .conflict
+            errorContinuation?.yield(WebSocketError.connectionFailed(409))
             return
         }
         

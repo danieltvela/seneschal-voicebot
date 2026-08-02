@@ -2,23 +2,18 @@
 //  ContentView.swift
 //  voicebot-ios-companion
 //
-//  Created by Dani Vela on 13/06/2026.
-//
 
 import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = CompanionViewModel()
-
-    private var isConnected: Bool {
-        viewModel.connectionState == .connected || viewModel.connectionState == .connecting
-    }
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if isConnected {
-                    ConnectedHeaderView()
+                if viewModel.isSessionActive {
+                    StatusBarView()
                         .transition(.move(edge: .top).combined(with: .opacity))
                 } else {
                     ConnectionControlsView()
@@ -28,11 +23,19 @@ struct ContentView: View {
                 Divider()
 
                 ConversationView()
-                    .opacity(isConnected ? 1.0 : 0.4)
+                    .opacity(viewModel.isSessionActive ? 1.0 : 0.4)
+
+                if viewModel.isSessionActive {
+                    ComposerView()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
-            .animation(.easeInOut(duration: 0.3), value: viewModel.connectionState)
-            .navigationTitle("Voicebot")
+            .animation(.easeInOut(duration: 0.3), value: viewModel.isSessionActive)
+            .navigationTitle("Seneschal")
             .environmentObject(viewModel)
+        }
+        .onChange(of: scenePhase) { phase in
+            viewModel.handleScenePhase(phase)
         }
     }
 }
