@@ -81,6 +81,8 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 | Testing guidelines | [`doc/testing.md`](doc/testing.md) |
 | Git workflow & issue process | [`doc/git-workflow.md`](doc/git-workflow.md) |
 | Common workflows | [`doc/common-workflows.md`](doc/common-workflows.md) |
+| iOS / watch companion (dual-channel) | [`doc/IOS_COMPANION.md`](doc/IOS_COMPANION.md) |
+| Apple Watch networking constraints | [`doc/APPLE_WATCH_CLIENT.md`](doc/APPLE_WATCH_CLIENT.md) |
 
 ---
 
