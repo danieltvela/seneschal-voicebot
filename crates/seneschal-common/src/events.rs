@@ -17,7 +17,8 @@ pub enum ProactiveEvent {
         task_id: String,
         agent_name: String,
         question: String,
-        options: Vec<String>,
+        /// Structured ACP options (`optionId` + label + kind). Not display-only strings.
+        options: Vec<crate::permission::PermissionOptionWire>,
         response_tx: tokio::sync::oneshot::Sender<String>,
     },
     /// L1 memory context is saturated.

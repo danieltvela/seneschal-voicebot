@@ -40,6 +40,7 @@ use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
 use seneschal_common::tools::{ConversationMode, ToolRegistry};
+use seneschal_common::{PermissionGate, ResolveOutcome, map_transcript_to_option_id};
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
 use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
 use seneschal_core::audio::audio_transform::resample_nearest;
@@ -63,9 +64,7 @@ use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin
 use seneschal_extras::analysis::ContextLens;
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
 use seneschal_extras::{
-    RunAgentTool,
-    conversation_mode::SetConversationModeTool,
-    run_agent::{ActiveTask, PendingInteractionEntry},
+    RunAgentTool, conversation_mode::SetConversationModeTool, run_agent::ActiveTask,
 };
 use seneschal_mcp::mcp::McpToolProxy;
 use seneschal_memory::{SDreamConfig, SDreamDaemon};
@@ -1060,48 +1059,64 @@ async fn async_main() -> Result<()> {
     #[cfg(not(feature = "tui"))]
     let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = None;
 
-    // ── Bridge ACP session events → TUI agent task events ─────────────────────
-    #[cfg(feature = "tui")]
+    // ── Bridge ACP session events → TUI + Control agent task events ───────────
+    #[cfg(any(feature = "tui", feature = "control"))]
     {
         let mut session_rx = session_manager.create_event_listener();
+        #[cfg(feature = "tui")]
         let tui_tx_bridge = tui_tx.clone();
+        #[cfg(feature = "control")]
+        let ctrl_bridge = control_broadcast.clone();
         tokio::spawn(async move {
             use seneschal_agents::session_manager::{SessionEvent, SessionStatus};
             let mut buffers: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             while let Some(event) = session_rx.recv().await {
-                let tui_event = match &event {
+                // Map to a small internal enum so both surfaces stay in lockstep.
+                enum AgentUi {
+                    Started {
+                        task_id: String,
+                        agent_name: String,
+                        objective: String,
+                    },
+                    Running {
+                        task_id: String,
+                        objective: String,
+                    },
+                    Finalizing {
+                        task_id: String,
+                        objective: String,
+                    },
+                    Failed {
+                        task_id: String,
+                        message: String,
+                    },
+                }
+
+                let mapped = match &event {
                     SessionEvent::Status {
                         agent_name,
                         session_id,
                         status,
                         ..
                     } => match status {
-                        SessionStatus::Started => {
-                            Some(seneschal_tui::events::TuiEvent::AgentTaskStarted {
-                                task_id: session_id.clone(),
-                                agent_name: agent_name.clone(),
-                                objective: String::new(),
-                            })
-                        }
-                        SessionStatus::Busy => {
-                            Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
-                                task_id: session_id.clone(),
-                                objective: String::new(),
-                            })
-                        }
-                        SessionStatus::Done => {
-                            Some(seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
-                                task_id: session_id.clone(),
-                                objective: String::new(),
-                            })
-                        }
-                        SessionStatus::Error => {
-                            Some(seneschal_tui::events::TuiEvent::AgentTaskFailed {
-                                task_id: session_id.clone(),
-                                message: "Error de sesión ACP".to_string(),
-                            })
-                        }
+                        SessionStatus::Started => Some(AgentUi::Started {
+                            task_id: session_id.clone(),
+                            agent_name: agent_name.clone(),
+                            objective: String::new(),
+                        }),
+                        SessionStatus::Busy => Some(AgentUi::Running {
+                            task_id: session_id.clone(),
+                            objective: String::new(),
+                        }),
+                        SessionStatus::Done => Some(AgentUi::Finalizing {
+                            task_id: session_id.clone(),
+                            objective: String::new(),
+                        }),
+                        SessionStatus::Error => Some(AgentUi::Failed {
+                            task_id: session_id.clone(),
+                            message: "Error de sesión ACP".to_string(),
+                        }),
                         _ => None,
                     },
                     SessionEvent::ToolCall {
@@ -1109,7 +1124,7 @@ async fn async_main() -> Result<()> {
                         session_id,
                         tool_name,
                         ..
-                    } => Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                    } => Some(AgentUi::Running {
                         task_id: session_id.clone(),
                         objective: format!("llamando a {tool_name}..."),
                     }),
@@ -1124,7 +1139,7 @@ async fn async_main() -> Result<()> {
                         } else {
                             result.clone()
                         };
-                        Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                        Some(AgentUi::Running {
                             task_id: session_id.clone(),
                             objective: format!("✅ {tool_name}: {summary}"),
                         })
@@ -1143,7 +1158,7 @@ async fn async_main() -> Result<()> {
                         if should_emit {
                             let msg = buf.clone();
                             buf.clear();
-                            Some(seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                            Some(AgentUi::Running {
                                 task_id: session_id.clone(),
                                 objective: msg,
                             })
@@ -1155,15 +1170,75 @@ async fn async_main() -> Result<()> {
                         session_id,
                         message,
                         ..
-                    } => Some(seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                    } => Some(AgentUi::Failed {
                         task_id: session_id.clone(),
                         message: message.clone(),
                     }),
                     _ => None,
                 };
-                if let Some(ev) = tui_event {
-                    if tui_tx_bridge.send(ev).is_err() {
-                        break; // TUI closed
+
+                if let Some(ui) = mapped {
+                    #[cfg(feature = "tui")]
+                    {
+                        let tui_ev = match &ui {
+                            AgentUi::Started {
+                                task_id,
+                                agent_name,
+                                objective,
+                            } => seneschal_tui::events::TuiEvent::AgentTaskStarted {
+                                task_id: task_id.clone(),
+                                agent_name: agent_name.clone(),
+                                objective: objective.clone(),
+                            },
+                            AgentUi::Running { task_id, objective } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                    task_id: task_id.clone(),
+                                    objective: objective.clone(),
+                                }
+                            }
+                            AgentUi::Finalizing { task_id, objective } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                    task_id: task_id.clone(),
+                                    objective: objective.clone(),
+                                }
+                            }
+                            AgentUi::Failed { task_id, message } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                                    task_id: task_id.clone(),
+                                    message: message.clone(),
+                                }
+                            }
+                        };
+                        if tui_tx_bridge.send(tui_ev).is_err() {
+                            // TUI closed — keep Control bridge alive if enabled.
+                            #[cfg(not(feature = "control"))]
+                            break;
+                        }
+                    }
+                    #[cfg(feature = "control")]
+                    {
+                        use seneschal_control::control::broadcast::ControlEvent;
+                        let ctrl_ev = match ui {
+                            AgentUi::Started {
+                                task_id,
+                                agent_name,
+                                objective,
+                            } => ControlEvent::AgentTaskStarted {
+                                task_id,
+                                agent_name,
+                                objective,
+                            },
+                            AgentUi::Running { task_id, objective } => {
+                                ControlEvent::AgentTaskRunning { task_id, objective }
+                            }
+                            AgentUi::Finalizing { task_id, objective } => {
+                                ControlEvent::AgentTaskFinalizing { task_id, objective }
+                            }
+                            AgentUi::Failed { task_id, message } => {
+                                ControlEvent::AgentTaskFailed { task_id, message }
+                            }
+                        };
+                        ctrl_bridge.send(ctrl_ev);
                     }
                 }
             }
@@ -1173,8 +1248,8 @@ async fn async_main() -> Result<()> {
     let announcement_window = Arc::new(std::sync::Mutex::new(
         seneschal_core::pipeline::AnnouncementWindow::new(),
     ));
-    let mut pending_agent_questions: std::collections::VecDeque<PendingInteractionEntry> =
-        std::collections::VecDeque::new();
+    // Shared with Control API (when enabled). Voice path works with control off.
+    let permission_gate = Arc::new(PermissionGate::new());
 
     let utterance_epoch = Arc::new(AtomicU64::new(0));
 
@@ -1404,6 +1479,7 @@ async fn async_main() -> Result<()> {
             transcript_tx: transcript_tx.clone(),
             llm_session: Arc::clone(&llm_session),
             db: db.clone(),
+            permission_gate: Arc::clone(&permission_gate),
         });
         tokio::spawn(async move {
             if let Err(e) =
@@ -1531,6 +1607,22 @@ async fn async_main() -> Result<()> {
                                             })
                                             .ok();
                                     }
+                                    #[cfg(feature = "control")]
+                                    {
+                                        const MAX_RESULT: usize = 32 * 1024;
+                                        let wire_result = if result.len() > MAX_RESULT {
+                                            format!("{}…[truncated]", &result[..MAX_RESULT])
+                                        } else {
+                                            result.clone()
+                                        };
+                                        control_broadcast.send(
+                                            seneschal_control::control::broadcast::ControlEvent::AgentTaskCompleted {
+                                                task_id: task.clone(),
+                                                objective: task.clone(),
+                                                result: wire_result,
+                                            },
+                                        );
+                                    }
 
                                     if let Some(id) = tool_call_id {
                                         // Inject as proper tool-role message to satisfy OpenAI API contract:
@@ -1573,48 +1665,50 @@ async fn async_main() -> Result<()> {
                                 ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
                                     #[cfg(feature = "tui")]
                                     {
-                                        let a_name = agent_name.clone();
-                                        let desc = question.clone();
-                                        let opts = options.clone();
+                                        let display_opts: Vec<String> = options
+                                            .iter()
+                                            .map(|o| o.display_label())
+                                            .collect();
                                         tui_tx
                                             .send(
                                                 seneschal_tui::events::TuiEvent::AgentTaskPermissionRequested {
                                                     task_id: task_id.clone(),
-                                                    agent_name: a_name,
-                                                    description: desc,
-                                                    options: opts,
+                                                    agent_name: agent_name.clone(),
+                                                    description: question.clone(),
+                                                    options: display_opts,
                                                 },
                                             )
                                             .ok();
                                     }
+                                    #[cfg(feature = "control")]
+                                    control_broadcast.send(
+                                        seneschal_control::control::broadcast::ControlEvent::AgentPermissionRequested {
+                                            task_id: task_id.clone(),
+                                            agent_name: agent_name.clone(),
+                                            description: question.clone(),
+                                            options: options.clone(),
+                                        },
+                                    );
 
                                     if pipeline_state_rx.borrow().is_busy() {
                                         events.barge_in_tx.send(0).ok();
                                         announcement_window.lock().unwrap().interrupt();
                                     }
-                                    // Voice path: relay voice answer to the original response_tx.
-                                    let (voice_tx, voice_rx) = tokio::sync::oneshot::channel::<String>();
-                                    tokio::spawn(async move {
-                                        if let Ok(ans) = voice_rx.await {
-                                            let _ = response_tx.send(ans);
-                                        }
-                                    });
-                                    let entry = PendingInteractionEntry {
+                                    let opts_str = options
+                                        .iter()
+                                        .map(|o| o.display_label())
+                                        .collect::<Vec<_>>()
+                                        .join(" / ");
+                                    let prompt = seneschal_common::i18n::get_notification("acp_permission", &config.language)
+                                        .replace("{question}", &question)
+                                        .replace("{opts_str}", &opts_str);
+                                    permission_gate.enqueue(
                                         task_id,
                                         agent_name,
-                                        server_request_id: 0,
                                         question,
                                         options,
-                                        response_tx: voice_tx,
-                                    };
-                                    pending_agent_questions.push_back(entry);
-                                    let opts_str = match pending_agent_questions.front() {
-                                        Some(entry) => entry.options.join(" / "),
-                                        None => String::new(),
-                                    };
-                                    let prompt = seneschal_common::i18n::get_notification("acp_permission", &config.language)
-                                        .replace("{question}", &pending_agent_questions.front().map(|e| e.question.clone()).unwrap_or_default())
-                                        .replace("{opts_str}", &opts_str);
+                                        response_tx,
+                                    );
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
                                 }
                                 ProactiveEvent::PluginSwitch { .. } => {
@@ -1663,41 +1757,67 @@ async fn async_main() -> Result<()> {
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
                                 }
                                 ProactiveEvent::AgentMilestone { agent_name: _, milestone, .. } => {
+                                    // Heuristic ES/EN substring mapping is known quality debt (design #190).
+                                    let milestone_text = milestone.clone();
+                                    let lower = milestone_text.to_lowercase();
+                                    let kind = if lower.contains("ejecución")
+                                        || lower.contains("running")
+                                        || lower.contains("procesando")
+                                    {
+                                        "running"
+                                    } else if lower.contains("finalizando")
+                                        || lower.contains("organizando")
+                                        || lower.contains("complet")
+                                    {
+                                        "finalizing"
+                                    } else if lower.contains("delegación")
+                                        || lower.contains("delegated")
+                                        || lower.contains("proyecto")
+                                    {
+                                        "delegated"
+                                    } else {
+                                        "running"
+                                    };
                                     #[cfg(feature = "tui")]
                                     {
-                                        let milestone_text = milestone.clone();
-                                        let lower = milestone_text.to_lowercase();
-                                        let tui_ev = if lower.contains("ejecución")
-                                            || lower.contains("running")
-                                            || lower.contains("procesando")
-                                        {
-                                            seneschal_tui::events::TuiEvent::AgentTaskRunning {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text,
+                                        let tui_ev = match kind {
+                                            "finalizing" => {
+                                                seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                }
                                             }
-                                        } else if lower.contains("finalizando")
-                                            || lower.contains("organizando")
-                                            || lower.contains("complet")
-                                        {
-                                            seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text,
+                                            "delegated" => {
+                                                seneschal_tui::events::TuiEvent::AgentTaskDelegated {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                }
                                             }
-                                        } else if lower.contains("delegación")
-                                            || lower.contains("delegated")
-                                            || lower.contains("proyecto")
-                                        {
-                                            seneschal_tui::events::TuiEvent::AgentTaskDelegated {
+                                            _ => seneschal_tui::events::TuiEvent::AgentTaskRunning {
                                                 task_id: milestone_text.clone(),
-                                                objective: milestone_text,
-                                            }
-                                        } else {
-                                            seneschal_tui::events::TuiEvent::AgentTaskRunning {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text,
-                                            }
+                                                objective: milestone_text.clone(),
+                                            },
                                         };
                                         tui_tx.send(tui_ev).ok();
+                                    }
+                                    #[cfg(feature = "control")]
+                                    {
+                                        use seneschal_control::control::broadcast::ControlEvent;
+                                        let ctrl_ev = match kind {
+                                            "finalizing" => ControlEvent::AgentTaskFinalizing {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                            "delegated" => ControlEvent::AgentTaskDelegated {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                            _ => ControlEvent::AgentTaskRunning {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                        };
+                                        control_broadcast.send(ctrl_ev);
                                     }
 
                                     // Speak the milestone text via TTS so the user hears progress.
@@ -1975,24 +2095,74 @@ async fn async_main() -> Result<()> {
                                     *non_user_streak.lock().unwrap() = 0;
                                 }
 
-                                // ── ACP permission gate (FIFO queue) ──────────────────
-                                if let Some(entry) = pending_agent_questions.pop_front() {
+                                // ── ACP permission gate (FIFO via PermissionGate) ─────
+                                if let Some(claim) = permission_gate.claim_front_for_voice() {
                                     let audio_for_task = audio.clone();
                                     let stt_cfg = config.clone();
+                                    let gate = Arc::clone(&permission_gate);
+                                    #[cfg(feature = "control")]
+                                    let ctrl = control_broadcast.clone();
 
-                                    info!(target: "acp", "Answering pending question for task={} agent={}", entry.task_id, entry.agent_name);
+                                    info!(
+                                        target: "acp",
+                                        "Answering pending question for task={} agent={}",
+                                        claim.task_id, claim.agent_name
+                                    );
 
                                     tokio::spawn(async move {
                                         let t0 = Instant::now();
                                         let answer = if let Ok(provider) = create_provider(&stt_cfg) {
-                                            provider.transcribe_complete(&audio_for_task).map(|q| q.text).unwrap_or_default()
+                                            provider
+                                                .transcribe_complete(&audio_for_task)
+                                                .map(|q| q.text)
+                                                .unwrap_or_default()
                                         } else {
                                             String::new()
                                         };
-                                        info!(target: "acp", "STT for permission question took {}ms", t0.elapsed().as_millis());
-                                        let outcome = map_answer_to_outcome(&answer);
-                                        info!(target: "acp", "Permission answer: {:?} → {}", answer, outcome);
-                                        let _ = entry.response_tx.send(outcome);
+                                        info!(
+                                            target: "acp",
+                                            "STT for permission question took {}ms",
+                                            t0.elapsed().as_millis()
+                                        );
+                                        let option_id =
+                                            map_transcript_to_option_id(&answer, &claim.options);
+                                        info!(
+                                            target: "acp",
+                                            "Permission answer: {:?} → {}",
+                                            answer, option_id
+                                        );
+                                        match gate.resolve(&claim.task_id, &option_id) {
+                                            ResolveOutcome::Sent => {
+                                                #[cfg(feature = "control")]
+                                                ctrl.send(
+                                                    seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
+                                                        task_id: claim.task_id,
+                                                        option_id,
+                                                    },
+                                                );
+                                            }
+                                            ResolveOutcome::ReceiverDropped => {
+                                                info!(
+                                                    target: "acp",
+                                                    "Permission oneshot closed (ACP timeout) for task={}",
+                                                    claim.task_id
+                                                );
+                                                #[cfg(feature = "control")]
+                                                ctrl.send(
+                                                    seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
+                                                        task_id: claim.task_id,
+                                                        option_id: "cancelled".into(),
+                                                    },
+                                                );
+                                            }
+                                            ResolveOutcome::Unknown => {
+                                                debug!(
+                                                    target: "acp",
+                                                    "Permission slot gone (HTTP race or cleanup) for task={}",
+                                                    claim.task_id
+                                                );
+                                            }
+                                        }
                                     });
                                     continue;
                                 }
@@ -2150,26 +2320,6 @@ async fn run_dream_mode(config: &Config) -> Result<()> {
 
     info!(target: "seneschal", "S-DREAM standalone cycle complete; exiting");
     Ok(())
-}
-
-/// Map a spoken yes/no transcript to an ACP permission outcome string.
-fn map_answer_to_outcome(transcript: &str) -> String {
-    let t = transcript.to_lowercase();
-    if t.contains("sí")
-        || t.contains("si")
-        || t.contains("yes")
-        || t.contains("claro")
-        || t.contains("dale")
-        || t.contains("ok")
-        || t.contains("adelante")
-        || t.contains("permite")
-        || t.contains("permiso")
-        || t.contains("autorizo")
-    {
-        "allow_once".to_string()
-    } else {
-        "reject_once".to_string()
-    }
 }
 
 #[cfg(test)]

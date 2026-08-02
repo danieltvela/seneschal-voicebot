@@ -302,7 +302,9 @@ An HTTP + SSE server (built on axum) for external management of the seneschal.
 | `/control/history` | GET | Conversation history |
 | `/control/mute` | POST | Toggle TTS mute |
 | `/control/barge_in` | POST | Trigger barge-in (cancel current pipeline) |
-| `/control/input` | POST | Send text input to the pipeline |
+| `/control/input` | POST | Send text input to the pipeline (409 if agent permission pending) |
+| `/control/permissions` | GET | Pending/resolving agent permission slots |
+| `/control/permission` | POST | Resolve permission `{task_id, option_id}` (ACP optionId) |
 
 `ControlEvent` types include: `StateChanged` (stable tokens `idle` | `listening` |
 `thinking` | `speaking` | `paused`, optional `pause_reason`), `Transcript`,
