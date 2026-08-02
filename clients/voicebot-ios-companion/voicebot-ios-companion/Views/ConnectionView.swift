@@ -85,55 +85,83 @@ struct ConversationView: View {
     @State private var showTimestamps = false
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                if vm.chatMessages.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "bubble.left.and.bubble.right")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary.opacity(0.5))
-                        Text(vm.isSessionActive ? "No messages yet" : "Connect to Seneschal")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                        Text(
-                            vm.isSessionActive
-                                ? "Speak or type a message"
-                                : "Enter host and ports to begin"
-                        )
+        VStack(spacing: 0) {
+            if let err = vm.errorMessage, vm.isSessionActive {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(err)
                         .font(.caption)
-                        .foregroundColor(.secondary.opacity(0.7))
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        vm.errorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
                     }
-                    .padding(.top, 80)
-                    .frame(maxWidth: .infinity)
-                } else {
-                    LazyVStack(spacing: 8) {
-                        ForEach(vm.chatMessages) { msg in
-                            MessageBubble(
-                                message: msg,
-                                showTimestamp: showTimestamps
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss error")
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.12))
+                .accessibilityIdentifier("conversationErrorBanner")
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if vm.chatMessages.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.system(size: 40))
+                                .foregroundColor(.secondary.opacity(0.5))
+                            Text(vm.isSessionActive ? "No messages yet" : "Connect to Seneschal")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                            Text(
+                                vm.isSessionActive
+                                    ? "Speak or type a message"
+                                    : "Enter host and ports to begin"
                             )
-                            .id(msg.id.uuidString)
-                            .onTapGesture {
-                                withAnimation { showTimestamps.toggle() }
+                            .font(.caption)
+                            .foregroundColor(.secondary.opacity(0.7))
+                        }
+                        .padding(.top, 80)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("conversationEmpty")
+                    } else {
+                        LazyVStack(spacing: 8) {
+                            ForEach(vm.chatMessages) { msg in
+                                MessageBubble(
+                                    message: msg,
+                                    showTimestamp: showTimestamps
+                                )
+                                .id(msg.id.uuidString)
+                                .onTapGesture {
+                                    withAnimation { showTimestamps.toggle() }
+                                }
+                            }
+                            if vm.isGenerating {
+                                HStack {
+                                    TypingIndicator()
+                                    Spacer()
+                                }
+                                .padding(.leading, 12)
                             }
                         }
-                        if vm.isGenerating {
-                            HStack {
-                                TypingIndicator()
-                                Spacer()
-                            }
-                            .padding(.leading, 12)
+                        .padding()
+                        .accessibilityIdentifier("conversationList")
+                        .onChange(of: vm.chatMessages.count) { _ in
+                            scrollToLatest(proxy: proxy)
                         }
-                    }
-                    .padding()
-                    .accessibilityIdentifier("conversationList")
-                    .onChange(of: vm.chatMessages.count) { _ in
-                        scrollToLatest(proxy: proxy)
+                        .onChange(of: vm.isGenerating) { _ in
+                            scrollToLatest(proxy: proxy)
+                        }
                     }
                 }
-            }
-            .onAppear {
-                scrollToLatest(proxy: proxy)
+                .onAppear {
+                    scrollToLatest(proxy: proxy)
+                }
             }
         }
     }

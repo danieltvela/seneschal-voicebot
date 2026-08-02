@@ -46,6 +46,13 @@ final class CompanionViewModel: ObservableObject {
     @Published var ttsMuted: Bool = false
     @Published var pendingPermission: PermissionRequest?
     @Published var controlBanner: String?
+    /// Ephemeral tool/system/agent/error events from Control SSE (not chat history).
+    @Published private(set) var timeline: [TimelineItem] = []
+    /// Classification chip when host emits Classification events.
+    @Published var classificationChip: String?
+
+    /// Cap timeline growth in long sessions.
+    private let maxTimelineItems = 200
 
     /// True while a connect() is in flight (disables Connect button).
     var isConnecting: Bool {
@@ -209,6 +216,8 @@ final class CompanionViewModel: ObservableObject {
         pipelineState = .unknown
         pendingPermission = nil
         controlBanner = nil
+        timeline = []
+        classificationChip = nil
         isGenerating = false
         tokenSource = .none
         activeUtteranceId = nil
@@ -216,6 +225,10 @@ final class CompanionViewModel: ObservableObject {
         if !preserveHostSettings {
             errorMessage = nil
         }
+    }
+
+    func clearTimeline() {
+        timeline = []
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
@@ -584,11 +597,22 @@ final class CompanionViewModel: ObservableObject {
                 description: description,
                 options: options
             )
+            appendTimeline(from: event)
 
         case .agentPermissionResolved(let taskId, _):
             if pendingPermission?.taskId == taskId {
                 pendingPermission = nil
             }
+            appendTimeline(from: event)
+
+        case .toolCall, .systemNotification, .mcpNotification,
+             .agentTaskStarted, .agentTaskRunning, .agentTaskDelegated,
+             .agentTaskFinalizing, .agentTaskCompleted, .agentTaskFailed:
+            appendTimeline(from: event)
+
+        case .classification(let intent, let level, let forced, _):
+            classificationChip = forced ? "\(intent)*" : "\(intent) · \(level)"
+            appendTimeline(from: event)
 
         case .error(let message):
             if message.contains("Missed") {
@@ -599,10 +623,20 @@ final class CompanionViewModel: ObservableObject {
                 }
             } else {
                 errorMessage = message
+                appendTimeline(from: event)
             }
 
-        default:
+        case .ttsStart, .unknown:
             break
+        }
+    }
+
+    private func appendTimeline(from event: ControlEvent) {
+        guard let item = TimelineItem.from(controlEvent: event) else { return }
+        // Upsert latest agent row by task_id+status family: keep history of lifecycle steps.
+        timeline.append(item)
+        if timeline.count > maxTimelineItems {
+            timeline.removeFirst(timeline.count - maxTimelineItems)
         }
     }
 
