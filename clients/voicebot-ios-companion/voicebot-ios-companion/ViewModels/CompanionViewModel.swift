@@ -45,11 +45,20 @@ final class CompanionViewModel: ObservableObject {
     @Published var pipelineState: CompanionPipelineState = .unknown
     @Published var ttsMuted: Bool = false
     @Published var pendingPermission: PermissionRequest?
+    /// User tapped "Later" — keep pending but hide sheet until reopened.
+    @Published var permissionSheetDismissedByUser = false
+    @Published var isResolvingPermission = false
+    @Published var permissionResolveError: String?
     @Published var controlBanner: String?
     /// Ephemeral tool/system/agent/error events from Control SSE (not chat history).
     @Published private(set) var timeline: [TimelineItem] = []
     /// Classification chip when host emits Classification events.
     @Published var classificationChip: String?
+
+    /// Sheet is shown when a permission is pending and not dismissed with "Later".
+    var shouldPresentPermissionSheet: Bool {
+        pendingPermission != nil && !permissionSheetDismissedByUser
+    }
 
     /// Cap timeline growth in long sessions.
     private let maxTimelineItems = 200
@@ -215,6 +224,9 @@ final class CompanionViewModel: ObservableObject {
         connectionState = .disconnected
         pipelineState = .unknown
         pendingPermission = nil
+        permissionSheetDismissedByUser = false
+        isResolvingPermission = false
+        permissionResolveError = nil
         controlBanner = nil
         timeline = []
         classificationChip = nil
@@ -326,17 +338,48 @@ final class CompanionViewModel: ObservableObject {
 
     func resolvePermission(optionId: String) {
         guard let pending = pendingPermission else { return }
+        guard !isResolvingPermission else { return }
+        isResolvingPermission = true
+        permissionResolveError = nil
         Task {
+            defer { isResolvingPermission = false }
             do {
                 try await controlClient?.resolvePermission(
                     taskId: pending.taskId,
                     optionId: optionId
                 )
+                // Prefer clearing on agent_permission_resolved SSE; clear optimistically too.
                 pendingPermission = nil
+                permissionSheetDismissedByUser = false
+                permissionResolveError = nil
+            } catch let err as ControlClientError {
+                if case .badStatus(let code, let body) = err {
+                    switch code {
+                    case 409:
+                        permissionResolveError =
+                            "Already resolved or claimed (HTTP 409). Try voice or dismiss."
+                    case 404:
+                        permissionResolveError = "Permission expired or unknown (HTTP 404)."
+                        pendingPermission = nil
+                    case 400:
+                        permissionResolveError = "Invalid option_id (HTTP 400)."
+                    default:
+                        permissionResolveError = body ?? err.localizedDescription
+                    }
+                } else {
+                    permissionResolveError = err.localizedDescription
+                }
             } catch {
-                errorMessage = error.localizedDescription
+                permissionResolveError = error.localizedDescription
             }
         }
+    }
+
+    /// Re-show PermissionSheet after user chose "Later".
+    func reopenPermissionSheet() {
+        guard pendingPermission != nil else { return }
+        permissionSheetDismissedByUser = false
+        permissionResolveError = nil
     }
 
     // MARK: - Private helpers
@@ -597,11 +640,16 @@ final class CompanionViewModel: ObservableObject {
                 description: description,
                 options: options
             )
+            permissionSheetDismissedByUser = false
+            permissionResolveError = nil
             appendTimeline(from: event)
 
         case .agentPermissionResolved(let taskId, _):
             if pendingPermission?.taskId == taskId {
                 pendingPermission = nil
+                permissionSheetDismissedByUser = false
+                permissionResolveError = nil
+                isResolvingPermission = false
             }
             appendTimeline(from: event)
 
