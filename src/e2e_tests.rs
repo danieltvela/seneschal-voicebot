@@ -242,6 +242,7 @@ impl E2eHarness {
                     true,  // llm_thinking_complex
                     false, // llm_tools_strict
                     None,  // tui_tx
+                    Arc::new(Mutex::new(seneschal_common::ClassifierForceMode::Auto)),
                 )
                 .await;
             })

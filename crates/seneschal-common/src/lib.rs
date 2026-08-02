@@ -19,7 +19,8 @@ pub mod tui_events;
 
 // Re-export the most commonly used types for convenience.
 pub use classifier::{
-    ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent, build_classifier,
+    ClassifierForceMode, ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent,
+    build_classifier,
 };
 pub use config::Config;
 pub use config::SeneschalEnv;

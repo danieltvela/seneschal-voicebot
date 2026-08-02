@@ -22,14 +22,19 @@ An AI agent should execute these tests using `computer_use` and report any failu
     - The "Seneschal" banner or title is visible.
     - The main menu options are displayed.
 
-### Test 02: Classifier Mode Toggle
-- **Goal**: Verify the transition between "Simple" (no thinking) and "Complex" (thinking/tools) modes.
-- **Action**: 
-    1. Identify the current mode in the UI.
-    2. Execute the toggle command (e.g., specific key-bind for Classifier).
-- **Expected Result**: 
-    - The UI reflects the mode change (e.g., a label changing from "SIMPLE" to "COMPLEX").
-    - No crash occurs during the transition.
+### Test 02: Classifier Intent Badge & Force Toggle
+- **Goal**: Verify that automatic SIMPLE/COMPLEX classification is visible on the TUI status bar, and that the debug force override cycles without crashing.
+- **Background**: Intent is classified **per turn** (not a session mode). The status bar shows a badge (`—` until first turn, then `SIMPLE` / `COMPLEX`). `Ctrl+M` cycles force override: `AUTO → SIMPLE → COMPLEX → AUTO` (forced badges show `🔒`).
+- **Action**:
+    1. Boot and identify the classifier badge on the status bar (between conversation mode and INSERT/NORMAL).
+    2. Type `hola` and submit → badge should become **SIMPLE**.
+    3. Type a research-style query (e.g. `Investiga la estructura del proyecto`) and submit → badge should become **COMPLEX**.
+    4. Press **Ctrl+M** once or more to cycle force override; confirm a system notification (`Classifier force: …`) and badge update (`SIMPLE🔒` / `COMPLEX🔒` / clear force).
+- **Expected Result**:
+    - Status bar includes the intent badge (`—` / `SIMPLE` / `COMPLEX`, optional `🔒` when forced).
+    - Automatic classification updates the badge after user turns.
+    - `Ctrl+M` force cycle does not crash.
+    - Shortcuts hint includes `Ctrl+M force`.
 
 ### Test 03: Memory Retrieval
 - **Goal**: Verify that the TUI can query and display information from the memory store.

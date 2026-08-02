@@ -252,6 +252,8 @@ async fn async_main() -> Result<()> {
     let mut tool_registry = ToolRegistry::new();
 
     let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
+    let classifier_force: Arc<Mutex<seneschal_common::ClassifierForceMode>> =
+        Arc::new(Mutex::new(seneschal_common::ClassifierForceMode::Auto));
 
     tool_registry.register(CurrentTimeTool);
     // DISABLED (temp)
@@ -1205,6 +1207,7 @@ async fn async_main() -> Result<()> {
         let llm_think_simple = config.llm_thinking_simple;
         let llm_think_complex = config.llm_thinking_complex;
         let llm_strict = config.llm_tools_strict;
+        let classifier_force_c = Arc::clone(&classifier_force);
         tokio::spawn(async move {
             llm_task(
                 events_c,
@@ -1230,6 +1233,7 @@ async fn async_main() -> Result<()> {
                 llm_think_complex,
                 llm_strict,
                 tui_tx_llm,
+                classifier_force_c,
             )
             .await;
         });
@@ -1336,6 +1340,7 @@ async fn async_main() -> Result<()> {
         let tts_muted_c = Arc::clone(&tts_muted);
         let conv_mode_c = Arc::clone(&conv_mode);
         let prompt_build_c = Arc::clone(&prompt_build_state);
+        let classifier_force_c = Arc::clone(&classifier_force);
         tokio::spawn(async move {
             if let Err(e) = seneschal_tui::run(
                 tui_rx,
@@ -1343,6 +1348,7 @@ async fn async_main() -> Result<()> {
                 tts_muted_c,
                 conv_mode_c,
                 prompt_build_c,
+                classifier_force_c,
             )
             .await
             {

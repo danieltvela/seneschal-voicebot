@@ -8,7 +8,9 @@ use super::frames::PipelineFrame;
 use super::fsm::PipelineState;
 use super::state::PipelineEvents;
 use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken, ToolChoice};
-use seneschal_common::classifier::{ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent};
+use seneschal_common::classifier::{
+    ClassifierForceMode, ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent,
+};
 use seneschal_common::db::Database;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ToolRegistry;
@@ -46,6 +48,7 @@ pub async fn llm_task(
     llm_thinking_complex: bool,
     llm_tools_strict: bool,
     tui_tx: Option<TuiEventTx>,
+    classifier_force: Arc<Mutex<ClassifierForceMode>>,
     #[cfg(feature = "control")] control_broadcast: crate::control::broadcast::ControlBroadcast,
 ) {
     let pipeline_id = PIPELINE_RUN_ID.fetch_add(1, Ordering::SeqCst);
@@ -102,23 +105,24 @@ pub async fn llm_task(
             info!(target: "pipeline", "[pipe={}] User: {}", pipeline_id, text);
         }
 
-        if let Some(ref tx) = tui_tx {
-            if !tool_continuation && !is_system_notification {
-                let source = if is_text_input {
-                    InputSource::Text
-                } else {
-                    InputSource::Voice
-                };
-                tx.send(TuiEvent::UserMessage {
-                    text: text.clone(),
-                    source,
-                })
-                .ok();
-                tx.send(TuiEvent::StateChange(
-                    seneschal_common::tui_events::PipelineState::Thinking,
-                ))
-                .ok();
-            }
+        if let Some(ref tx) = tui_tx
+            && !tool_continuation
+            && !is_system_notification
+        {
+            let source = if is_text_input {
+                InputSource::Text
+            } else {
+                InputSource::Voice
+            };
+            tx.send(TuiEvent::UserMessage {
+                text: text.clone(),
+                source,
+            })
+            .ok();
+            tx.send(TuiEvent::StateChange(
+                seneschal_common::tui_events::PipelineState::Thinking,
+            ))
+            .ok();
         }
         #[cfg(feature = "control")]
         if !tool_continuation && !is_system_notification {
@@ -211,15 +215,29 @@ pub async fn llm_task(
                 // ── Classify intent before LLM call ─────────────────────────────
                 let (request_options, tools_enabled, _result) = if iter == 0 {
                     let is_complex_turn = tool_continuation || is_system_notification;
-                    let res = if is_complex_turn {
-                        ClassifyResult {
-                            intent: Intent::Complex,
-                            level: ClassifierLevel::Heuristic,
-                            confidence: 1.0,
-                            matched_keyword: None,
-                        }
+                    let force = *classifier_force.lock().unwrap();
+                    let (res, forced) = if let Some(forced_intent) = force.as_intent() {
+                        (
+                            ClassifyResult {
+                                intent: forced_intent,
+                                level: ClassifierLevel::Heuristic,
+                                confidence: 1.0,
+                                matched_keyword: None,
+                            },
+                            true,
+                        )
+                    } else if is_complex_turn {
+                        (
+                            ClassifyResult {
+                                intent: Intent::Complex,
+                                level: ClassifierLevel::Heuristic,
+                                confidence: 1.0,
+                                matched_keyword: None,
+                            },
+                            false,
+                        )
                     } else {
-                        classifier.classify(&text).await
+                        (classifier.classify(&text).await, false)
                     };
                     let intent = res.intent;
                     let mut opts = match intent {
@@ -236,19 +254,28 @@ pub async fn llm_task(
                     }
                     // Trace classification
                     info!(target: "classifier",
-                        "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools={}",
+                        "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools={} forced={}",
                         pipeline_id, intent, res.level, res.confidence,
-                        res.matched_keyword, tools_on);
+                        res.matched_keyword, tools_on, forced);
+                    // Surface effective intent on the TUI status bar.
+                    if let Some(ref tx) = tui_tx
+                        && !tool_continuation
+                        && !is_system_notification
+                    {
+                        tx.send(TuiEvent::Classification {
+                            intent,
+                            level: res.level,
+                            forced,
+                        })
+                        .ok();
+                    }
                     // Persist classification for analysis
                     let db_log = db
                         .save_classification(
                             &session_id.to_string(),
                             pipeline_id as i64,
                             &text,
-                            match intent {
-                                Intent::Simple => "SIMPLE",
-                                Intent::Complex => "COMPLEX",
-                            },
+                            intent.as_str(),
                             res.confidence,
                             match res.level {
                                 ClassifierLevel::Heuristic => "Heuristic",
@@ -256,7 +283,7 @@ pub async fn llm_task(
                                 ClassifierLevel::Logistic => "Logistic",
                                 ClassifierLevel::Fallback => "Fallback",
                             },
-                            "cascade",
+                            if forced { "force" } else { "cascade" },
                             res.matched_keyword.as_deref(),
                         )
                         .await;

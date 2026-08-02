@@ -149,3 +149,9 @@ let result = pipeline.classify(text).await;
 The classifier is called before every LLM turn in `llm_task.rs`. Depending on result:
 - `Simple` → thinking off, tools disabled (`tool_choice: "none"`), higher temperature
 - `Complex` → thinking on, tools available, lower temperature
+
+## TUI surface
+
+After each user-turn classification, the pipeline emits `TuiEvent::Classification { intent, level, forced }`. The TUI status bar shows a badge (`—` / `SIMPLE` / `COMPLEX`; `🔒` suffix when forced).
+
+**Debug force override (`Ctrl+M`):** cycles shared `ClassifierForceMode` (`Auto → ForceSimple → ForceComplex → Auto`). When not `Auto`, `llm_task` skips the cascade and uses the forced intent for subsequent turns until returned to `Auto`.

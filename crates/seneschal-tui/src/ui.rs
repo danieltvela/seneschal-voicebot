@@ -8,6 +8,7 @@ use ratatui::{
 
 use super::app::{AgentTaskStatus, App, ChatMessage, InputMode, Role};
 use super::events::{InputSource, PipelineState};
+use seneschal_common::classifier::{ClassifierForceMode, Intent};
 use seneschal_common::tools::ConversationMode;
 
 const MAX_INPUT_ROWS: u16 = 4;
@@ -632,6 +633,36 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Status-bar label for last/forced classifier intent.
+///
+/// - Force active → show forced intent with 🔒 (even before a turn runs).
+/// - Last classification present → `SIMPLE` / `COMPLEX` (🔒 if that turn was forced).
+/// - Otherwise → `—` (no classification yet, Auto mode).
+fn intent_status_label(
+    last_intent: Option<Intent>,
+    force: ClassifierForceMode,
+    last_forced: bool,
+) -> (String, Color) {
+    if let Some(intent) = force.as_intent() {
+        return (format!("{}🔒", intent.as_str()), Color::Yellow);
+    }
+    match last_intent {
+        Some(intent) => {
+            let label = if last_forced {
+                format!("{}🔒", intent.as_str())
+            } else {
+                intent.as_str().to_string()
+            };
+            let color = match intent {
+                Intent::Simple => Color::Cyan,
+                Intent::Complex => Color::Magenta,
+            };
+            (label, color)
+        }
+        None => ("—".to_string(), Color::Rgb(100, 100, 100)),
+    }
+}
+
 /// Render the status bar at the bottom of the viewport.
 fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let (state_label, state_color) = match app.state {
@@ -655,6 +686,10 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         ConversationMode::AmbientLocked => ("AMBIENT🔒", Color::Yellow),
     };
 
+    let force = *app.classifier_force.lock().unwrap();
+    let (intent_label, intent_color) =
+        intent_status_label(app.last_intent, force, app.last_intent_forced);
+
     let mode_label = match app.input_mode {
         InputMode::Insert => "INSERT",
         InputMode::Normal => "NORMAL",
@@ -672,10 +707,12 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(" │ "),
         Span::styled(conv_label, Style::default().fg(conv_color)),
         Span::raw(" │ "),
+        Span::styled(intent_label, Style::default().fg(intent_color)),
+        Span::raw(" │ "),
         Span::styled(mode_label, Style::default().fg(Color::Yellow)),
         Span::raw(" │ "),
         Span::styled(
-            "Ctrl+T TTS  i insert  Esc normal  Ctrl+C quit",
+            "Ctrl+T TTS  Ctrl+M force  i insert  Esc normal  Ctrl+C quit",
             Style::default().fg(Color::Rgb(100, 100, 100)),
         ),
     ])]);
@@ -819,6 +856,25 @@ mod tests {
     #[test]
     fn indented_line_counts_spaces_in_width() {
         assert_eq!(word_wrap_plain("  ab cd", 6), vec!["  ab", "cd"]);
+    }
+
+    #[test]
+    fn intent_badge_none_auto() {
+        let (label, _) = intent_status_label(None, ClassifierForceMode::Auto, false);
+        assert_eq!(label, "—");
+    }
+
+    #[test]
+    fn intent_badge_last_simple() {
+        let (label, _) =
+            intent_status_label(Some(Intent::Simple), ClassifierForceMode::Auto, false);
+        assert_eq!(label, "SIMPLE");
+    }
+
+    #[test]
+    fn intent_badge_force_complex() {
+        let (label, _) = intent_status_label(None, ClassifierForceMode::ForceComplex, false);
+        assert_eq!(label, "COMPLEX🔒");
     }
 
     #[test]

@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use super::events::{InputSource, PipelineState, TuiEvent};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use seneschal_common::classifier::{ClassifierForceMode, Intent};
 use seneschal_common::tools::{ConversationMode, PromptBuildState};
 
 /// Action returned by key event handling.
@@ -11,6 +12,8 @@ pub enum Action {
     /// Send typed text to the main Seneschal pipeline.
     SubmitToSeneschal(String),
     ToggleTts,
+    /// Cycle classifier force override: Auto → SIMPLE → COMPLEX → Auto.
+    CycleClassifierForce,
 }
 
 /// Keyboard modal mode (vim-like).
@@ -95,6 +98,12 @@ pub struct App {
     pub conv_mode: Arc<Mutex<ConversationMode>>,
     /// Shared prompt-build state — read each render tick directly from the pipeline.
     pub prompt_build_state: Arc<Mutex<PromptBuildState>>,
+    /// Shared classifier force override — written by Ctrl+M, read by llm_task.
+    pub classifier_force: Arc<Mutex<ClassifierForceMode>>,
+    /// Last effective intent shown on the status bar (`None` until first classification).
+    pub last_intent: Option<Intent>,
+    /// Whether the last classification came from the force override.
+    pub last_intent_forced: bool,
     /// Normal vs Insert keyboard mode.
     pub input_mode: InputMode,
 }
@@ -103,6 +112,7 @@ impl App {
     pub fn new(
         conv_mode: Arc<Mutex<ConversationMode>>,
         prompt_build_state: Arc<Mutex<PromptBuildState>>,
+        classifier_force: Arc<Mutex<ClassifierForceMode>>,
     ) -> Self {
         Self {
             input: String::new(),
@@ -113,6 +123,9 @@ impl App {
             tts_enabled: true,
             conv_mode,
             prompt_build_state,
+            classifier_force,
+            last_intent: None,
+            last_intent_forced: false,
             should_quit: false,
             input_mode: InputMode::Insert,
         }
@@ -143,6 +156,14 @@ impl App {
                     timestamp: chrono::Local::now(),
                     agent_task: None,
                 });
+            }
+            TuiEvent::Classification {
+                intent,
+                level: _,
+                forced,
+            } => {
+                self.last_intent = Some(intent);
+                self.last_intent_forced = forced;
             }
             TuiEvent::AssistantToken(token) => {
                 self.streaming_buffer.push_str(&token);
@@ -220,13 +241,13 @@ impl App {
                 objective,
             } => {
                 // Dedup: skip if already exists and not terminal.
-                if let Some(existing) = self.find_agent_task_mut(&task_id) {
-                    if !matches!(
+                if let Some(existing) = self.find_agent_task_mut(&task_id)
+                    && !matches!(
                         existing.agent_task.as_ref().map(|i| &i.status),
                         Some(AgentTaskStatus::Completed) | Some(AgentTaskStatus::Failed)
-                    ) {
-                        return;
-                    }
+                    )
+                {
+                    return;
                 }
                 self.messages.push(ChatMessage::agent_task(
                     AgentTaskInfo {
@@ -380,6 +401,7 @@ impl App {
             match code {
                 KeyCode::Char('c') => return Some(Action::Quit),
                 KeyCode::Char('t') => return Some(Action::ToggleTts),
+                KeyCode::Char('m') => return Some(Action::CycleClassifierForce),
                 _ => {}
             }
         }
@@ -478,6 +500,7 @@ mod tests {
         App::new(
             Arc::new(Mutex::new(ConversationMode::Active)),
             Arc::new(Mutex::new(PromptBuildState::Inactive)),
+            Arc::new(Mutex::new(ClassifierForceMode::Auto)),
         )
     }
 
@@ -531,5 +554,34 @@ mod tests {
     fn destination_label() {
         let app = test_app();
         assert_eq!(app.input_destination_label(), "→ Seneschal");
+    }
+
+    #[test]
+    fn ctrl_m_cycles_classifier_force() {
+        let mut app = test_app();
+        let action = app.handle_key_event(key(KeyCode::Char('m'), KeyModifiers::CONTROL));
+        assert!(matches!(action, Some(Action::CycleClassifierForce)));
+    }
+
+    #[test]
+    fn classification_event_updates_last_intent() {
+        use seneschal_common::classifier::ClassifierLevel;
+        let mut app = test_app();
+        assert!(app.last_intent.is_none());
+        app.handle_tui_event(TuiEvent::Classification {
+            intent: Intent::Simple,
+            level: ClassifierLevel::Heuristic,
+            forced: false,
+        });
+        assert_eq!(app.last_intent, Some(Intent::Simple));
+        assert!(!app.last_intent_forced);
+
+        app.handle_tui_event(TuiEvent::Classification {
+            intent: Intent::Complex,
+            level: ClassifierLevel::Fallback,
+            forced: true,
+        });
+        assert_eq!(app.last_intent, Some(Intent::Complex));
+        assert!(app.last_intent_forced);
     }
 }
