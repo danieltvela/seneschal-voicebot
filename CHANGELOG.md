@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Modular Workspace Carve-Out
 
+### Fixed
+- **#191 KV cache invalidation on intent flip**: conversational LLM requests always include the full tool definitions; Simple only sets `tool_choice: "none"` (plus temperature). Omitting tools on Simple was invalidating server-side prompt KV cache and spiking TTFT.
+
 ### Breaking Changes
 - **Workspace restructured**: Monolithic `src/` (~25k LOC) split into 13 crates under `crates/`
 - **Feature flags**: All accreted crates are now opt-in via `[features]` in Cargo.toml

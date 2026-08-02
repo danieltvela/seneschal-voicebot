@@ -215,26 +215,24 @@ impl OpenAIClient {
             None => ToolChoice::Auto,
         });
 
-        if tool_choice_override == ToolChoice::None || tools.is_empty() {
-            // No tools (or explicit "none") → use thinking via chat_template_kwargs.
-            if tool_choice_override == ToolChoice::None {
-                payload["tool_choice"] = serde_json::json!("none");
-            }
-            if !tools.is_empty() && tool_choice_override == ToolChoice::None {
-                // tools were supplied but explicitly disabled — still omit tools field
-            } else if tools.is_empty() {
-                // normal Simple path
-            }
-            payload["chat_template_kwargs"] =
-                serde_json::json!({"enable_thinking": effective_thinking});
-        } else {
+        // Always include `tools` when non-empty so the request shape stays
+        // stable across Simple/Complex turns (KV-cache prefix reuse, #191).
+        // `tool_choice: "none"` disables *use* without stripping definitions.
+        if !tools.is_empty() {
             payload["tools"] = serde_json::json!(tools);
             payload["tool_choice"] = match tool_choice_override {
                 ToolChoice::Required => serde_json::json!("required"),
                 ToolChoice::Auto => serde_json::json!("auto"),
                 ToolChoice::None => serde_json::json!("none"),
             };
-            // Do NOT send chat_template_kwargs when tools are active.
+            // Do NOT send chat_template_kwargs when tools are present
+            // (Jinja conflict on some mlx-community quantizations).
+        } else {
+            if tool_choice_override == ToolChoice::None {
+                payload["tool_choice"] = serde_json::json!("none");
+            }
+            payload["chat_template_kwargs"] =
+                serde_json::json!({"enable_thinking": effective_thinking});
         }
 
         tracing::debug!(target: "llm", "Request payload: {}", serde_json::to_string(&payload).unwrap_or_default());
@@ -545,19 +543,20 @@ impl OpenAIClient {
             None => ToolChoice::Auto,
         });
 
-        if tool_choice_override == ToolChoice::None || tools.is_empty() {
-            if tool_choice_override == ToolChoice::None {
-                payload["tool_choice"] = serde_json::json!("none");
-            }
-            payload["chat_template_kwargs"] =
-                serde_json::json!({"enable_thinking": effective_thinking});
-        } else {
+        // Mirror stream() payload rules (keep tests in sync with production).
+        if !tools.is_empty() {
             payload["tools"] = serde_json::json!(tools);
             payload["tool_choice"] = match tool_choice_override {
                 ToolChoice::Required => serde_json::json!("required"),
                 ToolChoice::Auto => serde_json::json!("auto"),
                 ToolChoice::None => serde_json::json!("none"),
             };
+        } else {
+            if tool_choice_override == ToolChoice::None {
+                payload["tool_choice"] = serde_json::json!("none");
+            }
+            payload["chat_template_kwargs"] =
+                serde_json::json!({"enable_thinking": effective_thinking});
         }
         payload
     }
@@ -945,6 +944,8 @@ mod tests {
             RequestOptions::new().with_tool_choice(ToolChoice::None),
         );
         assert_eq!(payload["tool_choice"], serde_json::json!("none"));
+        assert!(payload.get("tools").is_none());
+        assert!(payload.get("chat_template_kwargs").is_some());
     }
 
     #[test]
@@ -957,5 +958,45 @@ mod tests {
         let payload =
             client.build_stream_payload(&[], &tools, Some("my_tool"), RequestOptions::new());
         assert_eq!(payload["tool_choice"], serde_json::json!("required"));
+        assert!(payload.get("tools").is_some());
+        assert!(payload.get("chat_template_kwargs").is_none());
+    }
+
+    /// #191: Simple intent keeps tool definitions + tool_choice "none" so the
+    /// prompt prefix (and KV cache) stays stable vs Complex turns.
+    #[test]
+    fn tools_present_with_tool_choice_none() {
+        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.3);
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {"name": "current_time", "description": "now", "parameters": {}}
+        })];
+        let payload = client.build_stream_payload(
+            &[],
+            &tools,
+            None,
+            RequestOptions::new().with_tool_choice(ToolChoice::None),
+        );
+        assert_eq!(payload["tool_choice"], serde_json::json!("none"));
+        assert_eq!(payload["tools"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(
+            payload["tools"][0]["function"]["name"],
+            serde_json::json!("current_time")
+        );
+        // Thinking kwargs must not accompany a tools-present request.
+        assert!(payload.get("chat_template_kwargs").is_none());
+    }
+
+    #[test]
+    fn tools_present_default_tool_choice_auto() {
+        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.3);
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {"name": "web_search", "description": "search", "parameters": {}}
+        })];
+        let payload = client.build_stream_payload(&[], &tools, None, RequestOptions::new());
+        assert_eq!(payload["tool_choice"], serde_json::json!("auto"));
+        assert!(payload.get("tools").is_some());
+        assert!(payload.get("chat_template_kwargs").is_none());
     }
 }

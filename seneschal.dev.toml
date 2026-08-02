@@ -88,6 +88,7 @@ classifier_fallback_url = ""
 classifier_fallback_model = ""
 classifier_fallback_api_key = ""
 classifier_fallback_timeout_ms = 800
+# Deprecated (#191): SIMPLE always sends tools + tool_choice "none" (KV cache).
 llm_tools_strict = false
 
 # ── TTS ───────────────────────────────────────────────────────────────────────

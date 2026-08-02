@@ -33,7 +33,7 @@ Read from `.env` (dotenvy loads automatically):
 | `LLM_THINKING_SIMPLE` | `false` | `enable_thinking` for SIMPLE requests |
 | `LLM_THINKING_COMPLEX` | `=LLM_THINKING` (true in pro) | `enable_thinking` for COMPLEX requests |
 | `LLM_COMPLEX_KEYWORDS` | _internal defaults_ | CSV of keywords that classify a request as COMPLEX. Empty → use built-in defaults |
-| `LLM_TOOLS_STRICT` | `false` | When true, SIMPLE requests send `tool_choice: "none"` explicitly |
+| `LLM_TOOLS_STRICT` | `false` | **Deprecated (no-op since #191).** SIMPLE always sends full tool definitions with `tool_choice: "none"` for KV-cache stability; COMPLEX uses `auto`/`required`. Flag kept for config compatibility. |
 | `CLASSIFIER_CONFIDENCE_THRESHOLD` | `0.6` | Confidence threshold [0.0–1.0]; below this the cascade continues |
 | `CLASSIFIER_ENABLE_EMBEDDING` | `false` | Enable Nivel 2/3 (embedding + logistic) — requires feature `classifier-embedding` |
 | `CLASSIFIER_MODEL_PATH` | — | Path to ONNX embedding model (dir or .onnx file) |

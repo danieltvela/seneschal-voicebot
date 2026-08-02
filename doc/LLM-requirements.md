@@ -110,9 +110,9 @@ data: [DONE]
 | `min_p` | (comentado, no enviado) | Reservado |
 | `max_tokens` | 300-400 (conversacion), 512 (resumen), 256 (extraccion) | |
 | `stream` | true/false | |
-| `tools` | array OpenAI function-calling | Cuando hay tools activas |
-| `tool_choice` | `"auto"` o `"required"` | |
-| `chat_template_kwargs` | `{"enable_thinking": true/false}` | **NO** enviar cuando hay tools activas (conflicto con Jinja2 en algunas cuantizaciones mlx-community) |
+| `tools` | array OpenAI function-calling | **Siempre** cuando hay tools registradas (Simple y Complex). No omitir en Simple: invalidaría la KV cache del prefijo (#191). |
+| `tool_choice` | `"auto"`, `"required"`, o `"none"` | Complex: `auto` / forced → `required`. Simple: `"none"` (desactiva uso sin quitar el schema). |
+| `chat_template_kwargs` | `{"enable_thinking": true/false}` | **NO** enviar cuando el payload incluye `tools` (conflicto con Jinja2 en algunas cuantizaciones mlx-community) |
 
 **Referencia:** `src/llm/client.rs:200-226`, `doc/RECOMMENDED_LLM_PARAMS.md`.
 

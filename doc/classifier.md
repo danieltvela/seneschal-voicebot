@@ -147,8 +147,10 @@ let result = pipeline.classify(text).await;
 ## Usage in Pipeline
 
 The classifier is called before every LLM turn in `llm_task.rs`. Depending on result:
-- `Simple` → thinking off, tools disabled (`tool_choice: "none"`), higher temperature
-- `Complex` → thinking on, tools available, lower temperature
+- `Simple` → higher temperature; `tool_choice: "none"` (tool **use** disabled). Full tool definitions are still sent so the prompt prefix / KV cache stays stable across turns (#191).
+- `Complex` → lower temperature; tools usable (`tool_choice: "auto"` / forced tool → `"required"`). Same tool definitions array as Simple.
+
+> **KV cache:** never strip the `tools` array based on intent. Temperature and `tool_choice` may change; the schema must not.
 
 ## TUI surface
 

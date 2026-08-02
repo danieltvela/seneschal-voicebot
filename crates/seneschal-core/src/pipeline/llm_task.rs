@@ -248,13 +248,19 @@ pub async fn llm_task(
                             .with_temperature(llm_temperature_complex)
                             .with_thinking(llm_thinking_complex),
                     };
+                    // tools_usable: Complex may call tools / force a tool.
+                    // Tool *definitions* are always sent (KV-cache stability, #191).
                     let tools_on = matches!(intent, Intent::Complex);
-                    if llm_tools_strict && !tools_on {
+                    if !tools_on {
+                        // Disable tool *use* without stripping definitions.
                         opts = opts.with_tool_choice(ToolChoice::None);
                     }
+                    // llm_tools_strict is obsolete for omit-vs-include; Simple
+                    // always uses tool_choice "none". Kept for config compat.
+                    let _ = llm_tools_strict;
                     // Trace classification
                     info!(target: "classifier",
-                        "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools={} forced={}",
+                        "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools_usable={} forced={}",
                         pipeline_id, intent, res.level, res.confidence,
                         res.matched_keyword, tools_on, forced);
                     // Surface effective intent on the TUI status bar.
@@ -324,11 +330,9 @@ pub async fn llm_task(
                 if let Some(ref name) = forced_tool {
                     info!(target: "pipeline", "Forcing tool '{}' for explicit request", name);
                 }
-                let active_tools: Vec<serde_json::Value> = if tools_enabled {
-                    tool_defs.clone()
-                } else {
-                    Vec::new()
-                };
+                // Always send the full tool schema so Simple↔Complex flips do not
+                // invalidate the server-side prompt KV cache (#191).
+                let active_tools: Vec<serde_json::Value> = tool_defs.clone();
                 let (token_rx, stream_handle) = match llm_client
                     .stream(
                         &messages,

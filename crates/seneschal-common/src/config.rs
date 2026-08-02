@@ -219,7 +219,8 @@ pub struct Config {
     pub classifier_fallback_api_key: String,
     /// Timeout en ms del fallback SLM.
     pub classifier_fallback_timeout_ms: u64,
-    /// "Tools Strict": en SIMPLE fuerza `tool_choice: "none"` explícito.
+    /// Deprecated (#191): SIMPLE always sends full tools + `tool_choice: "none"`.
+    /// Kept for config/env compatibility; runtime no longer branches on this flag.
     pub llm_tools_strict: bool,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
