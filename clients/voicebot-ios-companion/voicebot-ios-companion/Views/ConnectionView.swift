@@ -21,19 +21,30 @@ struct ConnectionControlsView: View {
 
     var body: some View {
         Form {
-            Section("Server") {
+            Section {
                 TextField("Host", text: $tempHost)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .accessibilityIdentifier("hostTextField")
+                    .accessibilityLabel("Host address")
+                    .accessibilityHint("IP address or hostname of the Seneschal machine")
 
                 TextField("WebSocket Port", text: $tempPort)
                     .keyboardType(.numberPad)
                     .accessibilityIdentifier("portTextField")
+                    .accessibilityLabel("WebSocket port")
+                    .accessibilityHint("Audio remote port, usually 9090")
 
                 TextField("Control Port", text: $tempControlPort)
                     .keyboardType(.numberPad)
                     .accessibilityIdentifier("controlPortTextField")
+                    .accessibilityLabel("Control port")
+                    .accessibilityHint("Control API port, usually 9001")
+            } header: {
+                Text("Server")
+            } footer: {
+                Text("WS carries mic and TTS audio. Control carries status, mute, text, and timeline events.")
+                    .font(.footnote)
             }
 
             Section {
@@ -46,6 +57,8 @@ struct ConnectionControlsView: View {
                     Task { await vm.connect() }
                 }
                 .accessibilityIdentifier("connectButton")
+                .accessibilityLabel(vm.isConnecting ? "Connecting" : "Connect to Seneschal")
+                .accessibilityHint("Opens audio WebSocket and Control API to the host")
                 .disabled(tempHost.isEmpty || vm.isConnecting)
             }
 
@@ -53,10 +66,12 @@ struct ConnectionControlsView: View {
                 Section {
                     Text(error)
                         .foregroundColor(.red)
-                        .font(.caption)
+                        .font(.body)
+                        .accessibilityLabel("Connection error: \(error)")
                 }
             }
         }
+        .formStyle(.grouped)
         .navigationTitle("Connect to Seneschal")
         .onAppear(perform: loadConnectionSettings)
     }
@@ -90,10 +105,12 @@ struct ConversationView: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
+                        .accessibilityHidden(true)
                     Text(err)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button {
                         vm.errorMessage = nil
                     } label: {
@@ -103,9 +120,10 @@ struct ConversationView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Dismiss error")
                 }
-                .padding(10)
+                .padding(12)
                 .background(Color.orange.opacity(0.12))
                 .accessibilityIdentifier("conversationErrorBanner")
+                .accessibilityElement(children: .combine)
             }
 
             ScrollViewReader { proxy in
@@ -115,22 +133,27 @@ struct ConversationView: View {
                             Image(systemName: "bubble.left.and.bubble.right")
                                 .font(.system(size: 40))
                                 .foregroundColor(.secondary.opacity(0.5))
+                                .accessibilityHidden(true)
                             Text(vm.isSessionActive ? "No messages yet" : "Connect to Seneschal")
-                                .font(.headline)
+                                .font(.title3.weight(.semibold))
                                 .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
                             Text(
                                 vm.isSessionActive
                                     ? "Speak or type a message"
                                     : "Enter host and ports to begin"
                             )
-                            .font(.caption)
-                            .foregroundColor(.secondary.opacity(0.7))
+                            .font(.body)
+                            .foregroundColor(.secondary.opacity(0.85))
+                            .multilineTextAlignment(.center)
                         }
                         .padding(.top, 80)
+                        .padding(.horizontal, 24)
                         .frame(maxWidth: .infinity)
                         .accessibilityIdentifier("conversationEmpty")
+                        .accessibilityElement(children: .combine)
                     } else {
-                        LazyVStack(spacing: 8) {
+                        LazyVStack(spacing: 10) {
                             ForEach(vm.chatMessages) { msg in
                                 MessageBubble(
                                     message: msg,
@@ -140,16 +163,20 @@ struct ConversationView: View {
                                 .onTapGesture {
                                     withAnimation { showTimestamps.toggle() }
                                 }
+                                .accessibilityHint("Double tap to show or hide relative time")
                             }
                             if vm.isGenerating {
                                 HStack {
                                     TypingIndicator()
-                                    Spacer()
+                                    Spacer(minLength: 0)
                                 }
                                 .padding(.leading, 12)
+                                .accessibilityLabel("Assistant is generating a response")
                             }
                         }
                         .padding()
+                        .frame(maxWidth: AdaptiveLayout.conversationMaxWidth)
+                        .frame(maxWidth: .infinity)
                         .accessibilityIdentifier("conversationList")
                         .onChange(of: vm.chatMessages.count) { _ in
                             scrollToLatest(proxy: proxy)
@@ -187,23 +214,30 @@ private struct MessageBubble: View {
     }()
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
             HStack {
                 if message.role == .user {
-                    Spacer()
+                    Spacer(minLength: 24)
                     Bubble(text: message.text, isUser: true)
                 } else {
                     Bubble(text: message.text, isUser: false)
-                    Spacer()
+                    Spacer(minLength: 24)
                 }
             }
             if showTimestamp {
                 Text(Self.formatter.localizedString(for: message.timestamp, relativeTo: Date()))
-                    .font(.caption2)
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                     .padding(.horizontal, 4)
+                    .accessibilityLabel(
+                        "Sent \(Self.formatter.localizedString(for: message.timestamp, relativeTo: Date()))"
+                    )
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(message.role == .user ? "You" : "Seneschal"): \(message.text)"
+        )
     }
 }
 
@@ -240,11 +274,22 @@ private struct Bubble: View {
 
     var body: some View {
         Text(text)
-            .padding(10)
-            .foregroundColor(.white)
-            .background(isUser ? Color.blue : Color.gray.opacity(0.7))
+            .font(.body)
+            .padding(12)
+            // Semantic colors: better contrast + dark mode than white-on-gray.
+            .foregroundColor(isUser ? Color.white : Color.primary)
+            .background(isUser ? Color.accentColor : Color(.secondarySystemBackground))
             .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(
+                        isUser ? Color.clear : Color.primary.opacity(0.08),
+                        lineWidth: 1
+                    )
+            )
+            .frame(maxWidth: AdaptiveLayout.bubbleMaxWidth, alignment: isUser ? .trailing : .leading)
             .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
     }
 }
 
