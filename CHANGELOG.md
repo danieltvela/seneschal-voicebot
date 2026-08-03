@@ -4,10 +4,36 @@ All notable changes to Seneschal will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Modular Workspace Carve-Out
+## v0.1.0-alpha.8 (2026-08-03)
 
-### Fixed
-- **#191 KV cache invalidation on intent flip**: conversational LLM requests always include the full tool definitions; Simple only sets `tool_choice: "none"` (plus temperature). Omitting tools on Simple was invalidating server-side prompt KV cache and spiking TTFT.
+### Features
+- **[#190](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/190)**: iOS companion v2 — mirror TUI, control API, and adaptive iPhone/iPad UI
+- **[#192](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/192)**: Control API — structured `state_changed` events, agent lifecycle events, SSE connection lifetime fix
+- **[#193](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/193)**: Control API — PermissionGate, agent emit twins, `POST /control/permission`
+- **[#194](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/194)**: iOS Control REST/SSE clients with Codable `ControlEvent`
+- **[#195](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/195)**: iOS dual-channel ViewModel, StatusBar, composer, Control-only fallback on 409
+- **[#196](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/196)**: iOS event timeline for tools, system, agents, and errors
+- **[#197](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/197)**: iOS agent permission sheet with `option_id` and lifecycle row polish
+- **[#198](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/198)**: iOS adaptive iPad split layout and accessibility polish
+- **[#199](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/199)**: Documentation — iOS companion dual-channel guide and ROADMAP M2.4
+- **[#200](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/200)**: watchOS pipeline state and last-line glance via iPhone relay
+- **[#189](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/189)**: TUI chat history and session context rehydration after relaunch
+- **[#164](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/164)**: TUI ACP agent communication display (delegated tasks, agent status)
+- **[#157](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/157)**: TUI new section to visualize ACP agent sessions
+- **[#168](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/168)**: AnnouncementWindow for managing when to announce task results
+- **[#182](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/182)**: `SPEAKER_ENABLED` config flag to toggle speaker verification at runtime
+- **[#169](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/169)**: New greeting type
+- **[#156](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/156)**: Recovered ambient/active automatic mode switching
+- **[#175](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/175)**: System notifications injected as user messages for Gemma-4 chat template compatibility
+- **[#176](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/176)**: Temporary: disable all tools except CurrentTime, SetConversationMode, and RunAgent (testing phase)
+
+### Bug Fixes
+- **[#191](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/191)**: KV cache invalidation on intent flip — conversational LLM requests always include full tool definitions
+- **[#181](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/181)**: ACP permission request now shows full tool details and input arguments
+- **[#173](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/173)**: Panic in `agent_session.rs` when delegating to subagent Hermes (tokio runtime)
+- **[#184](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/184)**: QA Test 02 — Classifier SIMPLE/COMPLEX now reflected in TUI
+- **[#154](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/154)**: Fixed invalid download binary URL in `install.sh`
+- **[#153](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/153)**: Install script now shows text output correctly
 
 ### Breaking Changes
 - **Workspace restructured**: Monolithic `src/` (~25k LOC) split into 13 crates under `crates/`
