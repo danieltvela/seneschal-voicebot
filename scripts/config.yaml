@@ -22,10 +22,10 @@ servers:
       vllm-gemma:
         port: 8006
         token: ""
-        models: []
+        models: 
           # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
-          # - gemma-4-31B-it-NVFP4
+          - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
           # - Qwen3.6-27B-NVFP4
@@ -48,7 +48,9 @@ servers:
       llama-server:
         port: 8000
         token: "asdf"
-        models: []
+        models:
+          - ./models/LFM2.5-2.6B-BF16.gguf
+          # - ./models/LFM2.5-2.6B-Q4_K_M.gguf
           # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
           # - LFM2.5-8B-A1B-Q8_0
           # - gemma-4-26B-A4B-it-UD-Q4_K_XL
@@ -88,11 +90,13 @@ servers:
         port: 1234
         token: ""
         models:
+          # - mlx-community/LFM2.5-2.6B-4bit
           # - google/gemma-4-12b
           # - gemma-4-12b-it-mlx
           # - google/gemma-4-12b-qat
           # - google/gemma-4-26b-a4b
-          - ornith-1.0-35b-mlx
+          - google/gemma-4-26b-a4b-qat
+          # - ornith-1.0-35b-mlx
           # - gemma-4-26b-a4b-it-qat-nvfp4
           # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
           # - gemma-4-26b-a4b-it-nvfp4
@@ -102,3 +106,20 @@ servers:
         models: []
           # - mlx-community/gemma-4-26b-a4b-it-4bit
           # - mlx-community/gemma-4-26B-A4B-it-qat-nvfp4
+  # opencode:
+  #   host: "https://opencode.ai/zen/"
+  #   location: "online"
+  #   runtimes:
+  #     opencode-go:
+  #       benchThinking: false
+  #       token: "sk-jTBeH1wVwtzHGwWuA05jYcrOVo8EDDcILLN5FDLI7F4nTkecfSs4jv2FMYOE8Gkl"
+  #       models: []
+  #         # - glm-5.2
+  #         # - deepseek-v4-flash
+  #         # - deepseek-v4-pro
+  #         # - kimi-k3
+  #         # - mimo-v2.5-free
+  #         # - ling-3.0-flash-free
+  #         # - nemotron-3-ultra-free
+  #         # - laguna-s-2.1-free
+  #         # - longcat-2.0-free

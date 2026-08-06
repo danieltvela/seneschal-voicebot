@@ -289,6 +289,33 @@ def _parse_host(host_url: str) -> str:
     return host_url
 
 
+def _parse_url(host_url: str):
+    """Parse a server URL into (host, port, use_ssl, base_path)."""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(host_url)
+    scheme = parsed.scheme or "http"
+    use_ssl = scheme == "https"
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if use_ssl else 80)
+    base_path = parsed.path.rstrip("/")
+    return host, port, use_ssl, base_path
+
+
+def _make_conn(host: str, port: int, use_ssl: bool, timeout: float):
+    """Return the correct http.client connection class instance."""
+    if use_ssl:
+        return http.client.HTTPSConnection(host, port, timeout=timeout)
+    return http.client.HTTPConnection(host, port, timeout=timeout)
+
+
+def _build_path(base_path: str, endpoint: str) -> str:
+    """Join base_path with an API endpoint path."""
+    if not base_path:
+        return endpoint
+    return f"{base_path}{endpoint}"
+
+
 def _is_llamacpp(runtime_name: str) -> bool:
     return "llama" in runtime_name.lower()
 
@@ -320,16 +347,29 @@ def load_config(path: str) -> list[dict]:
         cfg = yaml.safe_load(f)
     targets = []
     for server_name, server_cfg in cfg.get("servers", {}).items():
-        host = _parse_host(server_cfg.get("host", "http://127.0.0.1"))
+        host_raw = server_cfg.get("host", "http://127.0.0.1")
+        svc_host, svc_port, svc_ssl, svc_base = _parse_url(host_raw)
         for runtime_name, runtime_cfg in server_cfg.get("runtimes", {}).items():
+            rt_port = int(runtime_cfg.get("port", 0))
+            if rt_port:
+                port = rt_port
+                use_ssl = svc_ssl
+                base_path = svc_base
+            else:
+                port = svc_port
+                use_ssl = svc_ssl
+                base_path = svc_base
             targets.append(
                 {
                     "server": server_name,
                     "runtime": runtime_name,
-                    "host": host,
-                    "port": int(runtime_cfg.get("port", 8000)),
+                    "host": svc_host,
+                    "port": port,
+                    "ssl": use_ssl,
+                    "base_path": base_path,
                     "token": runtime_cfg.get("token", ""),
                     "models": runtime_cfg.get("models", []),
+                    "bench_thinking": runtime_cfg.get("benchThinking", True),
                 }
             )
     return targets
@@ -342,9 +382,14 @@ def load_evaluator_config(path: str) -> dict | None:
     ev = cfg.get("evaluator")
     if not ev:
         return None
+    host, port, use_ssl, base_path = _parse_url(ev["host"])
+    if ev.get("port"):
+        port = int(ev["port"])
     return {
-        "host": _parse_host(ev["host"]),
-        "port": int(ev["port"]),
+        "host": host,
+        "port": port,
+        "ssl": use_ssl,
+        "base_path": base_path,
         "token": ev.get("token", ""),
         "model": ev["model"],
         "runtime": ev.get("runtime", ""),
@@ -370,7 +415,7 @@ def _auth_headers(token: str) -> dict:
     return h
 
 
-def _post_stream(host, port, token, payload):
+def _post_stream(host, port, token, payload, use_ssl=False, base_path=""):
     """POST to /v1/chat/completions with stream=True. Yields SSE content lines.
 
     Reads one byte at a time to avoid http.client's chunked-encoding
@@ -378,10 +423,11 @@ def _post_stream(host, port, token, payload):
     read(4096) buffers ~20 tokens before the first yield, inflating TTFT.
     """
     body = json.dumps(payload).encode()
-    conn = http.client.HTTPConnection(host, port, timeout=120)
+    endpoint = _build_path(base_path, "/v1/chat/completions")
+    conn = _make_conn(host, port, use_ssl, timeout=120)
     try:
         conn.request(
-            "POST", "/v1/chat/completions", body=body, headers=_auth_headers(token)
+            "POST", endpoint, body=body, headers=_auth_headers(token)
         )
         resp = conn.getresponse()
         if resp.status != 200:
@@ -403,14 +449,15 @@ def _post_stream(host, port, token, payload):
         conn.close()
 
 
-def _post_blocking(host, port, token, payload) -> dict:
+def _post_blocking(host, port, token, payload, use_ssl=False, base_path="") -> dict:
     """POST to /v1/chat/completions with stream=False. Returns parsed JSON."""
     payload = {**payload, "stream": False}
     body = json.dumps(payload).encode()
-    conn = http.client.HTTPConnection(host, port, timeout=120)
+    endpoint = _build_path(base_path, "/v1/chat/completions")
+    conn = _make_conn(host, port, use_ssl, timeout=120)
     try:
         conn.request(
-            "POST", "/v1/chat/completions", body=body, headers=_auth_headers(token)
+            "POST", endpoint, body=body, headers=_auth_headers(token)
         )
         resp = conn.getresponse()
         raw = resp.read()
@@ -421,11 +468,12 @@ def _post_blocking(host, port, token, payload) -> dict:
         conn.close()
 
 
-def _get_models(host, port, token) -> list[str]:
+def _get_models(host, port, token, use_ssl=False, base_path="") -> list[str]:
     """Return list of model IDs from /v1/models."""
-    conn = http.client.HTTPConnection(host, port, timeout=10)
+    endpoint = _build_path(base_path, "/v1/models")
+    conn = _make_conn(host, port, use_ssl, timeout=10)
     try:
-        conn.request("GET", "/v1/models", headers=_auth_headers(token))
+        conn.request("GET", endpoint, headers=_auth_headers(token))
         resp = conn.getresponse()
         data = json.loads(resp.read())
         return [m["id"] for m in data.get("data", [])]
@@ -435,13 +483,14 @@ def _get_models(host, port, token) -> list[str]:
         conn.close()
 
 
-def _wait_ready(host, port, token, timeout=5) -> bool:
+def _wait_ready(host, port, token, timeout=5, use_ssl=False, base_path="") -> bool:
     """Return True if the server responds before timeout."""
+    endpoint = _build_path(base_path, "/v1/models")
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            conn = http.client.HTTPConnection(host, port, timeout=2)
-            conn.request("GET", "/v1/models", headers=_auth_headers(token))
+            conn = _make_conn(host, port, use_ssl, timeout=2)
+            conn.request("GET", endpoint, headers=_auth_headers(token))
             r = conn.getresponse()
             r.read()
             conn.close()
@@ -469,21 +518,23 @@ def _thinking_fields() -> dict:
     return _thinking_on_fields() if ENABLE_THINKING else _thinking_off_fields()
 
 
-def _base_speed_payload(model_id, max_tokens, stream, runtime_name) -> dict:
-    return {
+def _base_speed_payload(model_id, max_tokens, stream, runtime_name, bench_thinking=True) -> dict:
+    payload = {
         "model": model_id,
         "messages": _build_speed_messages(runtime_name),
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": stream,
-        **_thinking_fields(),
     }
+    if bench_thinking:
+        payload.update(_thinking_fields())
+    return payload
 
 
 # ── Speed benchmark — measurement steps ──────────────────────────────────────
 
 
-def load_model(host, port, token, model_id):
+def load_model(host, port, token, model_id, use_ssl=False, base_path=""):
     """Send a trivial request to pull model weights into GPU/RAM. Not timed."""
     _post_blocking(
         host,
@@ -494,19 +545,21 @@ def load_model(host, port, token, model_id):
             "messages": [{"role": "user", "content": "Hola"}],
             "max_tokens": 1,
         },
+        use_ssl=use_ssl,
+        base_path=base_path,
     )
 
 
-def measure_pp(host, port, token, model_id, runtime_name):
+def measure_pp(host, port, token, model_id, runtime_name, bench_thinking=True, use_ssl=False, base_path=""):
     """Cold full-conversation prefill. Returns (cold_ttft_ms, pp_tps, prompt_tokens)."""
     payload = _base_speed_payload(
-        model_id, max_tokens=GEN_TOKENS, stream=True, runtime_name=runtime_name
+        model_id, max_tokens=GEN_TOKENS, stream=True, runtime_name=runtime_name, bench_thinking=bench_thinking
     )
     t_start = time.perf_counter()
     t_first = None
     prompt_tokens_api = None
 
-    for line in _post_stream(host, port, token, payload):
+    for line in _post_stream(host, port, token, payload, use_ssl=use_ssl, base_path=base_path):
         if not line.startswith("data: "):
             continue
         data = line[6:]
@@ -533,16 +586,16 @@ def measure_pp(host, port, token, model_id, runtime_name):
     return cold_ttft_ms, pp_tps, prompt_tokens
 
 
-def measure_hot(host, port, token, model_id, runtime_name):
+def measure_hot(host, port, token, model_id, runtime_name, bench_thinking=True, use_ssl=False, base_path=""):
     """Hot trial with warm KV cache. Returns (ttft_ms, tg_tps, n_tokens)."""
     payload = _base_speed_payload(
-        model_id, max_tokens=GEN_TOKENS, stream=True, runtime_name=runtime_name
+        model_id, max_tokens=GEN_TOKENS, stream=True, runtime_name=runtime_name, bench_thinking=bench_thinking
     )
     t_start = time.perf_counter()
     t_first = t_last = t_done = None
     n_tokens = 0
 
-    for line in _post_stream(host, port, token, payload):
+    for line in _post_stream(host, port, token, payload, use_ssl=use_ssl, base_path=base_path):
         if not line.startswith("data: "):
             continue
         data = line[6:]
@@ -595,7 +648,7 @@ def _normalize_tool_calls(raw: list) -> list[dict]:
     return result
 
 
-def run_fixture(host, port, token, model_id, runtime_name, fixture) -> tuple[str, list]:
+def run_fixture(host, port, token, model_id, runtime_name, fixture, bench_thinking=True, use_ssl=False, base_path="") -> tuple[str, list]:
     """Execute one fixture against the model under test. Returns (text, tool_calls)."""
     system_content = _no_think_prefix(runtime_name) + SYSTEM_PROMPT
     messages = [{"role": "system", "content": system_content}]
@@ -612,13 +665,14 @@ def run_fixture(host, port, token, model_id, runtime_name, fixture) -> tuple[str
         "messages": messages,
         "max_tokens": 350,
         "temperature": 0.0,
-        **_thinking_off_fields(),  # thinking off for quality: we evaluate the reply, not the scratchpad
     }
+    if bench_thinking:
+        payload.update(_thinking_off_fields())
     if fixture.get("requires_tools"):
         payload["tools"] = TOOL_DEFINITIONS
         payload["tool_choice"] = "auto"
 
-    resp = _post_blocking(host, port, token, payload)
+    resp = _post_blocking(host, port, token, payload, use_ssl=use_ssl, base_path=base_path)
     msg_out = resp["choices"][0]["message"]
     text = msg_out.get("content") or ""
     tool_calls = _normalize_tool_calls(msg_out.get("tool_calls") or [])
@@ -837,6 +891,7 @@ def call_evaluator(
     text: str,
     tool_calls: list,
     mech: list,
+    bench_thinking=True,
 ) -> dict:
     """
     Ask the evaluator LLM to judge a response.
@@ -903,20 +958,25 @@ def call_evaluator(
         "\nVerdict (JSON only):"
     )
 
+    ev_payload = {
+        "model": ev_cfg["model"],
+        "messages": [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        "max_tokens": ev_cfg["max_tokens"],
+        "temperature": ev_cfg["temperature"],
+    }
+    if bench_thinking:
+        ev_payload.update(_thinking_off_fields())
+
     resp = _post_blocking(
         ev_cfg["host"],
         ev_cfg["port"],
         ev_cfg["token"],
-        {
-            "model": ev_cfg["model"],
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            "max_tokens": ev_cfg["max_tokens"],
-            "temperature": ev_cfg["temperature"],
-            **_thinking_off_fields(),  # evaluator never needs thinking
-        },
+        ev_payload,
+        use_ssl=ev_cfg.get("ssl", False),
+        base_path=ev_cfg.get("base_path", ""),
     )
     raw = (resp["choices"][0]["message"].get("content") or "").strip()
 
@@ -973,6 +1033,9 @@ def run_quality_benchmark(
     fixtures: list[dict],
     ev_cfg: dict | None,
     W: int,
+    bench_thinking=True,
+    use_ssl=False,
+    base_path="",
 ) -> list[dict]:
     """
     Two-phase quality benchmark for one model:
@@ -997,7 +1060,7 @@ def run_quality_benchmark(
         print(f"    {label:<52}", end="", flush=True)
         t0 = time.perf_counter()
         try:
-            text, tcs = run_fixture(host, port, token, model_id, runtime_name, fx)
+            text, tcs = run_fixture(host, port, token, model_id, runtime_name, fx, bench_thinking=bench_thinking, use_ssl=use_ssl, base_path=base_path)
             lat_ms = (time.perf_counter() - t0) * 1000
             tag = (
                 ("tools:" + "+".join(tc["function"]["name"] for tc in tcs))
@@ -1019,7 +1082,8 @@ def run_quality_benchmark(
 
     ev_available = bool(
         ev_cfg
-        and _wait_ready(ev_cfg["host"], ev_cfg["port"], ev_cfg["token"], timeout=5)
+        and _wait_ready(ev_cfg["host"], ev_cfg["port"], ev_cfg["token"], timeout=5,
+                        use_ssl=ev_cfg.get("ssl", False), base_path=ev_cfg.get("base_path", ""))
     )
 
     results: list[dict] = []
@@ -1049,7 +1113,7 @@ def run_quality_benchmark(
 
         if ev_available and ev_cfg:
             try:
-                ev_out = call_evaluator(ev_cfg, fx, fx["messages"], text, tcs, mech)
+                ev_out = call_evaluator(ev_cfg, fx, fx["messages"], text, tcs, mech, bench_thinking=bench_thinking)
                 verdict = ev_out["verdict"]
                 reason = ev_out["reason"]
             except Exception as e:
@@ -1107,12 +1171,12 @@ def match_model_id(available: list[str], target: str) -> str | None:
 
 
 def run_speed_benchmark(
-    host, port, token, model_id, runtime_name, label, W
+    host, port, token, model_id, runtime_name, label, W, bench_thinking=True, use_ssl=False, base_path=""
 ) -> dict | None:
     """Run load → cold PP → N hot trials. Returns speed result dict or None."""
     print(f"\n  Loading model into memory ...", end=" ", flush=True)
     try:
-        load_model(host, port, token, model_id)
+        load_model(host, port, token, model_id, use_ssl=use_ssl, base_path=base_path)
         print("done")
     except Exception as e:
         print(f"FAILED: {e}")
@@ -1121,7 +1185,7 @@ def run_speed_benchmark(
     print(f"  Measuring cold PP (full prompt prefill) ...", end=" ", flush=True)
     try:
         cold_ttft, pp_tps, prompt_tokens = measure_pp(
-            host, port, token, model_id, runtime_name
+            host, port, token, model_id, runtime_name, bench_thinking=bench_thinking, use_ssl=use_ssl, base_path=base_path
         )
         print(
             f"cold TTFT {cold_ttft:.0f} ms   PP ~{pp_tps:.0f} t/s   (~{prompt_tokens} prompt tokens)"
@@ -1134,7 +1198,7 @@ def run_speed_benchmark(
     for i in range(TRIALS):
         print(f"  Hot trial {i + 1}/{TRIALS} ... ", end="", flush=True)
         try:
-            ttft, tg, n = measure_hot(host, port, token, model_id, runtime_name)
+            ttft, tg, n = measure_hot(host, port, token, model_id, runtime_name, bench_thinking=bench_thinking, use_ssl=use_ssl, base_path=base_path)
             print(f"TTFT {ttft:>6.0f} ms   TG {tg:>5.1f} t/s   ({n} tokens)")
             hot_results.append((ttft, tg, n))
         except Exception as e:
@@ -1351,7 +1415,8 @@ def main():
     )
     if ev_cfg:
         ev_ready = _wait_ready(
-            ev_cfg["host"], ev_cfg["port"], ev_cfg["token"], timeout=3
+            ev_cfg["host"], ev_cfg["port"], ev_cfg["token"], timeout=3,
+            use_ssl=ev_cfg.get("ssl", False), base_path=ev_cfg.get("base_path", "")
         )
         ev_status = f"{ev_cfg['model']}  @ {ev_cfg['host']}:{ev_cfg['port']}"
         ev_status += (
@@ -1372,19 +1437,24 @@ def main():
         host = tgt["host"]
         port = tgt["port"]
         token = tgt["token"]
+        use_ssl = tgt.get("ssl", False)
+        base_path = tgt.get("base_path", "")
+        bench_thinking = tgt.get("bench_thinking", True)
         models = tgt["models"]
         prefix = f"{server_name}/{runtime_name}"
 
         print()
         print("═" * W)
         print(f"  Server: {server_name}   Runtime: {runtime_name}   ({host}:{port})")
+        if use_ssl:
+            print(f"  SSL: enabled   Base path: {base_path or '(none)'}")
         print("═" * W)
 
-        if not _wait_ready(host, port, token, timeout=5):
+        if not _wait_ready(host, port, token, timeout=5, use_ssl=use_ssl, base_path=base_path):
             print(f"  SKIP — {host}:{port} not reachable.")
             continue
 
-        available = _get_models(host, port, token)
+        available = _get_models(host, port, token, use_ssl=use_ssl, base_path=base_path)
         print(f"  Available models ({len(available)}):")
         for mid in available:
             print(f"    • {mid}")
@@ -1400,7 +1470,7 @@ def main():
 
             # ── Speed benchmark ──────────────────────────────────────────────
             result = run_speed_benchmark(
-                host, port, token, model_id, runtime_name, label, W
+                host, port, token, model_id, runtime_name, label, W, bench_thinking=bench_thinking, use_ssl=use_ssl, base_path=base_path
             )
             if not result:
                 continue
@@ -1419,6 +1489,9 @@ def main():
                     fixtures,
                     ev_cfg,
                     W,
+                    bench_thinking=bench_thinking,
+                    use_ssl=use_ssl,
+                    base_path=base_path,
                 )
 
             all_results.append(result)
