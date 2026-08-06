@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use super::events::{InputSource, PipelineState, TuiEvent};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use ratatui::layout::Rect;
 use seneschal_common::classifier::{ClassifierForceMode, Intent};
 use seneschal_common::tools::{ConversationMode, PromptBuildState};
 
@@ -14,13 +15,6 @@ pub enum Action {
     ToggleTts,
     /// Cycle classifier force override: Auto → SIMPLE → COMPLEX → Auto.
     CycleClassifierForce,
-}
-
-/// Keyboard modal mode (vim-like).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InputMode {
-    Normal,
-    Insert,
 }
 
 /// Role label for conversation messages.
@@ -56,6 +50,22 @@ pub struct AgentTaskInfo {
     pub options: Vec<String>,
 }
 
+/// A clickable segment of the status bar.
+#[derive(Clone, Debug)]
+pub struct StatusBarSegment {
+    #[allow(dead_code)]
+    pub label: String,
+    pub action: StatusBarAction,
+    pub region: Rect,
+}
+
+/// Actions that can be triggered by clicking on a status bar segment.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StatusBarAction {
+    ToggleTts,
+    CycleClassifierForce,
+}
+
 /// A single message in the conversation view.
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -64,9 +74,29 @@ pub struct ChatMessage {
     pub timestamp: chrono::DateTime<chrono::Local>,
     /// Agent task metadata (only meaningful when role == AgentTask).
     pub agent_task: Option<AgentTaskInfo>,
+    /// Whether the message is currently collapsed (shows a 1-line summary).
+    pub collapsed: bool,
+    /// Whether the user can collapse/expand this message via click or key.
+    pub expandable: bool,
 }
 
 impl ChatMessage {
+    pub fn new(role: Role, content: String) -> Self {
+        let expandable = matches!(
+            role,
+            Role::Tool | Role::Error | Role::System | Role::AgentTask
+        );
+        let collapsed = matches!(role, Role::Tool | Role::AgentTask);
+        Self {
+            role,
+            content,
+            timestamp: chrono::Local::now(),
+            agent_task: None,
+            collapsed,
+            expandable,
+        }
+    }
+
     /// Convenience constructor for agent task messages.
     pub fn agent_task(info: AgentTaskInfo, content: String) -> Self {
         Self {
@@ -74,6 +104,8 @@ impl ChatMessage {
             content,
             timestamp: chrono::Local::now(),
             agent_task: Some(info),
+            collapsed: true,
+            expandable: true,
         }
     }
 }
@@ -104,8 +136,16 @@ pub struct App {
     pub last_intent: Option<Intent>,
     /// Whether the last classification came from the force override.
     pub last_intent_forced: bool,
-    /// Normal vs Insert keyboard mode.
-    pub input_mode: InputMode,
+    /// Scroll offset in lines (first visible line in the history view).
+    pub scroll_offset: usize,
+    /// Per-message display line ranges computed during the last render (used for click mapping).
+    pub item_line_ranges: Vec<(usize, usize)>,
+    /// Total number of display lines in the chat history (for scrollbar).
+    pub total_chat_lines: usize,
+    /// Status bar segment regions computed during the last render (used for click mapping).
+    pub status_bar_segments: Vec<StatusBarSegment>,
+    /// The history area from the last render (used for mouse click mapping).
+    pub history_area: Rect,
 }
 
 impl App {
@@ -127,7 +167,11 @@ impl App {
             last_intent: None,
             last_intent_forced: false,
             should_quit: false,
-            input_mode: InputMode::Insert,
+            scroll_offset: 0,
+            item_line_ranges: Vec::new(),
+            total_chat_lines: 0,
+            status_bar_segments: Vec::new(),
+            history_area: Rect::default(),
         }
     }
 
@@ -164,12 +208,8 @@ impl App {
                 // Skip ToolExchanges and any unknown role to avoid dumping JSON blobs.
                 _ => continue,
             };
-            self.messages.push(ChatMessage {
-                role: chat_role,
-                content: content.clone(),
-                timestamp: chrono::Local::now(),
-                agent_task: None,
-            });
+            self.messages
+                .push(ChatMessage::new(chat_role, content.clone()));
             seeded += 1;
         }
         seeded
@@ -190,12 +230,8 @@ impl App {
                 self.state = s;
             }
             TuiEvent::UserMessage { text, source } => {
-                self.messages.push(ChatMessage {
-                    role: Role::User(source),
-                    content: text,
-                    timestamp: chrono::Local::now(),
-                    agent_task: None,
-                });
+                self.messages
+                    .push(ChatMessage::new(Role::User(source), text));
             }
             TuiEvent::Classification {
                 intent,
@@ -211,29 +247,15 @@ impl App {
             TuiEvent::AssistantDone => {
                 if !self.streaming_buffer.is_empty() {
                     let content = std::mem::take(&mut self.streaming_buffer);
-                    self.messages.push(ChatMessage {
-                        role: Role::Assistant,
-                        content,
-                        timestamp: chrono::Local::now(),
-                        agent_task: None,
-                    });
+                    self.messages
+                        .push(ChatMessage::new(Role::Assistant, content));
                 }
             }
             TuiEvent::Error(msg) => {
-                self.messages.push(ChatMessage {
-                    role: Role::Error,
-                    content: msg,
-                    timestamp: chrono::Local::now(),
-                    agent_task: None,
-                });
+                self.messages.push(ChatMessage::new(Role::Error, msg));
             }
             TuiEvent::SystemNotification { text } => {
-                self.messages.push(ChatMessage {
-                    role: Role::System,
-                    content: text,
-                    timestamp: chrono::Local::now(),
-                    agent_task: None,
-                });
+                self.messages.push(ChatMessage::new(Role::System, text));
             }
             TuiEvent::ToolCall { name, result } => {
                 let short = if result.len() > 120 {
@@ -241,20 +263,12 @@ impl App {
                 } else {
                     result
                 };
-                self.messages.push(ChatMessage {
-                    role: Role::Tool,
-                    content: format!("{name} -> {short}"),
-                    timestamp: chrono::Local::now(),
-                    agent_task: None,
-                });
+                self.messages
+                    .push(ChatMessage::new(Role::Tool, format!("{name} -> {short}")));
             }
             TuiEvent::Splash => {
-                self.messages.push(ChatMessage {
-                    role: Role::Splash,
-                    content: String::new(),
-                    timestamp: chrono::Local::now(),
-                    agent_task: None,
-                });
+                self.messages
+                    .push(ChatMessage::new(Role::Splash, String::new()));
             }
             TuiEvent::PromptBuildUpdate { prompt: new_text } => {
                 let mut state = self.prompt_build_state.lock().unwrap();
@@ -413,6 +427,16 @@ impl App {
         }
     }
 
+    /// Toggle the collapse state of a message at the given index.
+    /// Only works for messages with `expandable == true`.
+    pub fn toggle_message(&mut self, index: usize) {
+        if let Some(msg) = self.messages.get_mut(index)
+            && msg.expandable
+        {
+            msg.collapsed = !msg.collapsed;
+        }
+    }
+
     fn take_submit_action(&mut self) -> Option<Action> {
         let text = self.input.trim().to_string();
         if text.is_empty() {
@@ -423,20 +447,83 @@ impl App {
         Some(Action::SubmitToSeneschal(text))
     }
 
-    /// Process a crossterm key event. Returns an Action if one should be taken.
-    pub fn handle_key_event(&mut self, event: Event) -> Option<Action> {
-        if let Event::Mouse(_) = event {
-            return None;
+    /// Process a crossterm event. Returns an Action if one should be taken.
+    pub fn handle_event(&mut self, event: Event, history_area: Rect) -> Option<Action> {
+        match event {
+            Event::Mouse(mouse) => self.handle_mouse_event(mouse, history_area),
+            Event::Key(key) => self.handle_key(key),
+            _ => None,
         }
+    }
 
-        let Event::Key(KeyEvent {
+    fn handle_mouse_event(
+        &mut self,
+        mouse: crossterm::event::MouseEvent,
+        history_area: Rect,
+    ) -> Option<Action> {
+        use crossterm::event::MouseButton;
+        tracing::info!(
+            target: "tui.mouse",
+            kind = ?mouse.kind,
+            col = mouse.column,
+            row = mouse.row,
+            "TUI mouse event received"
+        );
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let col = mouse.column;
+                let row = mouse.row;
+                // Check status bar clicks
+                for segment in &self.status_bar_segments {
+                    if col >= segment.region.x
+                        && col < segment.region.right()
+                        && row >= segment.region.y
+                        && row < segment.region.bottom()
+                    {
+                        return match segment.action {
+                            StatusBarAction::ToggleTts => Some(Action::ToggleTts),
+                            StatusBarAction::CycleClassifierForce => {
+                                Some(Action::CycleClassifierForce)
+                            }
+                        };
+                    }
+                }
+                // Check history area clicks
+                if col >= history_area.x
+                    && col < history_area.right()
+                    && row >= history_area.y
+                    && row < history_area.bottom()
+                {
+                    let relative_y = (row - history_area.y) as usize + self.scroll_offset;
+                    for (i, &(start, end)) in self.item_line_ranges.iter().enumerate() {
+                        if relative_y >= start && relative_y < end {
+                            self.toggle_message(i);
+                            return None;
+                        }
+                    }
+                }
+                None
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self
+                    .scroll_offset
+                    .saturating_add(3)
+                    .min(self.total_chat_lines.saturating_sub(1));
+                None
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let KeyEvent {
             code, modifiers, ..
-        }) = event
-        else {
-            return None;
-        };
+        } = key;
 
-        // Always-available shortcuts
         if modifiers.contains(KeyModifiers::CONTROL) {
             match code {
                 KeyCode::Char('c') => return Some(Action::Quit),
@@ -446,19 +533,46 @@ impl App {
             }
         }
 
-        match self.input_mode {
-            InputMode::Insert => self.handle_insert_key(code, modifiers),
-            InputMode::Normal => self.handle_normal_key(code, modifiers),
-        }
+        self.handle_insert_key(code, modifiers)
     }
 
     fn handle_insert_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
         match (modifiers, code) {
-            (_, KeyCode::Esc) => {
-                self.input_mode = InputMode::Normal;
+            (_, KeyCode::Esc) => None,
+            (_, KeyCode::Enter) => self.take_submit_action(),
+            // Scroll with Up/Down when input is empty
+            (m, KeyCode::Up) if m.is_empty() && self.input.is_empty() => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(3);
                 None
             }
-            (_, KeyCode::Enter) => self.take_submit_action(),
+            (m, KeyCode::Down) if m.is_empty() && self.input.is_empty() => {
+                self.scroll_offset = self
+                    .scroll_offset
+                    .saturating_add(3)
+                    .min(self.total_chat_lines.saturating_sub(1));
+                None
+            }
+            (m, KeyCode::PageUp) if m.is_empty() => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(15);
+                None
+            }
+            (m, KeyCode::PageDown) if m.is_empty() => {
+                self.scroll_offset = self
+                    .scroll_offset
+                    .saturating_add(15)
+                    .min(self.total_chat_lines.saturating_sub(1));
+                None
+            }
+            // Space toggles expand/collapse on the last expandable message
+            (m, KeyCode::Char(' ')) if m.is_empty() && self.input.is_empty() => {
+                for msg in self.messages.iter_mut().rev() {
+                    if msg.expandable {
+                        msg.collapsed = !msg.collapsed;
+                        break;
+                    }
+                }
+                None
+            }
             (_, KeyCode::Backspace) => {
                 if self.cursor > 0 {
                     let prev = self.input[..self.cursor]
@@ -518,17 +632,6 @@ impl App {
             _ => None,
         }
     }
-
-    fn handle_normal_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) -> Option<Action> {
-        match code {
-            KeyCode::Char('i') => {
-                self.input_mode = InputMode::Insert;
-                None
-            }
-            KeyCode::Esc => None,
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -556,26 +659,15 @@ mod tests {
     #[test]
     fn insert_char_grows_input() {
         let mut app = test_app();
-        assert_eq!(app.input_mode, InputMode::Insert);
-        app.handle_key_event(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.handle_event(key(KeyCode::Char('a'), KeyModifiers::NONE), Rect::default());
         assert_eq!(app.input, "a");
     }
 
     #[test]
-    fn esc_enters_normal_j_does_not_insert() {
+    fn enter_submit_with_esc_does_nothing() {
         let mut app = test_app();
-        app.handle_key_event(key(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(app.input_mode, InputMode::Normal);
-        app.handle_key_event(key(KeyCode::Char('j'), KeyModifiers::NONE));
+        app.handle_event(key(KeyCode::Esc, KeyModifiers::NONE), Rect::default());
         assert!(app.input.is_empty());
-    }
-
-    #[test]
-    fn normal_i_enters_insert() {
-        let mut app = test_app();
-        app.input_mode = InputMode::Normal;
-        app.handle_key_event(key(KeyCode::Char('i'), KeyModifiers::NONE));
-        assert_eq!(app.input_mode, InputMode::Insert);
     }
 
     #[test]
@@ -583,7 +675,7 @@ mod tests {
         let mut app = test_app();
         app.input = "hello".into();
         app.cursor = 5;
-        let action = app.handle_key_event(key(KeyCode::Enter, KeyModifiers::NONE));
+        let action = app.handle_event(key(KeyCode::Enter, KeyModifiers::NONE), Rect::default());
         match action {
             Some(Action::SubmitToSeneschal(t)) => assert_eq!(t, "hello"),
             other => panic!("unexpected: {other:?}"),
@@ -599,7 +691,10 @@ mod tests {
     #[test]
     fn ctrl_m_cycles_classifier_force() {
         let mut app = test_app();
-        let action = app.handle_key_event(key(KeyCode::Char('m'), KeyModifiers::CONTROL));
+        let action = app.handle_event(
+            key(KeyCode::Char('m'), KeyModifiers::CONTROL),
+            Rect::default(),
+        );
         assert!(matches!(action, Some(Action::CycleClassifierForce)));
     }
 

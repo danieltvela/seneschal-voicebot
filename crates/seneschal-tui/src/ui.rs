@@ -1,12 +1,12 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Paragraph},
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
-use super::app::{AgentTaskStatus, App, ChatMessage, InputMode, Role};
+use super::app::{AgentTaskStatus, App, ChatMessage, Role};
 use super::events::{InputSource, PipelineState};
 use seneschal_common::classifier::{ClassifierForceMode, Intent};
 use seneschal_common::tools::ConversationMode;
@@ -118,7 +118,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     .split(main_area);
 
     if history_height > 0 {
-        render_history(frame, app, main_parts[0]);
+        app.history_area = main_parts[0];
+        render_chat_list(frame, app, main_parts[0]);
     }
     if streaming_height > 0 {
         render_streaming(frame, app, main_parts[1]);
@@ -131,23 +132,127 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_status(frame, app, status_area);
 }
 
-/// Render the message history, auto-scrolled to the bottom.
-fn render_history(frame: &mut Frame, app: &App, area: Rect) {
+/// Render the message history using a scrollable Paragraph with line-based scrolling.
+fn render_chat_list(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.height == 0 {
         return;
     }
-    let mut all_lines: Vec<Line<'static>> = Vec::new();
 
-    for msg in &app.messages {
-        let mut lines = message_lines(msg, area.width);
-        lines.push(Line::raw(""));
-        all_lines.extend(lines);
+    let (text, total_lines, line_ranges) = build_chat_text(app, area.width);
+    let scroll_offset = app
+        .scroll_offset
+        .min(total_lines.saturating_sub(area.height as usize));
+
+    let scrollbar_width = 1u16;
+    let text_area = Rect::new(
+        area.x,
+        area.y,
+        area.width.saturating_sub(scrollbar_width),
+        area.height,
+    );
+    let scrollbar_area = Rect::new(
+        area.x + area.width.saturating_sub(scrollbar_width),
+        area.y,
+        scrollbar_width,
+        area.height,
+    );
+
+    let paragraph = Paragraph::new(text).scroll((scroll_offset as u16, 0));
+    frame.render_widget(paragraph, text_area);
+
+    if total_lines > 0 {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).thumb_symbol("█");
+        let viewport_lines = area.height as usize;
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(scroll_offset)
+            .viewport_content_length(viewport_lines);
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
     }
 
-    // Auto-scroll to bottom: show the last `area.height` rows.
-    let skip = all_lines.len().saturating_sub(area.height as usize);
-    let display = Text::from(all_lines[skip..].to_vec());
-    frame.render_widget(Paragraph::new(display), area);
+    app.item_line_ranges = line_ranges;
+    app.total_chat_lines = total_lines;
+}
+
+/// Build the full chat text and per-message line ranges for click mapping.
+fn build_chat_text(app: &App, width: u16) -> (Text<'static>, usize, Vec<(usize, usize)>) {
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    let mut line_ranges: Vec<(usize, usize)> = Vec::new();
+
+    for msg in &app.messages {
+        let start = all_lines.len();
+        if msg.collapsed && msg.expandable {
+            all_lines.push(collapsed_summary_line(msg, width));
+        } else {
+            let lines = message_lines(msg, width);
+            all_lines.extend(lines);
+        }
+        all_lines.push(Line::raw(""));
+        let end = all_lines.len();
+        line_ranges.push((start, end));
+    }
+
+    let total = all_lines.len();
+    (Text::from(all_lines), total, line_ranges)
+}
+
+/// Build a 1-line summary for a collapsed message.
+fn collapsed_summary_line(msg: &ChatMessage, width: u16) -> Line<'static> {
+    let (icon, color) = match &msg.role {
+        Role::Tool => ("▶", Color::Rgb(100, 100, 100)),
+        Role::Error => ("▶", Color::Red),
+        Role::System => ("▶", Color::Rgb(180, 180, 100)),
+        Role::AgentTask => {
+            let info = msg.agent_task.as_ref();
+            let c = match info.map(|i| &i.status) {
+                Some(AgentTaskStatus::Completed) => Color::Green,
+                Some(AgentTaskStatus::Failed) => Color::Red,
+                Some(AgentTaskStatus::PermissionRequested) => Color::Yellow,
+                _ => Color::Magenta,
+            };
+            ("▶", c)
+        }
+        _ => ("▶", Color::Rgb(100, 100, 100)),
+    };
+
+    let role_label = match &msg.role {
+        Role::Tool => "tool",
+        Role::Error => "error",
+        Role::System => "system",
+        Role::AgentTask => {
+            if let Some(info) = &msg.agent_task {
+                if !info.agent_name.is_empty() {
+                    return Line::from(vec![Span::styled(
+                        format!(
+                            "▶ {} ({}) ",
+                            truncate_str(
+                                &msg.content,
+                                (width as usize).saturating_sub(info.agent_name.len() + 10)
+                            ),
+                            info.agent_name
+                        ),
+                        Style::default().fg(color),
+                    )]);
+                }
+            }
+            "agent"
+        }
+        _ => "?",
+    };
+
+    let truncated = truncate_str(&msg.content, width as usize);
+    Line::from(vec![Span::styled(
+        format!("{icon} [{role_label}] {truncated}"),
+        Style::default().fg(color),
+    )])
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    let single_line = s.lines().next().unwrap_or("");
+    if single_line.len() > max_len.saturating_sub(3) {
+        format!("{}...", &single_line[..max_len.saturating_sub(6).max(0)])
+    } else {
+        single_line.to_string()
+    }
 }
 
 /// Render the SENECHAL splash screen (blue, centered).
@@ -565,23 +670,19 @@ fn compute_prompt_display_height(prompt_text: &str, width: usize) -> usize {
 fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
     let dest = app.input_destination_label();
-    let mode_hint = match app.input_mode {
-        InputMode::Normal => " -- NORMAL (i=insert)",
-        InputMode::Insert => "",
-    };
 
     let text = if app.input.is_empty() {
         Text::from(Line::from(vec![
             Span::styled("┌ ", Style::default().fg(Color::Rgb(100, 100, 100))),
             Span::styled(format!("[{dest}] "), Style::default().fg(Color::Cyan)),
             Span::styled(
-                format!("Type a message... (Enter to send){mode_hint}"),
+                "Type a message... (Enter to send)",
                 Style::default().fg(Color::Rgb(100, 100, 100)),
             ),
         ]))
     } else {
         let prefix = format!("│ [{dest}] ");
-        let content = format!("{}{mode_hint}", app.input);
+        let content = app.input.clone();
         let chars: Vec<char> = content.chars().collect();
         let wrap_w = width.saturating_sub(prefix.chars().count()).max(1);
         let lines: Vec<Line> = if width == 0 {
@@ -613,7 +714,8 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(Paragraph::new(text), area);
 
-    if app.input_mode == InputMode::Insert {
+    // Always show cursor in insert mode
+    {
         let dest_prefix_w = format!("│ [{dest}] ").chars().count();
         let char_pos = app.input[..app.cursor].chars().count();
         let wrap_w = (area.width as usize).saturating_sub(dest_prefix_w).max(1);
@@ -664,7 +766,7 @@ fn intent_status_label(
 }
 
 /// Render the status bar at the bottom of the viewport.
-fn render_status(frame: &mut Frame, app: &App, area: Rect) {
+fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let (state_label, state_color) = match app.state {
         PipelineState::Idle => ("● IDLE", Color::Rgb(100, 100, 100)),
         PipelineState::Listening => ("● LISTENING", Color::Green),
@@ -690,10 +792,38 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let (intent_label, intent_color) =
         intent_status_label(app.last_intent, force, app.last_intent_forced);
 
-    let mode_label = match app.input_mode {
-        InputMode::Insert => "INSERT",
-        InputMode::Normal => "NORMAL",
-    };
+    // Build segments with computed x-ranges for click detection
+    let mut segments: Vec<(String, super::app::StatusBarAction, Rect)> = Vec::new();
+    let mut x = area.x + 1; // after the leading space
+
+    let brand = " seneschal ";
+    x += brand.len() as u16 + 1; // +1 for space
+
+    // State label (not clickable)
+    x += state_label.len() as u16 + " │ ".len() as u16;
+
+    // TTS label (clickable)
+    let tts_start = x;
+    let tts_w = tts_label.len() as u16;
+    segments.push((
+        tts_label.to_string(),
+        super::app::StatusBarAction::ToggleTts,
+        Rect::new(tts_start, area.y, tts_w, 1),
+    ));
+    x += tts_w + " │ ".len() as u16;
+
+    // Conv mode (possibly clickable)
+    x += conv_label.len() as u16 + " │ ".len() as u16;
+
+    // Intent label (clickable for classifier force)
+    let intent_start = x;
+    let intent_w = intent_label.len() as u16;
+    segments.push((
+        intent_label.to_string(),
+        super::app::StatusBarAction::CycleClassifierForce,
+        Rect::new(intent_start, area.y, intent_w, 1),
+    ));
+    let _ = (x, intent_w);
 
     let text = Text::from(vec![Line::from(vec![
         Span::styled(
@@ -709,10 +839,8 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(" │ "),
         Span::styled(intent_label, Style::default().fg(intent_color)),
         Span::raw(" │ "),
-        Span::styled(mode_label, Style::default().fg(Color::Yellow)),
-        Span::raw(" │ "),
         Span::styled(
-            "Ctrl+T TTS  Ctrl+M force  i insert  Esc normal  Ctrl+C quit",
+            "Ctrl+T TTS  Ctrl+M force  Ctrl+C quit",
             Style::default().fg(Color::Rgb(100, 100, 100)),
         ),
     ])]);
@@ -720,6 +848,15 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default().style(Style::default().bg(Color::Rgb(40, 40, 50)));
 
     frame.render_widget(Paragraph::new(text).block(block), area);
+
+    app.status_bar_segments = segments
+        .into_iter()
+        .map(|(label, action, region)| super::app::StatusBarSegment {
+            label,
+            action,
+            region,
+        })
+        .collect();
 }
 
 /// Number of visual rows the input text occupies with hard-wrap at `width`.

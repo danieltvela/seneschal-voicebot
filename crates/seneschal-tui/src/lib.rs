@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -45,6 +46,7 @@ pub async fn run(
 ) -> Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnableMouseCapture)?;
     execute!(io::stdout(), crossterm::cursor::Hide)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::with_options(
@@ -87,7 +89,8 @@ pub async fn run(
             key_result = keys.next() => {
                 match key_result {
                     Ok(Some(event)) => {
-                        if let Some(action) = app.handle_key_event(event) {
+                        let history_area = app.history_area;
+                        if let Some(action) = app.handle_event(event, history_area) {
                             match action {
                                 Action::Quit => {
                                     app.should_quit = true;
@@ -135,6 +138,7 @@ pub async fn run(
     // Final render before exit
     terminal.draw(|frame| ui::render(frame, &mut app))?;
     execute!(io::stdout(), crossterm::cursor::Show)?;
+    execute!(io::stdout(), DisableMouseCapture)?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
     disable_raw_mode()?;
     Ok(())

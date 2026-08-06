@@ -17,8 +17,7 @@ use tracing::info;
 ///
 /// When a remote WebSocket client connects, the remote server installs a sender here.
 /// `tts_task` then forwards synthesized audio to that client instead of local CPAL.
-pub type RemoteTtsTx =
-    Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<TtsAudioPacket>>>>;
+pub type RemoteTtsTx = Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<TtsAudioPacket>>>>;
 
 /// TTS task: receives sentences from sen_task (and llm_task error paths) via typed channel,
 /// synthesizes and plays each one.

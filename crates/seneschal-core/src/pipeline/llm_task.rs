@@ -143,9 +143,7 @@ pub async fn llm_task(
                     .ok();
             }
             if let Some(ref ctrl) = control_broadcast {
-                ctrl.send(ControlEvent::SystemNotification {
-                    text: text.clone(),
-                });
+                ctrl.send(ControlEvent::SystemNotification { text: text.clone() });
             }
             {
                 let mut s = llm_session.lock().unwrap();
