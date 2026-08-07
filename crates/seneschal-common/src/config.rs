@@ -341,13 +341,6 @@ pub struct Config {
     /// Hard timeout per shell command in seconds (SHELL_TIMEOUT_SECS).
     pub shell_timeout_secs: u64,
 
-    // ── NOOP tool ──────────────────────────────────────────────────────────────
-    /// Instructions for the LLM about when to call the NOOP (silent) tool.
-    /// The NOOP tool stops the current query without any response to the user.
-    /// Default: instructs the LLM to call it when the user asks something to
-    /// Siri or Alexa. (NOOP_TOOL_INSTRUCTIONS)
-    pub noop_tool_instructions: String,
-
     // ── Web Search (Native API providers) ─────────────────────────────────────
     /// Brave public search scraper enabled (BRAVE_PUBLIC_SEARCH, default true).
     /// When true, `quick_search` uses the public search.brave.com endpoint with
@@ -973,11 +966,6 @@ impl Config {
         // Apple Events
         if let Ok(v) = env::var("APPLE_EVENTS_ENABLED") {
             self.apple_events_enabled = v == "1" || v.to_lowercase() == "true";
-        }
-
-        // NOOP tool
-        if let Ok(v) = env::var("NOOP_TOOL_INSTRUCTIONS") {
-            self.noop_tool_instructions = v;
         }
 
         // Plugins

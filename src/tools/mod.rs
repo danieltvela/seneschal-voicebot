@@ -8,7 +8,6 @@ pub use mcp_tool::McpToolProxy;
 // Re-export tools moved to seneschal-tools-core
 pub use seneschal_tools_core::AppleEventsTool;
 pub use seneschal_tools_core::CurrentTimeTool;
-pub use seneschal_tools_core::NoopTool;
 pub use seneschal_tools_core::OpenAppTool;
 pub use seneschal_tools_core::QuickSearchTool;
 pub use seneschal_tools_core::ReadFileTool;

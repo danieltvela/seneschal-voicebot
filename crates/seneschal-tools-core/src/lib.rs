@@ -5,7 +5,6 @@
 pub mod apple_events;
 pub mod clipboard;
 pub mod current_time;
-pub mod noop;
 pub mod open_app;
 pub mod quick_search;
 pub mod read_file;
@@ -18,7 +17,6 @@ pub use seneschal_common::tools::Tool;
 pub use apple_events::AppleEventsTool;
 pub use clipboard::{ReadClipboardTool, SetClipboardTool};
 pub use current_time::CurrentTimeTool;
-pub use noop::NoopTool;
 pub use open_app::OpenAppTool;
 pub use quick_search::QuickSearchTool;
 pub use read_file::ReadFileTool;

@@ -71,7 +71,7 @@ use seneschal_memory::{SDreamConfig, SDreamDaemon};
 use seneschal_plugins::{
     OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
 };
-use seneschal_tools_core::{CurrentTimeTool, NoopTool};
+use seneschal_tools_core::CurrentTimeTool;
 
 #[cfg(test)]
 mod e2e_tests;
@@ -666,13 +666,6 @@ async fn async_main() -> Result<()> {
     // DISABLED (temp)
     // tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
     // info!(target: "seneschal", "recover_historical_context tool enabled");
-
-    tool_registry.register(NoopTool::new(config.noop_tool_instructions.clone()));
-    info!(
-        target: "seneschal",
-        "noop tool enabled (instructions: {})",
-        config.noop_tool_instructions,
-    );
 
     // Register list_tasks tool for subtask tracking
     // DISABLED (temp)
