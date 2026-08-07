@@ -138,6 +138,10 @@ pub struct App {
     pub last_intent_forced: bool,
     /// Scroll offset in lines (first visible line in the history view).
     pub scroll_offset: usize,
+    /// If true, the chat view will auto-scroll to the bottom whenever new
+    /// content is rendered. Manual scroll up disables this; scroll to bottom
+    /// or message submission re-enables it.
+    pub auto_scroll_to_bottom: bool,
     /// Per-message display line ranges computed during the last render (used for click mapping).
     pub item_line_ranges: Vec<(usize, usize)>,
     /// Total number of display lines in the chat history (for scrollbar).
@@ -168,6 +172,7 @@ impl App {
             last_intent_forced: false,
             should_quit: false,
             scroll_offset: 0,
+            auto_scroll_to_bottom: true,
             item_line_ranges: Vec::new(),
             total_chat_lines: 0,
             status_bar_segments: Vec::new(),
@@ -212,6 +217,7 @@ impl App {
                 .push(ChatMessage::new(chat_role, content.clone()));
             seeded += 1;
         }
+        self.auto_scroll_to_bottom = true;
         seeded
     }
 
@@ -232,6 +238,7 @@ impl App {
             TuiEvent::UserMessage { text, source } => {
                 self.messages
                     .push(ChatMessage::new(Role::User(source), text));
+                self.auto_scroll_to_bottom = true;
             }
             TuiEvent::Classification {
                 intent,
@@ -509,10 +516,14 @@ impl App {
                     .scroll_offset
                     .saturating_add(3)
                     .min(self.total_chat_lines.saturating_sub(1));
+                if self.scroll_offset >= self.total_chat_lines.saturating_sub(1) {
+                    self.auto_scroll_to_bottom = true;
+                }
                 None
             }
             MouseEventKind::ScrollUp => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                self.auto_scroll_to_bottom = false;
                 None
             }
             _ => None,
@@ -543,6 +554,7 @@ impl App {
             // Scroll with Up/Down when input is empty
             (m, KeyCode::Up) if m.is_empty() && self.input.is_empty() => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                self.auto_scroll_to_bottom = false;
                 None
             }
             (m, KeyCode::Down) if m.is_empty() && self.input.is_empty() => {
@@ -550,10 +562,14 @@ impl App {
                     .scroll_offset
                     .saturating_add(3)
                     .min(self.total_chat_lines.saturating_sub(1));
+                if self.scroll_offset >= self.total_chat_lines.saturating_sub(1) {
+                    self.auto_scroll_to_bottom = true;
+                }
                 None
             }
             (m, KeyCode::PageUp) if m.is_empty() => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(15);
+                self.auto_scroll_to_bottom = false;
                 None
             }
             (m, KeyCode::PageDown) if m.is_empty() => {
@@ -561,6 +577,9 @@ impl App {
                     .scroll_offset
                     .saturating_add(15)
                     .min(self.total_chat_lines.saturating_sub(1));
+                if self.scroll_offset >= self.total_chat_lines.saturating_sub(1) {
+                    self.auto_scroll_to_bottom = true;
+                }
                 None
             }
             // Space toggles expand/collapse on the last expandable message

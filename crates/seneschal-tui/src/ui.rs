@@ -139,9 +139,14 @@ fn render_chat_list(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let (text, total_lines, line_ranges) = build_chat_text(app, area.width);
-    let scroll_offset = app
-        .scroll_offset
-        .min(total_lines.saturating_sub(area.height as usize));
+    let scroll_offset = if app.auto_scroll_to_bottom {
+        let bottom = total_lines.saturating_sub(area.height as usize);
+        app.scroll_offset = bottom;
+        bottom
+    } else {
+        app.scroll_offset
+            .min(total_lines.saturating_sub(area.height as usize))
+    };
 
     let scrollbar_width = 1u16;
     let text_area = Rect::new(
