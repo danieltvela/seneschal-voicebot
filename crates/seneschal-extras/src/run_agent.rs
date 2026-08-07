@@ -861,14 +861,39 @@ impl Tool for RunAgentTool {
             .get_or_init(|| Box::leak(format!("run_{}", self.config.name).into_boxed_str()))
     }
 
+    fn is_background(&self) -> bool {
+        true
+    }
+
+    fn should_force_for(&self, query: &str) -> bool {
+        if self.config.name != "hermes" {
+            return false;
+        }
+        let lower = query.to_lowercase();
+        [
+            "investiga",
+            "busca información",
+            "busca en internet",
+            "búscame",
+            "qué sabes de",
+            "que sabes de",
+            "lánzame una búsqueda",
+            "haz una búsqueda",
+            "lanza una investigación",
+            "haz una investigación",
+            "search for",
+            "look up",
+            "find information",
+            "research",
+        ]
+        .iter()
+        .any(|t| lower.contains(t))
+    }
+
     fn description(&self) -> &str {
-        "Delega una tarea al agente externo. Consulta la sección AGENTES EXTERNOS DISPONIBLES \
-         del system prompt para saber qué agentes están disponibles y cuándo usar cada uno. \
-         IMPORTANTE: DEBES llamar a esta función para delegar tareas. Nunca describas \
-         verbalmente que 'has enviado al agente' sin haber llamado primero a run_agent. \
-         El resultado llega de forma proactiva cuando el agente termina. \
-         Para cancelar una tarea en curso usa task='cancel'. \
-         Para consultar el estado usa task='status'."
+        "Delegates a task to an external agent for execution. \
+         Use when the user asks for web search, complex reasoning, \
+         or file system actions. The result arrives asynchronously."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -877,11 +902,11 @@ impl Tool for RunAgentTool {
             "properties": {
                 "task": {
                     "type": "string",
-                    "description": "Descripción breve de la tarea a delegar, o 'cancel' para \
-                                    cancelar la tarea en curso, o 'status' para consultar el estado."
+                    "description": "The task to delegate"
                 }
             },
-            "required": ["task"]
+            "required": ["task"],
+            "additionalProperties": false
         })
     }
 

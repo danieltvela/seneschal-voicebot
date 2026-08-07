@@ -220,6 +220,9 @@ impl OpenAIClient {
         // `tool_choice: "none"` disables *use* without stripping definitions.
         if !tools.is_empty() {
             payload["tools"] = serde_json::json!(tools);
+            // llama.cpp / LM Studio only supports string values for
+            // tool_choice ("none", "auto", "required"). The object form
+            // {"type":"function","function":{...}} is rejected with 400.
             payload["tool_choice"] = match tool_choice_override {
                 ToolChoice::Required => serde_json::json!("required"),
                 ToolChoice::Auto => serde_json::json!("auto"),
@@ -957,6 +960,7 @@ mod tests {
         })];
         let payload =
             client.build_stream_payload(&[], &tools, Some("my_tool"), RequestOptions::new());
+        // llama.cpp / LM Studio only supports string tool_choice values.
         assert_eq!(payload["tool_choice"], serde_json::json!("required"));
         assert!(payload.get("tools").is_some());
         assert!(payload.get("chat_template_kwargs").is_none());

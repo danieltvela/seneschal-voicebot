@@ -170,22 +170,16 @@ impl AgentRegistry {
         }
 
         let mut section = String::from(
-            "\n\n## AGENTES EXTERNOS DISPONIBLES\n\n\
-             Puedes delegar tareas complejas a los siguientes agentes externos.\n\
-             Cada agente tiene herramientas propias y especialización.\n\
-             Para delegar, llama a la herramienta correspondiente (run_<nombre>) \n\
-             con task=\"descripción de la tarea\". El resultado llega de forma proactiva.\n",
+            "\n\n## EXTERNAL AGENTS\n\n\
+             Delegate complex tasks by calling the corresponding tool.\n",
         );
 
         for agent in &self.agents {
             section.push_str(&format!(
-                "\n### {display_name} (run_{name})\n\
-                 Cuándo usar: {when}\n\
-                 Instrucciones para el agente: {instructions}\n",
+                "\n- **{display_name}**: tool `run_{name}`. {when}\n",
                 display_name = capitalize(&agent.name),
                 name = agent.name,
                 when = agent.when_to_use,
-                instructions = agent.instructions,
             ));
         }
 
@@ -399,10 +393,10 @@ mod tests {
     fn system_prompt_section_non_empty_for_agents() {
         let reg = AgentRegistry {
             agents: vec![AgentConfig {
-                name: "hermes".to_string(),
-                mode: "acp".to_string(),
-                command: None,
-                acp_command: "hermes acp".to_string(),
+                name: "test".to_string(),
+                mode: "cli".to_string(),
+                command: Some("test-agent".to_string()),
+                acp_command: "test acp".to_string(),
                 acp_warmup: false,
                 remote_url: String::new(),
                 remote_dir: String::new(),
@@ -415,10 +409,9 @@ mod tests {
             }],
         };
         let section = reg.system_prompt_section();
-        assert!(section.contains("AGENTES EXTERNOS"));
-        assert!(section.contains("run_hermes"));
+        assert!(section.contains("EXTERNAL AGENTS"));
+        assert!(section.contains("run_test"));
         assert!(section.contains("Test when to use"));
-        assert!(section.contains("Test instructions"));
     }
 
     #[test]

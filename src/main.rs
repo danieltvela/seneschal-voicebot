@@ -1631,32 +1631,40 @@ async fn async_main() -> Result<()> {
                                     }
 
                                     if let Some(id) = tool_call_id {
-                                        // Inject as proper tool-role message to satisfy OpenAI API contract:
-                                        // assistant(tool_calls) must be followed by tool(tool_call_id).
-                                        let tool_msg = serde_json::json!({
-                                            "role": "tool",
-                                            "tool_call_id": id,
-                                            "content": result,
-                                        });
-                                        {
-                                            let mut s = llm_session.lock().unwrap();
-                                            s.add_tool_exchange(vec![tool_msg.clone()]);
-                                        }
-                                        {
-                                            let db_c = db.clone();
-                                            let exchange = vec![tool_msg];
-                                            tokio::spawn(async move {
-                                                if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
-                                                    warn!(target: "db", "Failed to save tool_result exchange: {}", e);
-                                                }
+                                        // Background tools (id starts with "bg_"): do NOT persist
+                                        // the placeholder tool result to session/DB, and do NOT
+                                        // send a PipelineFrame::AgentResult. The model already
+                                        // emitted an ack text and the pipeline has ended cleanly.
+                                        // The actual agent result will arrive later as a separate
+                                        // ProactiveEvent::AgentResult (without tool_call_id) and
+                                        // be delivered as an announcement.
+                                        let is_background = id.starts_with("bg_");
+                                        if !is_background {
+                                            let tool_msg = serde_json::json!({
+                                                "role": "tool",
+                                                "tool_call_id": id,
+                                                "content": result,
                                             });
+                                            {
+                                                let mut s = llm_session.lock().unwrap();
+                                                s.add_tool_exchange(vec![tool_msg.clone()]);
+                                            }
+                                            {
+                                                let db_c = db.clone();
+                                                let exchange = vec![tool_msg];
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
+                                                        warn!(target: "db", "Failed to save tool_result exchange: {}", e);
+                                                    }
+                                                });
+                                            }
+                                            // Channel buffers this if llm_task is busy; it will pick it up when idle.
+                                            transcript_tx.send(PipelineFrame::AgentResult {
+                                                task,
+                                                result,
+                                                tool_call_id: Some(id),
+                                            }).await.ok();
                                         }
-                                        // Channel buffers this if llm_task is busy; it will pick it up when idle.
-                                        transcript_tx.send(PipelineFrame::AgentResult {
-                                            task,
-                                            result,
-                                            tool_call_id: Some(id),
-                                        }).await.ok();
                                     } else {
                                         announcement_window.lock().unwrap().queue_announcement(task, result);
                                     }
