@@ -49,7 +49,7 @@ servers:
         port: 8000
         token: "asdf"
         models:
-          - ./models/LFM2.5-2.6B-BF16.gguf
+          - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
           # - ./models/LFM2.5-2.6B-Q4_K_M.gguf
           # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
           # - LFM2.5-8B-A1B-Q8_0
