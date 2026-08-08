@@ -28,22 +28,6 @@ Read from `.env` (dotenvy loads automatically):
 | `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |
-| `LLM_TEMPERATURE_SIMPLE` | `0.8` | SIMPLE-mode temperature (thinking off, tools off) |
-| `LLM_TEMPERATURE_COMPLEX` | `=LLM_TEMPERATURE` (0.3) | COMPLEX-mode temperature (thinking on, tools on) |
-| `LLM_THINKING_SIMPLE` | `false` | `enable_thinking` for SIMPLE requests |
-| `LLM_THINKING_COMPLEX` | `=LLM_THINKING` (true in pro) | `enable_thinking` for COMPLEX requests |
-| `LLM_COMPLEX_KEYWORDS` | _internal defaults_ | CSV of keywords that classify a request as COMPLEX. Empty → use built-in defaults |
-| `LLM_TOOLS_STRICT` | `false` | **Deprecated (no-op since #191).** SIMPLE always sends full tool definitions with `tool_choice: "none"` for KV-cache stability; COMPLEX uses `auto`/`required`. Flag kept for config compatibility. |
-| `CLASSIFIER_CONFIDENCE_THRESHOLD` | `0.6` | Confidence threshold [0.0–1.0]; below this the cascade continues |
-| `CLASSIFIER_ENABLE_EMBEDDING` | `false` | Enable Nivel 2/3 (embedding + logistic) — requires feature `classifier-embedding` |
-| `CLASSIFIER_MODEL_PATH` | — | Path to ONNX embedding model (dir or .onnx file) |
-| `CLASSIFIER_CENTROIDS_PATH` | — | Path to JSON centroids file for cosine-similarity classification |
-| `CLASSIFIER_WEIGHTS_PATH` | — | Path to JSON logistic regression weights file (Nivel 3) |
-| `CLASSIFIER_ENABLE_FALLBACK` | `false` | Enable Nivel 4 (SLM fallback to second LLM endpoint) |
-| `CLASSIFIER_FALLBACK_URL` | — | Base URL of the fallback SLM endpoint (OpenAI-compatible) |
-| `CLASSIFIER_FALLBACK_MODEL` | — | Model name for the fallback SLM |
-| `CLASSIFIER_FALLBACK_API_KEY` | — | API key for the fallback SLM endpoint |
-| `CLASSIFIER_FALLBACK_TIMEOUT_MS` | `800` | Timeout in milliseconds for the fallback SLM request |
 | `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform) or `avspeech` (macOS AVSpeechSynthesizer) |
 | `AVSPEECH_VOICE` | `""` | macOS AVSpeech voice name. Empty string = auto-select first available system voice. At runtime, `avspeech.rs` picks the first voice on the system when this is empty or whitespace-only. |
 | `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |

@@ -23,7 +23,6 @@ use tokio::sync::mpsc;
 use app::{Action, App};
 use events::{TuiEvent, TuiEventRx};
 use input::KeyReader;
-use seneschal_common::classifier::ClassifierForceMode;
 use seneschal_common::tools::{ConversationMode, PromptBuildState};
 use seneschal_core::pipeline::PipelineFrame;
 
@@ -41,7 +40,6 @@ pub async fn run(
     tts_muted: Arc<AtomicBool>,
     conv_mode: Arc<Mutex<ConversationMode>>,
     prompt_build_state: Arc<Mutex<PromptBuildState>>,
-    classifier_force: Arc<Mutex<ClassifierForceMode>>,
     initial_history: Vec<(String, String)>,
 ) -> Result<()> {
     enable_raw_mode()?;
@@ -56,7 +54,7 @@ pub async fn run(
         },
     )?;
 
-    let mut app = App::new(conv_mode, prompt_build_state, classifier_force);
+    let mut app = App::new(conv_mode, prompt_build_state);
     let mut keys = KeyReader::new();
     let tick = tokio::time::Duration::from_millis(TICK_MS);
 
@@ -102,23 +100,6 @@ pub async fn run(
                                     let was_muted = tts_muted.load(Ordering::SeqCst);
                                     tts_muted.store(!was_muted, Ordering::SeqCst);
                                     app.tts_enabled = was_muted;
-                                }
-                                Action::CycleClassifierForce => {
-                                    let next = {
-                                        let mut mode = app.classifier_force.lock().unwrap();
-                                        *mode = mode.cycle();
-                                        *mode
-                                    };
-                                    // Reflect force immediately on the badge when forcing.
-                                    if let Some(intent) = next.as_intent() {
-                                        app.last_intent = Some(intent);
-                                        app.last_intent_forced = true;
-                                    } else {
-                                        app.last_intent_forced = false;
-                                    }
-                                    app.handle_tui_event(TuiEvent::SystemNotification {
-                                        text: format!("Classifier force: {}", next.as_str()),
-                                    });
                                 }
                             }
                         }

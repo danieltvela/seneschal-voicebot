@@ -101,9 +101,6 @@ async fn main() -> anyhow::Result<()> {
                     } => {
                         println!("[MCP] {} {}", server_name, method);
                     }
-                    ClientControlEvent::Classification { intent, level, .. } => {
-                        println!("[Classification] {} ({})", intent, level);
-                    }
                     ClientControlEvent::AgentTaskStarted {
                         task_id,
                         agent_name,

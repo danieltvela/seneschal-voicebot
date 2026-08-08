@@ -73,10 +73,6 @@ REGLAS
 - Si faltan datos imprescindibles, indica qué falta en una frase declarativa."""
 llm_temperature = 0.5
 llm_thinking = false
-llm_temperature_simple = 0.9
-llm_temperature_complex = 0.5
-llm_thinking_simple = false
-llm_thinking_complex = true
 llm_complex_keywords = []   # vacío = usar defaults del clasificador
 classifier_confidence_threshold = 0.6
 classifier_enable_embedding = false
@@ -88,8 +84,6 @@ classifier_fallback_url = ""
 classifier_fallback_model = ""
 classifier_fallback_api_key = ""
 classifier_fallback_timeout_ms = 800
-# Deprecated (#191): SIMPLE always sends tools + tool_choice "none" (KV cache).
-llm_tools_strict = false
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
 tts_provider = "kokoro"

@@ -129,12 +129,6 @@ pub enum ClientControlEvent {
         method: String,
         params: serde_json::Value,
     },
-    Classification {
-        intent: String,
-        level: String,
-        forced: bool,
-        utterance_id: Option<u64>,
-    },
     AgentTaskStarted {
         task_id: String,
         agent_name: String,

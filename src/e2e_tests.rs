@@ -217,7 +217,6 @@ impl E2eHarness {
                 sample_rate,
             ));
             tokio::spawn(async move {
-                let c = crate::classifier::ClassifierPipeline::new(0.6);
                 llm_task(
                     events_c,
                     state_tx_c,
@@ -235,15 +234,10 @@ impl E2eHarness {
                     turn_c,
                     proactive_tx,
                     filler_c,
-                    Arc::new(c),
-                    0.8,   // llm_temperature_simple
-                    0.3,   // llm_temperature_complex
-                    false, // llm_thinking_simple
-                    true,  // llm_thinking_complex
-                    false, // llm_tools_strict
+                    0.8,   // llm_temperature
+                    false, // llm_thinking
                     None,  // tui_tx
-                    Arc::new(Mutex::new(seneschal_common::ClassifierForceMode::Auto)),
-                    None, // control_broadcast
+                    None,  // control_broadcast
                 )
                 .await;
             })

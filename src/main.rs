@@ -6,7 +6,7 @@
 // agents → seneschal_agents
 // analysis → seneschal_extras::analysis
 // audio → seneschal_core::audio
-mod classifier;
+
 mod config;
 mod db;
 // dream → seneschal_memory::dream
@@ -251,9 +251,6 @@ async fn async_main() -> Result<()> {
     let mut tool_registry = ToolRegistry::new();
 
     let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
-    let classifier_force: Arc<Mutex<seneschal_common::ClassifierForceMode>> =
-        Arc::new(Mutex::new(seneschal_common::ClassifierForceMode::Auto));
-
     tool_registry.register(CurrentTimeTool);
     // DISABLED (temp)
     // tool_registry.register(ReadFileTool);
@@ -1268,14 +1265,8 @@ async fn async_main() -> Result<()> {
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
         let filler_controller_c = Arc::clone(&filler_controller);
-        let classifier = Arc::new(crate::classifier::build_classifier(&config));
-        let classifier_c = Arc::clone(&classifier);
-        let llm_temp_simple = config.llm_temperature_simple;
-        let llm_temp_complex = config.llm_temperature_complex;
-        let llm_think_simple = config.llm_thinking_simple;
-        let llm_think_complex = config.llm_thinking_complex;
-        let llm_strict = config.llm_tools_strict;
-        let classifier_force_c = Arc::clone(&classifier_force);
+        let llm_temperature = config.llm_temperature;
+        let llm_thinking = config.llm_thinking;
         #[cfg(feature = "control")]
         let control_broadcast_llm = Some(control_broadcast.clone());
         #[cfg(not(feature = "control"))]
@@ -1298,14 +1289,9 @@ async fn async_main() -> Result<()> {
                 turn_commit_c,
                 proactive_tx_c,
                 filler_controller_c,
-                classifier_c,
-                llm_temp_simple,
-                llm_temp_complex,
-                llm_think_simple,
-                llm_think_complex,
-                llm_strict,
+                llm_temperature,
+                llm_thinking,
                 tui_tx_llm,
-                classifier_force_c,
                 control_broadcast_llm,
             )
             .await;
@@ -1415,7 +1401,6 @@ async fn async_main() -> Result<()> {
         let tts_muted_c = Arc::clone(&tts_muted);
         let conv_mode_c = Arc::clone(&conv_mode);
         let prompt_build_c = Arc::clone(&prompt_build_state);
-        let classifier_force_c = Arc::clone(&classifier_force);
         // Same history slice loaded into LlmSession — UI hard-caps inside seed_history.
         let tui_history = history.clone();
         if !tui_history.is_empty() {
@@ -1433,7 +1418,6 @@ async fn async_main() -> Result<()> {
                 tts_muted_c,
                 conv_mode_c,
                 prompt_build_c,
-                classifier_force_c,
                 tui_history,
             )
             .await

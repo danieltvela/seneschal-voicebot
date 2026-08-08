@@ -5,8 +5,6 @@
 
 use tokio::sync::mpsc;
 
-use crate::classifier::{ClassifierLevel, Intent};
-
 /// Pipeline state for the TUI status bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PipelineState {
@@ -31,13 +29,6 @@ pub enum TuiEvent {
     StateChange(PipelineState),
     /// User message finalized (from voice STT or typed input).
     UserMessage { text: String, source: InputSource },
-    /// Intent classification result for the current user turn (effective intent).
-    Classification {
-        intent: Intent,
-        level: ClassifierLevel,
-        /// True when the TUI force override replaced the cascade result.
-        forced: bool,
-    },
     /// A new LLM token arrived (for streaming display).
     AssistantToken(String),
     /// LLM finished streaming this turn.

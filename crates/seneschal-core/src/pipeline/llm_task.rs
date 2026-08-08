@@ -7,12 +7,9 @@ use tracing::{error, info, warn};
 use super::frames::PipelineFrame;
 use super::fsm::PipelineState;
 use super::state::PipelineEvents;
-use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken, ToolChoice};
+use crate::llm::{LlmProvider, LlmSession, RequestOptions, StreamToken};
 use seneschal_common::ControlBroadcast;
 use seneschal_common::ControlEvent;
-use seneschal_common::classifier::{
-    ClassifierForceMode, ClassifierLevel, ClassifierPipeline, ClassifyResult, Intent,
-};
 use seneschal_common::db::Database;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ToolRegistry;
@@ -43,14 +40,9 @@ pub async fn llm_task(
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     filler_controller: Arc<crate::audio::filler::FillerController>,
-    classifier: Arc<ClassifierPipeline>,
-    llm_temperature_simple: f32,
-    llm_temperature_complex: f32,
-    llm_thinking_simple: bool,
-    llm_thinking_complex: bool,
-    llm_tools_strict: bool,
+    llm_temperature: f32,
+    llm_thinking: bool,
     tui_tx: Option<TuiEventTx>,
-    classifier_force: Arc<Mutex<ClassifierForceMode>>,
     // Optional Control/SSE bus. When Some, live transcript/tokens/tools are published
     // for companions and dashboards. Always typed in common (no feature gate).
     control_broadcast: Option<ControlBroadcast>,
@@ -216,113 +208,12 @@ pub async fn llm_task(
 
         'pipeline: {
             'tool_loop: for iter in 0..MAX_TOOL_ITERATIONS {
-                // ── Classify intent before LLM call ─────────────────────────────
-                let (request_options, tools_enabled, _result) = if iter == 0 {
-                    let is_complex_turn = tool_continuation || is_system_notification;
-                    let force = *classifier_force.lock().unwrap();
-                    let (res, forced) = if let Some(forced_intent) = force.as_intent() {
-                        (
-                            ClassifyResult {
-                                intent: forced_intent,
-                                level: ClassifierLevel::Heuristic,
-                                confidence: 1.0,
-                                matched_keyword: None,
-                            },
-                            true,
-                        )
-                    } else if is_complex_turn {
-                        (
-                            ClassifyResult {
-                                intent: Intent::Complex,
-                                level: ClassifierLevel::Heuristic,
-                                confidence: 1.0,
-                                matched_keyword: None,
-                            },
-                            false,
-                        )
-                    } else {
-                        (classifier.classify(&text).await, false)
-                    };
-                    let intent = res.intent;
-                    let mut opts = match intent {
-                        Intent::Simple => RequestOptions::new()
-                            .with_temperature(llm_temperature_simple)
-                            .with_thinking(llm_thinking_simple),
-                        Intent::Complex => RequestOptions::new()
-                            .with_temperature(llm_temperature_complex)
-                            .with_thinking(llm_thinking_complex),
-                    };
-                    // tools_usable: Complex may call tools / force a tool.
-                    // Tool *definitions* are always sent (KV-cache stability, #191).
-                    let tools_on = matches!(intent, Intent::Complex);
-                    if !tools_on {
-                        // Disable tool *use* without stripping definitions.
-                        opts = opts.with_tool_choice(ToolChoice::None);
-                    }
-                    // llm_tools_strict is obsolete for omit-vs-include; Simple
-                    // always uses tool_choice "none". Kept for config compat.
-                    let _ = llm_tools_strict;
-                    // Trace classification
-                    info!(target: "classifier",
-                        "[pipe={}] intent={:?} level={:?} confidence={:.2} matched={:?} tools_usable={} forced={}",
-                        pipeline_id, intent, res.level, res.confidence,
-                        res.matched_keyword, tools_on, forced);
-                    // Surface effective intent on the TUI status bar.
-                    if let Some(ref tx) = tui_tx
-                        && !tool_continuation
-                        && !is_system_notification
-                    {
-                        tx.send(TuiEvent::Classification {
-                            intent,
-                            level: res.level,
-                            forced,
-                        })
-                        .ok();
-                    }
-                    // Persist classification for analysis
-                    let db_log = db
-                        .save_classification(
-                            &session_id.to_string(),
-                            pipeline_id as i64,
-                            &text,
-                            intent.as_str(),
-                            res.confidence,
-                            match res.level {
-                                ClassifierLevel::Heuristic => "Heuristic",
-                                ClassifierLevel::Embedding => "Embedding",
-                                ClassifierLevel::Logistic => "Logistic",
-                                ClassifierLevel::Fallback => "Fallback",
-                            },
-                            if forced { "force" } else { "cascade" },
-                            res.matched_keyword.as_deref(),
-                        )
-                        .await;
-                    if let Err(e) = db_log {
-                        warn!(target: "classifier",
-                            "[pipe={}] failed to save classification: {e}",
-                            pipeline_id);
-                    }
-                    (opts, tools_on, res)
-                } else {
-                    // On tool-continuation iterations, keep the same options
-                    (
-                        RequestOptions::new(),
-                        true,
-                        ClassifyResult {
-                            intent: Intent::Complex,
-                            level: ClassifierLevel::Heuristic,
-                            confidence: 1.0,
-                            matched_keyword: None,
-                        },
-                    )
-                };
+                let request_options = RequestOptions::new()
+                    .with_temperature(llm_temperature)
+                    .with_thinking(llm_thinking);
 
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
-                let forced_tool = if tools_enabled
-                    && iter == 0
-                    && !tool_continuation
-                    && !is_system_notification
-                {
+                let forced_tool = if iter == 0 && !tool_continuation && !is_system_notification {
                     tools
                         .lock()
                         .unwrap()
@@ -353,8 +244,7 @@ pub async fn llm_task(
                     info!(target: "pipeline", "Deterministic dispatch: '{}' (LLM skipped)", dt.0);
                     tool_call = Some(dt);
                 } else {
-                    // Always send the full tool schema so Simple↔Complex flips do not
-                    // invalidate the server-side prompt KV cache (#191).
+                    // Always send the full tool schema for KV-cache stability (#191).
                     let active_tools: Vec<serde_json::Value> = tool_defs.clone();
                     let (token_rx, stream_handle) = match llm_client
                         .stream(

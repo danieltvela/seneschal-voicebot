@@ -186,19 +186,10 @@ pub struct Config {
     /// When true, `chat_template_kwargs: {"enable_thinking": true}` is sent and
     /// `<think>…</think>` blocks are stripped from the output.
     pub llm_thinking: bool,
-    /// SIMPLE-mode temperature (LLM_TEMPERATURE_SIMPLE, default 0.8).
-    pub llm_temperature_simple: f32,
-    /// COMPLEX-mode temperature (LLM_TEMPERATURE_COMPLEX, default = llm_temperature).
-    pub llm_temperature_complex: f32,
-    /// SIMPLE-mode thinking (LLM_THINKING_SIMPLE, default false).
-    pub llm_thinking_simple: bool,
-    /// COMPLEX-mode thinking (LLM_THINKING_COMPLEX, default = llm_thinking).
-    pub llm_thinking_complex: bool,
+    // ── Intent Classifier (cascada C01) ───────────────────────────────
     /// Keywords (CSV) that mark a request as COMPLEX.
     /// Empty → use DEFAULT_COMPLEX_KEYWORDS from the classifier module.
     pub llm_complex_keywords: Vec<String>,
-
-    // ── Intent Classifier (cascada C01) ───────────────────────────────
     /// Umbral de confianza [0.0,1.0]: si un nivel baja de éste, la cascada continúa.
     pub classifier_confidence_threshold: f32,
     /// Activar Niveles 2/3 (embeddings) — requiere feature `classifier-embedding`.
@@ -219,9 +210,6 @@ pub struct Config {
     pub classifier_fallback_api_key: String,
     /// Timeout en ms del fallback SLM.
     pub classifier_fallback_timeout_ms: u64,
-    /// Deprecated (#191): SIMPLE always sends full tools + `tool_choice: "none"`.
-    /// Kept for config/env compatibility; runtime no longer branches on this flag.
-    pub llm_tools_strict: bool,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
     /// TTS backend: "avspeech" (default, native AVSpeechSynthesizer, --features avspeech)
@@ -766,18 +754,6 @@ impl Config {
         if let Ok(v) = env::var("LLM_THINKING") {
             self.llm_thinking = v == "1" || v.to_lowercase() == "true";
         }
-        if let Ok(v) = env::var("LLM_TEMPERATURE_SIMPLE") {
-            self.llm_temperature_simple = v.parse().context("Invalid LLM_TEMPERATURE_SIMPLE")?;
-        }
-        if let Ok(v) = env::var("LLM_TEMPERATURE_COMPLEX") {
-            self.llm_temperature_complex = v.parse().context("Invalid LLM_TEMPERATURE_COMPLEX")?;
-        }
-        if let Ok(v) = env::var("LLM_THINKING_SIMPLE") {
-            self.llm_thinking_simple = v == "1" || v.to_lowercase() == "true";
-        }
-        if let Ok(v) = env::var("LLM_THINKING_COMPLEX") {
-            self.llm_thinking_complex = v == "1" || v.to_lowercase() == "true";
-        }
         if let Ok(v) = env::var("LLM_COMPLEX_KEYWORDS") {
             self.llm_complex_keywords = v
                 .split(',')
@@ -819,9 +795,6 @@ impl Config {
             self.classifier_fallback_timeout_ms = v
                 .parse()
                 .context("Invalid CLASSIFIER_FALLBACK_TIMEOUT_MS")?;
-        }
-        if let Ok(v) = env::var("LLM_TOOLS_STRICT") {
-            self.llm_tools_strict = v == "1" || v.to_lowercase() == "true";
         }
 
         // Secondary LLM

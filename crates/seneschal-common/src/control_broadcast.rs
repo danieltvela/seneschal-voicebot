@@ -48,13 +48,6 @@ pub enum ControlEvent {
         method: String,
         params: serde_json::Value,
     },
-    /// Intent classification for the current turn (should-have for companions).
-    Classification {
-        intent: String,
-        level: String,
-        forced: bool,
-        utterance_id: Option<u64>,
-    },
     AgentTaskStarted {
         task_id: String,
         agent_name: String,
@@ -222,12 +215,6 @@ mod tests {
     #[test]
     fn all_new_variants_roundtrip() {
         let samples = vec![
-            ControlEvent::Classification {
-                intent: "simple".into(),
-                level: "heuristic".into(),
-                forced: false,
-                utterance_id: Some(1),
-            },
             ControlEvent::AgentTaskStarted {
                 task_id: "t".into(),
                 agent_name: "a".into(),

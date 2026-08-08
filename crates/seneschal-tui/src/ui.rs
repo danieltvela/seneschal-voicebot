@@ -8,7 +8,6 @@ use ratatui::{
 
 use super::app::{AgentTaskStatus, App, ChatMessage, Role};
 use super::events::{InputSource, PipelineState};
-use seneschal_common::classifier::{ClassifierForceMode, Intent};
 use seneschal_common::tools::ConversationMode;
 
 const MAX_INPUT_ROWS: u16 = 4;
@@ -744,36 +743,6 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// Status-bar label for last/forced classifier intent.
-///
-/// - Force active → show forced intent with 🔒 (even before a turn runs).
-/// - Last classification present → `SIMPLE` / `COMPLEX` (🔒 if that turn was forced).
-/// - Otherwise → `—` (no classification yet, Auto mode).
-fn intent_status_label(
-    last_intent: Option<Intent>,
-    force: ClassifierForceMode,
-    last_forced: bool,
-) -> (String, Color) {
-    if let Some(intent) = force.as_intent() {
-        return (format!("{}🔒", intent.as_str()), Color::Yellow);
-    }
-    match last_intent {
-        Some(intent) => {
-            let label = if last_forced {
-                format!("{}🔒", intent.as_str())
-            } else {
-                intent.as_str().to_string()
-            };
-            let color = match intent {
-                Intent::Simple => Color::Cyan,
-                Intent::Complex => Color::Magenta,
-            };
-            (label, color)
-        }
-        None => ("—".to_string(), Color::Rgb(100, 100, 100)),
-    }
-}
-
 /// Render the status bar at the bottom of the viewport.
 fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let (state_label, state_color) = match app.state {
@@ -797,43 +766,6 @@ fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
         ConversationMode::AmbientLocked => ("AMBIENT🔒", Color::Yellow),
     };
 
-    let force = *app.classifier_force.lock().unwrap();
-    let (intent_label, intent_color) =
-        intent_status_label(app.last_intent, force, app.last_intent_forced);
-
-    // Build segments with computed x-ranges for click detection
-    let mut segments: Vec<(String, super::app::StatusBarAction, Rect)> = Vec::new();
-    let mut x = area.x + 1; // after the leading space
-
-    let brand = " seneschal ";
-    x += brand.len() as u16 + 1; // +1 for space
-
-    // State label (not clickable)
-    x += state_label.len() as u16 + " │ ".len() as u16;
-
-    // TTS label (clickable)
-    let tts_start = x;
-    let tts_w = tts_label.len() as u16;
-    segments.push((
-        tts_label.to_string(),
-        super::app::StatusBarAction::ToggleTts,
-        Rect::new(tts_start, area.y, tts_w, 1),
-    ));
-    x += tts_w + " │ ".len() as u16;
-
-    // Conv mode (possibly clickable)
-    x += conv_label.len() as u16 + " │ ".len() as u16;
-
-    // Intent label (clickable for classifier force)
-    let intent_start = x;
-    let intent_w = intent_label.len() as u16;
-    segments.push((
-        intent_label.to_string(),
-        super::app::StatusBarAction::CycleClassifierForce,
-        Rect::new(intent_start, area.y, intent_w, 1),
-    ));
-    let _ = (x, intent_w);
-
     let text = Text::from(vec![Line::from(vec![
         Span::styled(
             " seneschal ",
@@ -846,10 +778,8 @@ fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::raw(" │ "),
         Span::styled(conv_label, Style::default().fg(conv_color)),
         Span::raw(" │ "),
-        Span::styled(intent_label, Style::default().fg(intent_color)),
-        Span::raw(" │ "),
         Span::styled(
-            "Ctrl+T TTS  Ctrl+M force  Ctrl+C quit",
+            "Ctrl+T TTS  Ctrl+C quit",
             Style::default().fg(Color::Rgb(100, 100, 100)),
         ),
     ])]);
@@ -858,6 +788,14 @@ fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(Paragraph::new(text).block(block), area);
 
+    let mut segments = Vec::new();
+    let x =
+        area.x + 1 + " seneschal ".len() as u16 + 1 + state_label.len() as u16 + " │ ".len() as u16;
+    segments.push((
+        tts_label.to_string(),
+        super::app::StatusBarAction::ToggleTts,
+        Rect::new(x, area.y, tts_label.len() as u16, 1),
+    ));
     app.status_bar_segments = segments
         .into_iter()
         .map(|(label, action, region)| super::app::StatusBarSegment {
@@ -1002,25 +940,6 @@ mod tests {
     #[test]
     fn indented_line_counts_spaces_in_width() {
         assert_eq!(word_wrap_plain("  ab cd", 6), vec!["  ab", "cd"]);
-    }
-
-    #[test]
-    fn intent_badge_none_auto() {
-        let (label, _) = intent_status_label(None, ClassifierForceMode::Auto, false);
-        assert_eq!(label, "—");
-    }
-
-    #[test]
-    fn intent_badge_last_simple() {
-        let (label, _) =
-            intent_status_label(Some(Intent::Simple), ClassifierForceMode::Auto, false);
-        assert_eq!(label, "SIMPLE");
-    }
-
-    #[test]
-    fn intent_badge_force_complex() {
-        let (label, _) = intent_status_label(None, ClassifierForceMode::ForceComplex, false);
-        assert_eq!(label, "COMPLEX🔒");
     }
 
     #[test]
