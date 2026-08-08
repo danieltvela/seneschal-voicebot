@@ -22,10 +22,10 @@ servers:
       vllm-gemma:
         port: 8006
         token: ""
-        models: 
+        models: []
           # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
-          - gemma-4-31B-it-NVFP4
+          # - gemma-4-31B-it-NVFP4
           # - gemma-4-31B-it
           # - Qwen3.6-35B-A3B-FP8
           # - Qwen3.6-27B-NVFP4
@@ -48,14 +48,19 @@ servers:
       llama-server:
         port: 8000
         token: "asdf"
-        models:
-          - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
+        models: []
+          # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
           # - ./models/LFM2.5-2.6B-Q4_K_M.gguf
           # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
           # - LFM2.5-8B-A1B-Q8_0
           # - gemma-4-26B-A4B-it-UD-Q4_K_XL
           # - gemma-4-26B-A4B-it-UD-Q8_K_XL
           # - Qwen3.6-35B-A3B-UD-Q4_K_M
+      llama-server2:
+        port: 8080
+        token: "asdf"
+        models:
+          - ./models/LFM2.5-2.6B-Q8_0.gguf
       omlx:
         port: 8000
         token: "asdf"
@@ -89,13 +94,13 @@ servers:
       lm-studio:
         port: 1234
         token: ""
-        models:
+        models: []
           # - mlx-community/LFM2.5-2.6B-4bit
           # - google/gemma-4-12b
           # - gemma-4-12b-it-mlx
           # - google/gemma-4-12b-qat
           # - google/gemma-4-26b-a4b
-          - google/gemma-4-26b-a4b-qat
+          # - google/gemma-4-26b-a4b-qat
           # - ornith-1.0-35b-mlx
           # - gemma-4-26b-a4b-it-qat-nvfp4
           # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4

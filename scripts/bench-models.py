@@ -21,7 +21,15 @@ Env vars:
   BENCH_TRIALS    hot measurement trials    (default 3)
   BENCH_GEN       tokens to generate        (default 80)
   BENCH_QUALITY   run quality benchmark     (default 1; set 0 to skip)
-  BENCH_THINKING  enable model thinking     (default 0; set 1 to enable)
+  BENCH_THINKING  enable model thinking     (default 1; set 0 to disable)
+
+Thinking handling (mirrors seneschal-core ThinkFilter):
+  - When BENCH_THINKING=1: request enable_thinking / think flags; no /no_think prefix.
+  - When BENCH_THINKING=0: request disable flags + llama.cpp /no_think prefix.
+  - Quality always evaluates the final answer only: <think>…</think> blocks and
+    dedicated reasoning/reasoning_content fields are stripped before checks.
+  - Speed TTFT is time-to-first-answer-token (post strip); TG counts all decode
+    tokens (reasoning + answer).
 """
 
 import http.client
@@ -271,7 +279,7 @@ TOOL_DEFINITIONS = [
 TRIALS = int(os.environ.get("BENCH_TRIALS", "3"))
 GEN_TOKENS = int(os.environ.get("BENCH_GEN", "80"))
 RUN_QUALITY = os.environ.get("BENCH_QUALITY", "1") != "0"
-ENABLE_THINKING = os.environ.get("BENCH_THINKING", "0") != "0"
+ENABLE_THINKING = os.environ.get("BENCH_THINKING", "1") != "0"
 
 _PROMPT_TEXT = (
     SYSTEM_PROMPT
@@ -321,6 +329,9 @@ def _is_llamacpp(runtime_name: str) -> bool:
 
 
 def _no_think_prefix(runtime_name: str) -> str:
+    """llama.cpp + Qwen: /no_think is the most reliable disable when thinking is off."""
+    if ENABLE_THINKING:
+        return ""
     return "/no_think\n\n" if _is_llamacpp(runtime_name) else ""
 
 
@@ -332,6 +343,7 @@ def _thinking_off_fields() -> dict:
         "think": False,
     }
 
+
 def _thinking_on_fields() -> dict:
     return {
         "enable_thinking": True,
@@ -339,6 +351,56 @@ def _thinking_on_fields() -> dict:
         "thinking": {"type": "enabled", "budget_tokens": 1024},
         "think": True,
     }
+
+
+def _thinking_fields() -> dict:
+    return _thinking_on_fields() if ENABLE_THINKING else _thinking_off_fields()
+
+
+# Matches seneschal-core ThinkFilter / strip_think_blocks — final answer only.
+_THINK_BLOCK_RE = re.compile(
+    r"<think>.*?</think>"
+    r"|<thinking>.*?</thinking>"
+    r"|<antThinking>.*?</antThinking>",
+    re.DOTALL | re.IGNORECASE,
+)
+_THINK_UNCLOSED_RE = re.compile(
+    r"<(?:think|thinking|antThinking)\b[^>]*>.*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_think_blocks(s: str) -> str:
+    """Strip chain-of-thought blocks from a complete (non-streaming) string."""
+    if not s:
+        return ""
+    out = _THINK_BLOCK_RE.sub("", s)
+    out = _THINK_UNCLOSED_RE.sub("", out)
+    return out.strip()
+
+
+def _delta_parts(delta: dict) -> tuple[str, str]:
+    """Split an SSE delta into (content, reasoning) across provider field names."""
+    content = delta.get("content") or ""
+    reasoning = (
+        delta.get("reasoning")
+        or delta.get("reasoning_content")
+        or delta.get("thinking")
+        or ""
+    )
+    return content, reasoning
+
+
+def _message_text(msg: dict) -> str:
+    """Final answer text from a chat-completion message (thinking stripped)."""
+    text = msg.get("content") or ""
+    # Some providers only put CoT in a dedicated field — never treat it as answer.
+    return _strip_think_blocks(text)
+
+
+def _quality_max_tokens() -> int:
+    """Thinking burns output budget before the spoken answer; leave room for both."""
+    return 2048 if ENABLE_THINKING else 350
 
 
 def load_config(path: str) -> list[dict]:
@@ -415,6 +477,11 @@ def _auth_headers(token: str) -> dict:
     return h
 
 
+def _http_timeout() -> float:
+    """Longer socket timeout when thinking is on (CoT can run many seconds)."""
+    return 300.0 if ENABLE_THINKING else 120.0
+
+
 def _post_stream(host, port, token, payload, use_ssl=False, base_path=""):
     """POST to /v1/chat/completions with stream=True. Yields SSE content lines.
 
@@ -424,7 +491,7 @@ def _post_stream(host, port, token, payload, use_ssl=False, base_path=""):
     """
     body = json.dumps(payload).encode()
     endpoint = _build_path(base_path, "/v1/chat/completions")
-    conn = _make_conn(host, port, use_ssl, timeout=120)
+    conn = _make_conn(host, port, use_ssl, timeout=_http_timeout())
     try:
         conn.request(
             "POST", endpoint, body=body, headers=_auth_headers(token)
@@ -454,7 +521,7 @@ def _post_blocking(host, port, token, payload, use_ssl=False, base_path="") -> d
     payload = {**payload, "stream": False}
     body = json.dumps(payload).encode()
     endpoint = _build_path(base_path, "/v1/chat/completions")
-    conn = _make_conn(host, port, use_ssl, timeout=120)
+    conn = _make_conn(host, port, use_ssl, timeout=_http_timeout())
     try:
         conn.request(
             "POST", endpoint, body=body, headers=_auth_headers(token)
@@ -514,10 +581,6 @@ def _build_speed_messages(runtime_name: str) -> list[dict]:
     return msgs
 
 
-def _thinking_fields() -> dict:
-    return _thinking_on_fields() if ENABLE_THINKING else _thinking_off_fields()
-
-
 def _base_speed_payload(model_id, max_tokens, stream, runtime_name, bench_thinking=True) -> dict:
     payload = {
         "model": model_id,
@@ -550,14 +613,51 @@ def load_model(host, port, token, model_id, use_ssl=False, base_path=""):
     )
 
 
+def _speed_max_tokens() -> int:
+    """Thinking burns output budget before the spoken answer; leave room for both."""
+    # CoT models (Qwen3/Gemma thinking) often need 1–2k tokens before any answer.
+    return GEN_TOKENS + (2048 if ENABLE_THINKING else 0)
+
+
+def _stream_diag(content_buf: str, reasoning_buf: str, finish_reason: str | None) -> str:
+    """Compact preview for 'only thinking' failures."""
+    parts = []
+    if finish_reason:
+        parts.append(f"finish={finish_reason}")
+    c = _strip_think_blocks(content_buf) or content_buf
+    if c.strip():
+        parts.append(f"content={c.strip()[:80]!r}")
+    elif content_buf.strip():
+        parts.append(f"content(raw/think)={content_buf.strip()[:80]!r}")
+    else:
+        parts.append("content=<empty>")
+    if reasoning_buf.strip():
+        parts.append(f"reasoning={reasoning_buf.strip()[:80]!r}")
+    else:
+        parts.append("reasoning=<empty>")
+    return ", ".join(parts)
+
+
 def measure_pp(host, port, token, model_id, runtime_name, bench_thinking=True, use_ssl=False, base_path=""):
-    """Cold full-conversation prefill. Returns (cold_ttft_ms, pp_tps, prompt_tokens)."""
+    """Cold full-conversation prefill. Returns (cold_ttft_ms, pp_tps, prompt_tokens).
+
+    PP rate uses time-to-first-*any* token (end of prefill). cold_ttft is
+    time-to-first-*answer* token (post think-strip) — what the voice pipeline
+    would forward to TTS. Stops at the first answer token.
+    """
     payload = _base_speed_payload(
-        model_id, max_tokens=GEN_TOKENS, stream=True, runtime_name=runtime_name, bench_thinking=bench_thinking
+        model_id,
+        max_tokens=_speed_max_tokens(),
+        stream=True,
+        runtime_name=runtime_name,
+        bench_thinking=bench_thinking,
     )
     t_start = time.perf_counter()
-    t_first = None
+    t_gen = t_answer = None
     prompt_tokens_api = None
+    content_buf = ""
+    reasoning_buf = ""
+    finish_reason = None
 
     for line in _post_stream(host, port, token, payload, use_ssl=use_ssl, base_path=base_path):
         if not line.startswith("data: "):
@@ -571,29 +671,64 @@ def measure_pp(host, port, token, model_id, runtime_name, bench_thinking=True, u
             continue
         if "usage" in chunk and chunk["usage"]:
             prompt_tokens_api = chunk["usage"].get("prompt_tokens")
-        delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-        first_token = delta.get("content") or delta.get("reasoning") or ""
-        if first_token and t_first is None:
-            t_first = time.perf_counter()
+        choice = (chunk.get("choices") or [{}])[0]
+        if choice.get("finish_reason"):
+            finish_reason = choice["finish_reason"]
+        delta = choice.get("delta") or {}
+        content, reasoning = _delta_parts(delta)
+        if reasoning:
+            reasoning_buf += reasoning
+        generated = content or reasoning
+        if not generated:
+            continue
+        now = time.perf_counter()
+        if t_gen is None:
+            t_gen = now
+        if content:
+            content_buf += content
+            if t_answer is None and _strip_think_blocks(content_buf):
+                t_answer = now
+                break  # first answer token is enough for PP + cold TTFT
 
-    if t_first is None:
-        raise RuntimeError("PP trial: no content token received")
+    if t_gen is None:
+        raise RuntimeError(
+            f"PP trial: no tokens received ({_stream_diag(content_buf, reasoning_buf, finish_reason)})"
+        )
+    if t_answer is None:
+        hint = " — try BENCH_THINKING=0 or raise BENCH_GEN" if ENABLE_THINKING else ""
+        raise RuntimeError(
+            f"PP trial: no answer token received (only thinking?) "
+            f"({_stream_diag(content_buf, reasoning_buf, finish_reason)}){hint}"
+        )
 
-    elapsed = t_first - t_start
-    cold_ttft_ms = elapsed * 1000
+    # PP = prefill throughput (first generated token). cold TTFT = first answer.
+    pp_elapsed = t_gen - t_start
+    cold_ttft_ms = (t_answer - t_start) * 1000
     prompt_tokens = prompt_tokens_api or ESTIMATED_PROMPT_TOKENS
-    pp_tps = prompt_tokens / elapsed if elapsed > 0 else float("nan")
+    pp_tps = prompt_tokens / pp_elapsed if pp_elapsed > 0 else float("nan")
     return cold_ttft_ms, pp_tps, prompt_tokens
 
 
 def measure_hot(host, port, token, model_id, runtime_name, bench_thinking=True, use_ssl=False, base_path=""):
-    """Hot trial with warm KV cache. Returns (ttft_ms, tg_tps, n_tokens)."""
+    """Hot trial with warm KV cache. Returns (ttft_ms, tg_tps, n_tokens).
+
+    TTFT = first *answer* token (post think-strip) — what the voice pipeline cares
+    about. TG spans first generated token (reasoning or answer) → last token and
+    counts both, so throughput reflects real decode load under thinking.
+    """
     payload = _base_speed_payload(
-        model_id, max_tokens=GEN_TOKENS, stream=True, runtime_name=runtime_name, bench_thinking=bench_thinking
+        model_id,
+        max_tokens=_speed_max_tokens(),
+        stream=True,
+        runtime_name=runtime_name,
+        bench_thinking=bench_thinking,
     )
     t_start = time.perf_counter()
-    t_first = t_last = t_done = None
+    t_gen = t_answer = t_last = t_done = None
     n_tokens = 0
+    content_buf = ""
+    reasoning_buf = ""
+    finish_reason = None
 
     for line in _post_stream(host, port, token, payload, use_ssl=use_ssl, base_path=base_path):
         if not line.startswith("data: "):
@@ -606,23 +741,36 @@ def measure_hot(host, port, token, model_id, runtime_name, bench_thinking=True, 
             chunk = json.loads(data)
         except json.JSONDecodeError:
             continue
-        delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-        content = delta.get("content") or ""
-        thinking = delta.get("reasoning") or ""
-        generated = content or thinking
-        if generated:
-            now = time.perf_counter()
-            if t_first is None:
-                t_first = now
-            t_last = now
-            n_tokens += len(generated.split())
+        choice = (chunk.get("choices") or [{}])[0]
+        if choice.get("finish_reason"):
+            finish_reason = choice["finish_reason"]
+        delta = choice.get("delta") or {}
+        content, reasoning = _delta_parts(delta)
+        if reasoning:
+            reasoning_buf += reasoning
+        generated = content or reasoning
+        if not generated:
+            continue
+        now = time.perf_counter()
+        if t_gen is None:
+            t_gen = now
+        t_last = now
+        n_tokens += len(generated.split())
+        if content:
+            content_buf += content
+            if t_answer is None and _strip_think_blocks(content_buf):
+                t_answer = now
 
-    if t_first is None or n_tokens == 0:
-        raise RuntimeError("Hot trial: no content tokens received")
+    if t_answer is None or n_tokens == 0:
+        hint = " — try BENCH_THINKING=0 or raise BENCH_GEN" if ENABLE_THINKING else ""
+        raise RuntimeError(
+            f"Hot trial: no answer tokens received (only thinking?) "
+            f"({_stream_diag(content_buf, reasoning_buf, finish_reason)}){hint}"
+        )
 
-    ttft_ms = (t_first - t_start) * 1000
-    tg_end = t_last if (t_last and t_last > t_first + 0.001) else t_done
-    tg_secs = (tg_end - t_first) if tg_end and tg_end > t_first + 0.001 else None
+    ttft_ms = (t_answer - t_start) * 1000
+    tg_end = t_last if (t_last and t_gen and t_last > t_gen + 0.001) else t_done
+    tg_secs = (tg_end - t_gen) if tg_end and t_gen and tg_end > t_gen + 0.001 else None
     tg_tps = n_tokens / tg_secs if tg_secs else float("nan")
     return ttft_ms, tg_tps, n_tokens
 
@@ -649,7 +797,11 @@ def _normalize_tool_calls(raw: list) -> list[dict]:
 
 
 def run_fixture(host, port, token, model_id, runtime_name, fixture, bench_thinking=True, use_ssl=False, base_path="") -> tuple[str, list]:
-    """Execute one fixture against the model under test. Returns (text, tool_calls)."""
+    """Execute one fixture against the model under test. Returns (text, tool_calls).
+
+    Text is the final spoken answer: `<think>` blocks and dedicated reasoning
+    fields are stripped, matching seneschal's ThinkFilter behaviour.
+    """
     system_content = _no_think_prefix(runtime_name) + SYSTEM_PROMPT
     messages = [{"role": "system", "content": system_content}]
 
@@ -663,18 +815,18 @@ def run_fixture(host, port, token, model_id, runtime_name, fixture, bench_thinki
     payload = {
         "model": model_id,
         "messages": messages,
-        "max_tokens": 350,
+        "max_tokens": _quality_max_tokens(),
         "temperature": 0.0,
     }
     if bench_thinking:
-        payload.update(_thinking_off_fields())
+        payload.update(_thinking_fields())
     if fixture.get("requires_tools"):
         payload["tools"] = TOOL_DEFINITIONS
         payload["tool_choice"] = "auto"
 
     resp = _post_blocking(host, port, token, payload, use_ssl=use_ssl, base_path=base_path)
     msg_out = resp["choices"][0]["message"]
-    text = msg_out.get("content") or ""
+    text = _message_text(msg_out)
     tool_calls = _normalize_tool_calls(msg_out.get("tool_calls") or [])
     return text, tool_calls
 
@@ -967,6 +1119,7 @@ def call_evaluator(
         "max_tokens": ev_cfg["max_tokens"],
         "temperature": ev_cfg["temperature"],
     }
+    # Evaluator must stay deterministic JSON — always disable thinking.
     if bench_thinking:
         ev_payload.update(_thinking_off_fields())
 
@@ -978,7 +1131,7 @@ def call_evaluator(
         use_ssl=ev_cfg.get("ssl", False),
         base_path=ev_cfg.get("base_path", ""),
     )
-    raw = (resp["choices"][0]["message"].get("content") or "").strip()
+    raw = _message_text(resp["choices"][0]["message"])
 
     # Extract JSON from response (handle code fences and extra prose)
     clean = raw.lstrip("`")
@@ -1408,6 +1561,9 @@ def main():
     print(f"  Targets     : {len(targets)} runtime(s)   {total_models} model(s) total")
     print(f"  Speed       : {len(HISTORY)} turns → warm KV cache → new question")
     print(f"              : {GEN_TOKENS} tokens/response   {TRIALS} hot trials")
+    print(
+        f"  Thinking    : {'ON  (enable_thinking + strip <think>)' if ENABLE_THINKING else 'OFF (disable flags + strip leaks)'}"
+    )
     print(
         f"  Quality     : {len(fixtures)} fixtures"
         if fixtures
