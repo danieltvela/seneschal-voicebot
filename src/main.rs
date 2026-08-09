@@ -27,7 +27,7 @@ use async_channel::bounded;
 use seneschal_common::tools::PromptBuildState;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -247,7 +247,6 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Tools ─────────────────────────────────────────────────────────────────
-    let shared_history: Arc<RwLock<String>> = Arc::new(RwLock::new(String::new()));
     let mut tool_registry = ToolRegistry::new();
 
     let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
@@ -325,12 +324,7 @@ async fn async_main() -> Result<()> {
     for agent in &agent_registry.agents {
         info!(target: "seneschal", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
         let task_map: Arc<dashmap::DashMap<String, ActiveTask>> = Arc::new(dashmap::DashMap::new());
-        let mut run_agent_tool = RunAgentTool::new(
-            agent.clone(),
-            task_map,
-            shared_history.clone(),
-            proactive_tx.clone(),
-        );
+        let mut run_agent_tool = RunAgentTool::new(agent.clone(), task_map, proactive_tx.clone());
         if let Some(ref sec) = secondary_llm_client {
             run_agent_tool = run_agent_tool.with_synthesis(sec.clone());
             info!(target: "seneschal", "run_{} result synthesis via secondary LLM enabled", agent.name);
@@ -366,7 +360,7 @@ async fn async_main() -> Result<()> {
 
     // ── ACP pre-warm (per-agent) — skipped for remote agents ────────────────
     for agent in &agent_registry.agents {
-        if agent.mode != "acp" || !agent.acp_warmup {
+        if agent.mode != "acp" {
             continue;
         }
         let mgr = Arc::clone(&session_manager);
@@ -581,7 +575,6 @@ async fn async_main() -> Result<()> {
                     let registered_names = register_plugin_agent_tools(
                         &plugin_agents,
                         &mut tool_registry,
-                        shared_history.clone(),
                         proactive_tx.clone(),
                         Some(Arc::clone(&session_manager)),
                         secondary_llm_client.clone(),
@@ -1261,7 +1254,6 @@ async fn async_main() -> Result<()> {
         let llm_client_c = llm_client.clone();
         let db_c = db.clone();
         let tools_c = Arc::clone(&tools);
-        let shared_history_c = Arc::clone(&shared_history);
         let turn_commit_c = Arc::clone(&turn_commit_counter);
         let proactive_tx_c = proactive_tx.clone();
         let filler_controller_c = Arc::clone(&filler_controller);
@@ -1285,7 +1277,6 @@ async fn async_main() -> Result<()> {
                 db_c,
                 session_id,
                 tools_c,
-                shared_history_c,
                 turn_commit_c,
                 proactive_tx_c,
                 filler_controller_c,

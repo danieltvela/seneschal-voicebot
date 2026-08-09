@@ -414,12 +414,23 @@ impl AcpWriter {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Send a minimal ready-ping prompt to verify the ACP session responds.
-    pub async fn warm_up(&mut self, session_id: &str, timeout_secs: u64) -> anyhow::Result<()> {
-        let text = "Hello, you are ready. Acknowledge with 'ready'.";
+    /// Send a warm-up prompt to the ACP session.
+    /// Uses the agent's configured prompt to establish context and force model load.
+    /// Falls back to a minimal ping if prompt_text is empty.
+    pub async fn warm_up(
+        &mut self,
+        session_id: &str,
+        prompt_text: &str,
+        timeout_secs: u64,
+    ) -> anyhow::Result<()> {
+        let text = if prompt_text.is_empty() {
+            "Hello, you are ready. Acknowledge with 'ready'.".to_string()
+        } else {
+            prompt_text.to_string()
+        };
         let _id = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            self.send_prompt(session_id, text),
+            self.send_prompt(session_id, &text),
         )
         .await
         .map_err(|_| anyhow::anyhow!("ACP warm-up timed out after {timeout_secs}s"))??;

@@ -20,7 +20,7 @@
 //! ```
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -71,7 +71,6 @@ struct E2eHarness {
     pub db: Database,
     pub session_id: Uuid,
     pub tools: Arc<std::sync::Mutex<ToolRegistry>>,
-    pub shared_history: Arc<RwLock<String>>,
     /// Shared conversation mode (mimics the audio loop's conv_mode).
     pub conv_mode: Arc<Mutex<ConversationMode>>,
     // Kept alive so the temp directory isn't deleted before the test ends.
@@ -108,7 +107,6 @@ impl E2eHarness {
         let session_id = db.get_or_create_session().await.unwrap();
 
         let tools = Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
-        let shared_history = Arc::new(RwLock::new(String::new()));
 
         let events = Arc::new(PipelineEvents::new());
         let play_cancel = Arc::new(AtomicBool::new(false));
@@ -126,7 +124,6 @@ impl E2eHarness {
             db,
             session_id,
             tools,
-            shared_history,
             conv_mode,
             _db_dir: db_dir,
             state_tx,
@@ -209,7 +206,6 @@ impl E2eHarness {
             let client_c = self.llm_client.clone();
             let db_c = self.db.clone();
             let tools_c = Arc::clone(&self.tools);
-            let history_c = Arc::clone(&self.shared_history);
             let turn_c = Arc::clone(&turn_commit);
             let sid = self.session_id;
             let filler_c = Arc::new(seneschal_core::audio::filler::FillerController::new(
@@ -230,7 +226,6 @@ impl E2eHarness {
                     db_c,
                     sid,
                     tools_c,
-                    history_c,
                     turn_c,
                     proactive_tx,
                     filler_c,

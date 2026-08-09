@@ -30,7 +30,7 @@ pub use eyes::EyesDaemon;
 pub use prompt_build::SetPromptBuildTool;
 pub use recover_historical_context::RecoverHistoricalContextTool;
 pub use run_agent::{
-    ActiveTask, AgentTaskHandle, PendingInteractionEntry, RunAgentTool, TaskState, format_history,
+    ActiveTask, AgentTaskHandle, PendingInteractionEntry, RunAgentTool, TaskState,
 };
 pub use seneschal_common::tools::ConversationMode;
 pub use subtask::{ListTasksTool, SubtaskTracker};

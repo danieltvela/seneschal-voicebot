@@ -59,10 +59,6 @@ pub trait Tool: Send + Sync {
     fn is_silent(&self) -> bool {
         false
     }
-    /// Returns true when this tool should be force-called for a query.
-    fn should_force_for(&self, _query: &str) -> bool {
-        false
-    }
     /// Execute the tool with optional args.
     async fn run(&self, args: &str) -> String;
 }
@@ -116,13 +112,6 @@ impl ToolRegistry {
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
-    }
-
-    pub fn forced_tool_for_query(&self, query: &str) -> Option<&str> {
-        self.tools
-            .values()
-            .find(|t| t.should_force_for(query))
-            .map(|t| t.name())
     }
 
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {

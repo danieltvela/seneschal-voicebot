@@ -5,50 +5,6 @@ use super::Tool;
 
 pub struct CurrentTimeTool;
 
-/// Returns true when the user is explicitly asking for the current time, date,
-/// day or hour. Used by the pipeline to force a `current_time` tool call so the
-/// model never answers from stale context or hallucinates a date.
-pub fn is_explicit_time_request(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    let spanish = [
-        "qué hora es",
-        "que hora es",
-        "dime la hora",
-        "la hora actual",
-        "hora actual",
-        "qué día es",
-        "que dia es",
-        "qué día es hoy",
-        "que dia es hoy",
-        "día de hoy",
-        "dia de hoy",
-        "qué fecha es",
-        "que fecha es",
-        "qué fecha es hoy",
-        "que fecha es hoy",
-        "fecha actual",
-        "fecha de hoy",
-    ];
-    let english = [
-        "what time is it",
-        "what's the time",
-        "whats the time",
-        "tell me the time",
-        "current time",
-        "what day is it",
-        "what's today",
-        "whats today",
-        "today is what day",
-        "today's date",
-        "todays date",
-        "what date is it",
-        "current date",
-        "current day",
-    ];
-
-    spanish.iter().any(|p| lower.contains(p)) || english.iter().any(|p| lower.contains(p))
-}
-
 #[async_trait]
 impl Tool for CurrentTimeTool {
     fn name(&self) -> &str {
@@ -59,10 +15,6 @@ impl Tool for CurrentTimeTool {
         "Returns the current local date and time. \
          MUST be called EVERY TIME the user explicitly asks for the current time, date, day or hour. \
          Do not answer from memory, cached context or general knowledge; always call this tool."
-    }
-
-    fn should_force_for(&self, query: &str) -> bool {
-        is_explicit_time_request(query)
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -145,26 +97,5 @@ mod tests {
         );
         // Date part (after the comma) must match
         assert_eq!(r1[8..], r2[8..], "date part changed: r1={r1} r2={r2}");
-    }
-
-    #[test]
-    fn detects_explicit_time_requests() {
-        assert!(is_explicit_time_request("¿Qué hora es?"));
-        assert!(is_explicit_time_request("que hora es"));
-        assert!(is_explicit_time_request("Dime la hora actual"));
-        assert!(is_explicit_time_request("¿Qué día es hoy?"));
-        assert!(is_explicit_time_request("¿Qué fecha es?"));
-        assert!(is_explicit_time_request("What time is it?"));
-        assert!(is_explicit_time_request("What's the time?"));
-        assert!(is_explicit_time_request("Tell me today's date"));
-        assert!(is_explicit_time_request("Current day"));
-    }
-
-    #[test]
-    fn ignores_non_time_requests() {
-        assert!(!is_explicit_time_request("Hola, ¿cómo estás?"));
-        assert!(!is_explicit_time_request("Cuéntame un chiste"));
-        assert!(!is_explicit_time_request("What time does the movie start?"));
-        assert!(!is_explicit_time_request("I had a great time yesterday"));
     }
 }

@@ -12,7 +12,6 @@ impl From<AgentTomlConfig> for AgentConfig {
             mode: src.mode,
             command: src.command,
             acp_command: src.acp_command.unwrap_or_default(),
-            acp_warmup: src.acp_warmup,
             remote_url: src.remote_url,
             remote_dir: src.remote_dir,
             remote_session_path: src.remote_session_path,
@@ -42,8 +41,6 @@ pub struct AgentConfig {
     pub command: Option<String>,
     /// ACP command (e.g. `"hermes acp"`). Used only when `mode = "acp"`.
     pub acp_command: String,
-    /// When true, send a warmup prompt at startup to force model load.
-    pub acp_warmup: bool,
     /// OpenCode remote URL (e.g. "http://localhost:4096"). Used only when `mode = "remote"`.
     pub remote_url: String,
     /// Working directory for the remote OpenCode session.
@@ -215,8 +212,6 @@ fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
         return None;
     }
 
-    let acp_warmup = env::var(format!("AGENT_{}_ACP_WARMUP", upper)).as_deref() == Ok("1");
-
     let remote_url = env::var(format!("AGENT_{}_REMOTE_URL", upper)).unwrap_or_default();
     let remote_dir = env::var(format!("AGENT_{}_REMOTE_DIR", upper)).unwrap_or_default();
     let remote_session_path =
@@ -245,7 +240,6 @@ fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
         mode,
         command,
         acp_command,
-        acp_warmup,
         remote_url,
         remote_dir,
         remote_session_path,
@@ -264,7 +258,6 @@ fn load_legacy_agent() -> Option<AgentConfig> {
     let command = env::var("AGENT_COMMAND").ok();
     let mode = env::var("AGENT_MODE").unwrap_or_else(|_| "cli".to_string());
     let acp_command = env::var("AGENT_ACP_COMMAND").unwrap_or_else(|_| "hermes acp".to_string());
-    let acp_warmup = env::var("AGENT_ACP_WARMUP").as_deref() == Ok("1");
 
     // Legacy agents use built-in defaults for when_to_use and prompt.
     let when_to_use = default_when_to_use("hermes");
@@ -278,7 +271,6 @@ fn load_legacy_agent() -> Option<AgentConfig> {
         mode,
         command,
         acp_command,
-        acp_warmup,
         remote_url: String::new(),
         remote_dir: String::new(),
         remote_session_path: String::new(),
@@ -431,7 +423,6 @@ mod tests {
                 mode: "cli".to_string(),
                 command: Some("test-agent".to_string()),
                 acp_command: "test acp".to_string(),
-                acp_warmup: false,
                 remote_url: String::new(),
                 remote_dir: String::new(),
                 remote_session_path: String::new(),
@@ -474,7 +465,6 @@ mod tests {
                     mode: "acp".to_string(),
                     command: None,
                     acp_command: Some("hermes acp".to_string()),
-                    acp_warmup: true,
                     remote_url: String::new(),
                     remote_dir: String::new(),
                     remote_session_path: String::new(),
@@ -492,7 +482,6 @@ mod tests {
                 assert_eq!(reg.agents[0].name, "hermes");
                 assert_eq!(reg.agents[0].mode, "acp");
                 assert_eq!(reg.agents[0].acp_command, "hermes acp");
-                assert!(reg.agents[0].acp_warmup);
             });
         }
 
@@ -504,7 +493,6 @@ mod tests {
                     mode: "cli".to_string(),
                     command: Some("test-agent run".to_string()),
                     acp_command: None,
-                    acp_warmup: false,
                     remote_url: String::new(),
                     remote_dir: String::new(),
                     remote_session_path: String::new(),
@@ -538,7 +526,6 @@ mod tests {
                 mode: "acp".to_string(),
                 command: None,
                 acp_command: Some("hermes acp".to_string()),
-                acp_warmup: true,
                 remote_url: "http://localhost:4096".to_string(),
                 remote_dir: "/tmp".to_string(),
                 remote_session_path: String::new(),
@@ -556,7 +543,6 @@ mod tests {
             assert_eq!(agent.mode, "acp");
             assert_eq!(agent.command, None);
             assert_eq!(agent.acp_command, "hermes acp");
-            assert!(agent.acp_warmup);
             assert_eq!(agent.remote_url, "http://localhost:4096");
             assert_eq!(agent.remote_dir, "/tmp");
         }
@@ -606,7 +592,6 @@ mod tests {
                     mode: "remote".to_string(),
                     command: None,
                     acp_command: None,
-                    acp_warmup: false,
                     remote_url: "http://localhost:8642".to_string(),
                     remote_dir: String::new(),
                     remote_session_path: String::new(),

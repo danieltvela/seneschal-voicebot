@@ -24,7 +24,7 @@ pub use seneschal_extras::TakeScreenshotTool;
 pub use seneschal_extras::conversation_mode::SetConversationModeTool;
 pub use seneschal_extras::prompt_build::SetPromptBuildTool;
 pub use seneschal_extras::run_agent::{
-    AcpWriter, ActiveTask, PendingInteractionEntry, RunAgentTool, format_history,
+    AcpWriter, ActiveTask, PendingInteractionEntry, RunAgentTool,
 };
 pub use seneschal_extras::subtask::{ListTasksTool, SubtaskTracker};
 

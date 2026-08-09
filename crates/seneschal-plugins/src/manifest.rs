@@ -48,8 +48,6 @@ pub struct PluginAgentConfig {
     pub command: Option<String>,
     pub acp_command: Option<String>,
     #[serde(default)]
-    pub acp_warmup: bool,
-    #[serde(default)]
     pub remote_url: String,
     #[serde(default)]
     pub remote_dir: String,
@@ -77,7 +75,6 @@ impl From<PluginAgentConfig> for AgentConfig {
             mode: src.mode,
             command: src.command,
             acp_command: src.acp_command.unwrap_or_default(),
-            acp_warmup: src.acp_warmup,
             remote_url: src.remote_url,
             remote_dir: src.remote_dir,
             remote_session_path: src.remote_session_path,
@@ -203,7 +200,6 @@ prompt = "be helpful"
         assert_eq!(manifest.agents.len(), 1);
         assert_eq!(manifest.agents[0].name, "test-agent");
         assert_eq!(manifest.agents[0].mode, "acp");
-        assert!(!manifest.agents[0].acp_warmup);
         assert_eq!(manifest.requires_permissions.len(), 2);
         assert!(manifest.requires_permissions.contains("network"));
         assert!(manifest.requires_permissions.contains("filesystem"));
@@ -344,6 +340,5 @@ content = "C"
         assert_eq!(ac.when_to_use, "testing");
         assert_eq!(ac.prompt, "be helpful");
         assert_eq!(ac.acp_command, "");
-        assert!(!ac.acp_warmup);
     }
 }

@@ -24,31 +24,6 @@ use seneschal_core::llm::{LlmProvider, Message};
 // Re-imported for test code (AcpWriter was extracted to common)
 use seneschal_common::acp_writer::{jsonrpc_notification, jsonrpc_request, parse_jsonrpc};
 
-// ── History formatting ────────────────────────────────────────────────────────
-
-// TODO: consider removing — no production callers
-/// Format conversation messages as a human-readable chat history for the agent.
-/// Only user and assistant turns with text content are included; system,
-/// tool-call, and tool-result messages are omitted.
-///
-/// The result is passed as the `-q` argument to the agent CLI so it has full
-/// conversational context when processing the delegation request.
-pub fn format_history(messages: &[serde_json::Value]) -> String {
-    messages
-        .iter()
-        .filter_map(|m| {
-            let role = m["role"].as_str()?;
-            let content = m["content"].as_str()?; // skips null-content tool_call messages
-            match role {
-                "user" => Some(format!("[User]: {content}")),
-                "assistant" => Some(format!("[seneschal]: {content}")),
-                _ => None,
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 // ── Subprocess helper ─────────────────────────────────────────────────────────
 
 /// Spawns the agent CLI passing `query` via the `-q` flag.
@@ -177,7 +152,6 @@ async fn synthesize_agent_result(
 pub struct RunAgentTool {
     config: AgentConfig,
     task_map: Arc<DashMap<String, ActiveTask>>,
-    history: Arc<RwLock<String>>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
@@ -197,7 +171,6 @@ impl RunAgentTool {
     pub fn new(
         config: AgentConfig,
         task_map: Arc<DashMap<String, ActiveTask>>,
-        history: Arc<RwLock<String>>,
         proactive_tx: mpsc::Sender<ProactiveEvent>,
     ) -> Self {
         let tool_description = if config.description.is_empty() {
@@ -216,7 +189,6 @@ impl RunAgentTool {
         Self {
             config,
             task_map,
-            history,
             proactive_tx,
             synthesis_client: None,
             session_manager: None,
@@ -316,7 +288,7 @@ impl RunAgentTool {
         }
 
         // ── OpenCode mode ─────────────────────────────────────────────────
-        let query = build_agent_query(&self.history, &task, &self.config.prompt);
+        let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
@@ -411,7 +383,7 @@ impl RunAgentTool {
     /// Hermes remote mode: submit prompt via Hermes protocol
     /// (POST /v1/runs with {"input": prompt}, per-run events, cancel via POST /v1/runs/{id}/stop).
     async fn run_remote_hermes(&self, transport: Arc<HttpAgentTransport>, task: String) -> String {
-        let query = build_agent_query(&self.history, &task, &self.config.prompt);
+        let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
@@ -511,7 +483,7 @@ impl RunAgentTool {
             Some(c) => c.clone(),
             None => return "Error: Visible agent command not configured.".to_string(),
         };
-        let query = build_agent_query(&self.history, &task, &self.config.prompt);
+        let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
         let visible_mgr = match &self.visible_manager {
@@ -631,7 +603,7 @@ impl RunAgentTool {
             Some(c) => c.clone(),
             None => return "Error: CLI agent command not configured.".to_string(),
         };
-        let query = build_agent_query(&self.history, &task, &self.config.prompt);
+        let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
 
@@ -665,7 +637,7 @@ impl RunAgentTool {
         let task_id_return = task_id.clone();
         info!(target: "agent", "RunAgentTool(acp): task started: {:?} (id={})", task, task_id);
 
-        let query = build_agent_query(&self.history, &task, &self.config.prompt);
+        let query = build_agent_query(&task, &self.config.prompt);
         let task_c = task.clone();
         let task_map = Arc::clone(&self.task_map);
         let proactive_tx = self.proactive_tx.clone();
@@ -884,31 +856,6 @@ impl Tool for RunAgentTool {
         true
     }
 
-    fn should_force_for(&self, query: &str) -> bool {
-        if self.config.name != "hermes" {
-            return false;
-        }
-        let lower = query.to_lowercase();
-        [
-            "investiga",
-            "busca información",
-            "busca en internet",
-            "búscame",
-            "qué sabes de",
-            "que sabes de",
-            "lánzame una búsqueda",
-            "haz una búsqueda",
-            "lanza una investigación",
-            "haz una investigación",
-            "search for",
-            "look up",
-            "find information",
-            "research",
-        ]
-        .iter()
-        .any(|t| lower.contains(t))
-    }
-
     fn description(&self) -> &str {
         &self.tool_description
     }
@@ -957,17 +904,12 @@ impl Tool for RunAgentTool {
 
 /// Build the prompt sent to the agent.
 ///
-/// Always includes the delegated `task` so the agent knows exactly what to do.
-/// Prepends the agent's own prompt (role, capabilities, style) and the
-/// conversation history when available so the agent has full context.
-fn build_agent_query(history: &std::sync::RwLock<String>, task: &str, prompt: &str) -> String {
-    let history = history.read().map(|h| h.clone()).unwrap_or_default();
+/// Prepends the agent's own prompt (role, capabilities, style) when available
+/// so the agent knows how to behave, followed by the delegated task.
+fn build_agent_query(task: &str, prompt: &str) -> String {
     let mut parts = Vec::new();
     if !prompt.is_empty() {
         parts.push(format!("[Prompt del agente]: {prompt}"));
-    }
-    if !history.is_empty() {
-        parts.push(history);
     }
     parts.push(format!("[Tarea delegada]: {task}"));
     parts.join("\n\n")
@@ -1273,21 +1215,12 @@ mod tests {
 
     use seneschal_agents::AgentConfig;
 
-    fn empty_history() -> Arc<RwLock<String>> {
-        Arc::new(RwLock::new(String::new()))
-    }
-
-    fn history_with(s: &str) -> Arc<RwLock<String>> {
-        Arc::new(RwLock::new(s.to_string()))
-    }
-
     fn test_agent_config(name: &str, mode: &str, command: Option<String>) -> AgentConfig {
         AgentConfig {
             name: name.to_string(),
             mode: mode.to_string(),
             command,
             acp_command: format!("{name} acp"),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),
@@ -1301,18 +1234,14 @@ mod tests {
         }
     }
 
-    fn cli_tool(
-        command: &str,
-        history: Arc<RwLock<String>>,
-        tx: mpsc::Sender<ProactiveEvent>,
-    ) -> RunAgentTool {
+    fn cli_tool(command: &str, tx: mpsc::Sender<ProactiveEvent>) -> RunAgentTool {
         let config = test_agent_config("hermes", "cli", Some(command.to_string()));
-        RunAgentTool::new(config, Arc::new(DashMap::new()), history, tx)
+        RunAgentTool::new(config, Arc::new(DashMap::new()), tx)
     }
 
     fn acp_tool(tx: mpsc::Sender<ProactiveEvent>) -> RunAgentTool {
         let config = test_agent_config("hermes", "acp", None);
-        RunAgentTool::new(config, Arc::new(DashMap::new()), empty_history(), tx)
+        RunAgentTool::new(config, Arc::new(DashMap::new()), tx)
     }
 
     // ── strip_hermes_cli_noise ────────────────────────────────────────────────
@@ -1344,98 +1273,12 @@ mod tests {
         );
     }
 
-    // ── format_history ────────────────────────────────────────────────────────
-
-    #[test]
-    fn format_history_empty_messages() {
-        assert_eq!(format_history(&[]), "");
-    }
-
-    #[test]
-    fn format_history_single_user_turn() {
-        let msgs = vec![serde_json::json!({"role": "user", "content": "hola"})];
-        assert_eq!(format_history(&msgs), "[User]: hola");
-    }
-
-    #[test]
-    fn format_history_user_and_assistant() {
-        let msgs = vec![
-            serde_json::json!({"role": "user", "content": "hola"}),
-            serde_json::json!({"role": "assistant", "content": "hola Daniel"}),
-        ];
-        assert_eq!(
-            format_history(&msgs),
-            "[User]: hola\n[seneschal]: hola Daniel"
-        );
-    }
-
-    #[test]
-    fn format_history_skips_system_messages() {
-        let msgs = vec![
-            serde_json::json!({"role": "system", "content": "Eres seneschal"}),
-            serde_json::json!({"role": "user", "content": "hola"}),
-            serde_json::json!({"role": "assistant", "content": "hola"}),
-        ];
-        let result = format_history(&msgs);
-        assert!(
-            !result.contains("Eres seneschal"),
-            "system message should be excluded"
-        );
-        assert!(result.contains("[User]: hola"));
-    }
-
-    #[test]
-    fn format_history_skips_tool_messages() {
-        let msgs = vec![
-            serde_json::json!({"role": "user", "content": "qué hora es"}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "14:30"}),
-            serde_json::json!({"role": "assistant", "content": "Son las 14:30"}),
-        ];
-        let result = format_history(&msgs);
-        assert!(
-            !result.contains("14:30\n"),
-            "bare tool result should be excluded"
-        );
-        assert!(result.contains("[seneschal]: Son las 14:30"));
-    }
-
-    #[test]
-    fn format_history_skips_tool_call_assistant_messages() {
-        let msgs = vec![
-            serde_json::json!({"role": "user", "content": "Activa el modo ambiente"}),
-            serde_json::json!({"role": "assistant", "content": serde_json::Value::Null,
-                "tool_calls": [{"id": "c1", "type": "function",
-                    "function": {"name": "set_conversation_mode", "arguments": "{\"mode\":\"ambient\"}"}}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c1", "content": "Ambient mode activated."}),
-            serde_json::json!({"role": "assistant", "content": "Modo ambiente activado."}),
-        ];
-        let result = format_history(&msgs);
-        assert!(
-            !result.contains("Ambient mode activated."),
-            "tool result should be excluded"
-        );
-        assert!(result.contains("[seneschal]: Modo ambiente activado."));
-        assert!(result.contains("[User]: Activa el modo ambiente"));
-    }
-
-    #[test]
-    fn format_history_multiple_turns() {
-        let msgs = vec![
-            serde_json::json!({"role": "user", "content": "primera"}),
-            serde_json::json!({"role": "assistant", "content": "respuesta uno"}),
-            serde_json::json!({"role": "user", "content": "segunda"}),
-            serde_json::json!({"role": "assistant", "content": "respuesta dos"}),
-        ];
-        let expected = "[User]: primera\n[seneschal]: respuesta uno\n[User]: segunda\n[seneschal]: respuesta dos";
-        assert_eq!(format_history(&msgs), expected);
-    }
-
     // ── RunAgentTool — name / description ─────────────────────────────────────
 
     #[test]
     fn tool_name_and_description() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
-        let tool = cli_tool("echo", empty_history(), tx);
+        let tool = cli_tool("echo", tx);
         assert_eq!(tool.name(), "run_hermes");
         assert!(!tool.description().is_empty());
     }
@@ -1445,7 +1288,7 @@ mod tests {
     #[tokio::test]
     async fn cli_empty_args_returns_error() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
-        let tool = cli_tool("echo", empty_history(), tx);
+        let tool = cli_tool("echo", tx);
         let result = tool.run("").await;
         assert!(result.to_lowercase().contains("error"), "got: {result:?}");
     }
@@ -1453,7 +1296,7 @@ mod tests {
     #[tokio::test]
     async fn cli_returns_acknowledgment_immediately() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
-        let tool = cli_tool("sleep 2", empty_history(), tx);
+        let tool = cli_tool("sleep 2", tx);
         let start = std::time::Instant::now();
         let result = tool.run(r#"{"task": "slow task"}"#).await;
         assert!(
@@ -1470,7 +1313,7 @@ mod tests {
     async fn visible_returns_acknowledgment_immediately() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
         let config = test_agent_config("test-visible", "visible", Some("echo".to_string()));
-        let tool = RunAgentTool::new(config, Arc::new(DashMap::new()), empty_history(), tx);
+        let tool = RunAgentTool::new(config, Arc::new(DashMap::new()), tx);
         let start = std::time::Instant::now();
         let result = tool.run(r#"{"task": "test task"}"#).await;
         assert!(
@@ -1487,7 +1330,7 @@ mod tests {
     async fn visible_without_manager_returns_error() {
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
         let config = test_agent_config("test-visible", "visible", Some("echo".to_string()));
-        let tool = RunAgentTool::new(config, Arc::new(DashMap::new()), empty_history(), tx);
+        let tool = RunAgentTool::new(config, Arc::new(DashMap::new()), tx);
         let result = tool.run("test task").await;
         assert!(
             result.contains("Visible session manager not configured"),
@@ -1498,7 +1341,7 @@ mod tests {
     #[tokio::test]
     async fn cli_delivers_result_to_proactive_channel() {
         let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
-        let tool = cli_tool("echo agent_done", empty_history(), tx);
+        let tool = cli_tool("echo agent_done", tx);
         tool.run(r#"{"task": "some task"}"#).await;
 
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -1516,10 +1359,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cli_passes_history_in_query() {
+    async fn cli_receives_only_task_not_history() {
         let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
-        let hist = history_with("[User]: busca noticias\n[seneschal]: delegando");
-        let tool = cli_tool("echo done", hist, tx);
+        let tool = cli_tool("echo done", tx);
         tool.run(r#"{"task": "busca noticias"}"#).await;
 
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -1538,7 +1380,7 @@ mod tests {
     #[tokio::test]
     async fn cli_delivers_error_on_launch_failure() {
         let (tx, mut rx) = mpsc::channel::<ProactiveEvent>(8);
-        let tool = cli_tool("__nonexistent__", empty_history(), tx);
+        let tool = cli_tool("__nonexistent__", tx);
         tool.run(r#"{"task": "task"}"#).await;
 
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -1584,7 +1426,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel::<ProactiveEvent>(8);
         let config = test_agent_config("hermes", "acp", None);
-        let tool = RunAgentTool::new(config, task_map, empty_history(), tx);
+        let tool = RunAgentTool::new(config, task_map, tx);
         let result = tool.run(r#"{"task": "cancel"}"#).await;
         assert!(result.contains("cancelada"), "got: {result:?}");
         assert!(

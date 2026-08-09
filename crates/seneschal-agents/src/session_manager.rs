@@ -452,7 +452,10 @@ impl AcpSessionManager {
         let timeout_secs = Config::from_env()?.agent_acp_warmup_timeout_secs;
 
         let mut writer = entry.writer.lock().await;
-        if let Err(e) = writer.warm_up(&entry.session_id, timeout_secs).await {
+        if let Err(e) = writer
+            .warm_up(&entry.session_id, &config.prompt, timeout_secs)
+            .await
+        {
             drop(writer);
             self.close_session(&entry.session_id);
             return Err(e);
@@ -620,7 +623,6 @@ mod tests {
             mode: "acp".to_string(),
             command: None,
             acp_command: "/bin/cat".to_string(),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),
@@ -658,7 +660,6 @@ mod tests {
             mode: "acp".to_string(),
             command: None,
             acp_command: "/bin/cat".to_string(),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),
@@ -758,7 +759,6 @@ mod tests {
             mode: "acp".to_string(),
             command: None,
             acp_command: "/bin/cat".to_string(),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),
@@ -791,7 +791,6 @@ mod tests {
             mode: "acp".to_string(),
             command: None,
             acp_command: "/bin/cat".to_string(),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),
@@ -853,7 +852,6 @@ mod tests {
             mode: "acp".to_string(),
             command: None,
             acp_command: "/bin/cat".to_string(),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),
@@ -1150,7 +1148,6 @@ mod tests {
             mode: "acp".to_string(),
             command: None,
             acp_command: "/bin/cat".to_string(),
-            acp_warmup: false,
             remote_url: String::new(),
             remote_dir: String::new(),
             remote_session_path: String::new(),

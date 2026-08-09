@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::sync::RwLock;
-
 use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
@@ -20,15 +17,11 @@ use seneschal_common::tools::Tool;
 /// event system (see [`ProactiveEvent`]).
 pub struct DeepResearchTool {
     agent_config: AgentConfig,
-    shared_history: Arc<RwLock<String>>,
 }
 
 impl DeepResearchTool {
-    pub fn new(agent_config: AgentConfig, shared_history: Arc<RwLock<String>>) -> Self {
-        Self {
-            agent_config,
-            shared_history,
-        }
+    pub fn new(agent_config: AgentConfig) -> Self {
+        Self { agent_config }
     }
 }
 
@@ -77,17 +70,6 @@ impl Tool for DeepResearchTool {
 
         info!(target: "tools", "deep_research: agent='{}' query={:?}", self.agent_config.name, query);
 
-        let history = self
-            .shared_history
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        let full_query = if history.is_empty() {
-            query
-        } else {
-            format!("Historial de la conversación:\n{history}\n\nTarea de investigación: {query}")
-        };
-
         // Delegate to the agent as a one-shot CLI call.
         let command = match &self.agent_config.command {
             Some(cmd) => cmd.clone(),
@@ -98,6 +80,6 @@ impl Tool for DeepResearchTool {
                 );
             }
         };
-        run_agent::call_agent(command, full_query).await
+        run_agent::call_agent(command, query).await
     }
 }

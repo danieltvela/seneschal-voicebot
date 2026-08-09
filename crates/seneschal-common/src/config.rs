@@ -19,8 +19,6 @@ pub struct AgentTomlConfig {
     #[serde(default)]
     pub acp_command: Option<String>,
     #[serde(default)]
-    pub acp_warmup: bool,
-    #[serde(default)]
     pub remote_url: String,
     #[serde(default)]
     pub remote_dir: String,
@@ -266,9 +264,6 @@ pub struct Config {
     /// Command to start the ACP process (AGENT_ACP_COMMAND, default "hermes acp").
     /// Only used when agent_mode = "acp".
     pub agent_acp_command: String,
-    /// When true, send a warmup prompt to Hermes at startup to force model load.
-    /// AGENT_ACP_WARMUP=1. Only applies when agent_mode = "acp".
-    pub agent_acp_warmup: bool,
     /// When true, periodically ping the ACP process to keep it alive.
     /// Default: true when AGENT_ACP_WARMUP=1, otherwise false.
     pub agent_acp_keepalive_enabled: bool,
@@ -706,9 +701,6 @@ impl Config {
         }
         if let Ok(v) = env::var("AGENT_ACP_COMMAND") {
             self.agent_acp_command = v;
-        }
-        if let Ok(v) = env::var("AGENT_ACP_WARMUP") {
-            self.agent_acp_warmup = v == "1";
         }
         if let Ok(v) = env::var("AGENT_ACP_KEEPALIVE_ENABLED") {
             self.agent_acp_keepalive_enabled = v == "1" || v.to_lowercase() == "true";

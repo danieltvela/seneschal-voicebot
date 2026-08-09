@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
@@ -36,7 +36,6 @@ pub async fn llm_task(
     db: Database,
     session_id: uuid::Uuid,
     tools: Arc<std::sync::Mutex<ToolRegistry>>,
-    shared_history: Arc<RwLock<String>>,
     turn_commit_counter: Arc<AtomicU64>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     filler_controller: Arc<crate::audio::filler::FillerController>,
@@ -140,9 +139,6 @@ pub async fn llm_task(
             {
                 let mut s = llm_session.lock().unwrap();
                 s.add_internal_notification(&text);
-                if let Ok(mut h) = shared_history.write() {
-                    *h = s.format_history();
-                }
             }
             turn_commit_counter.fetch_add(1, Ordering::SeqCst);
         } else if !tool_continuation {
@@ -162,9 +158,6 @@ pub async fn llm_task(
                     s.add_user_turn(&text);
                 }
                 turn_commit_counter.fetch_add(1, Ordering::SeqCst);
-                if let Ok(mut h) = shared_history.write() {
-                    *h = s.format_history();
-                }
                 result
             };
             if !appended {
@@ -180,10 +173,6 @@ pub async fn llm_task(
                 });
             }
         } else {
-            if let Ok(mut h) = shared_history.write() {
-                let mut s = llm_session.lock().unwrap();
-                *h = s.format_history();
-            }
             turn_commit_counter.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -213,166 +202,132 @@ pub async fn llm_task(
                     .with_thinking(llm_thinking);
 
                 info!(target: "performance", "LLM request [pipe={}]", pipeline_id);
-                let forced_tool = if iter == 0 && !tool_continuation && !is_system_notification {
-                    tools
-                        .lock()
-                        .unwrap()
-                        .forced_tool_for_query(&text)
-                        .map(|s| s.to_string())
-                } else {
-                    None
-                };
-                if let Some(ref name) = forced_tool {
-                    info!(target: "pipeline", "Forcing tool '{}' for explicit request", name);
-                }
 
                 let mut llm_text = String::new();
                 let mut tool_call: Option<(String, String)> = None;
 
-                // Deterministic dispatch for forced background tools: with thinking
-                // disabled, some model servers (e.g. LM Studio + Gemma MoE) narrate
-                // the delegation instead of emitting the tool call. Bypass the LLM
-                // for the tool decision — it is unreliable and adds latency.
-                let deterministic_call: Option<(String, String)> = match forced_tool.as_ref() {
-                    Some(name) if tools.lock().unwrap().is_background(name) => {
-                        Some((name.clone(), serde_json::json!({"task": text}).to_string()))
-                    }
-                    _ => None,
-                };
-
-                if let Some(dt) = deterministic_call {
-                    info!(target: "pipeline", "Deterministic dispatch: '{}' (LLM skipped)", dt.0);
-                    tool_call = Some(dt);
-                } else {
-                    // Always send the full tool schema for KV-cache stability (#191).
-                    let active_tools: Vec<serde_json::Value> = tool_defs.clone();
-                    let (token_rx, stream_handle) = match llm_client
-                        .stream(
-                            &messages,
-                            &active_tools,
-                            forced_tool.as_deref(),
-                            request_options,
-                        )
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!(target: "llm", "LLM error: {}", e);
-                            if let Some(ref tx) = tui_tx {
-                                tx.send(TuiEvent::Error(format!("LLM error: {e}"))).ok();
-                            }
-                            let _ = sentences_tx
-                                .send(super::frames::PipelineFrame::SentenceReady {
-                                    utterance_id: pipeline_id,
-                                    sentence:
-                                        "Lo siento, no pude conectar con el modelo de lenguaje."
-                                            .to_string(),
-                                })
-                                .await;
-                            let _ = sentences_tx
-                                .send(super::frames::PipelineFrame::LLMResponseDone {
-                                    utterance_id: pipeline_id,
-                                    full_text: String::new(),
-                                })
-                                .await;
-                            events.llm_post_finished.notify_one();
-                            if let Some(ref tx) = tui_tx {
-                                tx.send(TuiEvent::AssistantDone).ok();
-                            }
-                            break 'pipeline;
+                // Always send the full tool schema for KV-cache stability (#191).
+                let active_tools: Vec<serde_json::Value> = tool_defs.clone();
+                let (token_rx, stream_handle) = match llm_client
+                    .stream(&messages, &active_tools, request_options)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!(target: "llm", "LLM error: {}", e);
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::Error(format!("LLM error: {e}"))).ok();
                         }
-                    };
-
-                    *t_llm_post_send.lock().unwrap() = Some(Instant::now());
-
-                    let mut token_rx = token_rx;
-
-                    loop {
-                        tokio::select! {
-                            token = token_rx.recv() => {
-                                match token {
-                                    Some(StreamToken::Content(t)) => {
-                                        let t = if llm_text.is_empty() {
-                                            t.trim_start_matches('\n').to_string()
-                                        } else {
-                                            t
-                                        };
-                                        if t.is_empty() { continue; }
-                                        if !first_token_logged {
-                                            first_token_logged = true;
-                                            if let Some(t0) = t_llm_post_send.lock().unwrap().as_ref() {
-                                                info!(target: "performance", "[+{}ms] LLM first token (TTFT)", t0.elapsed().as_millis());
-                                            }
-                                        }
-                                        llm_text.push_str(&t);
-                                        let _ = llm_tx.send(super::frames::PipelineFrame::LLMToken {
-                                            utterance_id: pipeline_id,
-                                            token: t.clone(),
-                                        }).await;
-                                        if let Some(ref tx) = tui_tx {
-                                            tx.send(TuiEvent::AssistantToken(t.clone())).ok();
-                                        }
-                                        if let Some(ref ctrl) = control_broadcast {
-                                            ctrl.send(ControlEvent::LlmToken {
-                                                utterance_id: pipeline_id,
-                                                token: t,
-                                            });
-                                        }
-                                    }
-                                    Some(StreamToken::ToolCall { name, args }) => {
-                                        info!(target: "pipeline", "ToolCall received: name={} args={}", name, args);
-                                        tool_call = Some((name, args));
-                                        break;
-                                    }
-                                    None => {
-                                        let _ = llm_tx.send(super::frames::PipelineFrame::LLMResponseDone {
-                                            utterance_id: pipeline_id,
-                                            full_text: llm_text.clone(),
-                                        }).await;
-                                        events.llm_post_finished.notify_one();
-                                        if let Some(ref tx) = tui_tx {
-                                            tx.send(TuiEvent::AssistantDone).ok();
-                                        }
-                                        if let Some(ref ctrl) = control_broadcast {
-                                            ctrl.send(ControlEvent::LlmDone {
-                                                utterance_id: pipeline_id,
-                                                full_text: llm_text.clone(),
-                                            });
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                            _ = cancel_rx.recv() => {
-                                cancelled = true;
-                                drop(token_rx);
-                                stream_handle.abort();
-                                break;
-                            }
-                        }
-                    }
-
-                    if cancelled {
-                        if !llm_text.is_empty() {
-                            let db_c = db.clone();
-                            let resp_c = llm_text.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    db_c.save_message(session_id, "Assistant", &resp_c).await
-                                {
-                                    warn!(target: "db", "Failed to save partial assistant message: {}", e);
-                                }
-                            });
-                            llm_session.lock().unwrap().add_assistant_turn(&llm_text);
-                            info!(
-                                target: "pipeline",
-                                "[pipe={}] Cancelled — partial response saved: {} chars",
-                                pipeline_id, llm_text.len()
-                            );
+                        let _ = sentences_tx
+                            .send(super::frames::PipelineFrame::SentenceReady {
+                                utterance_id: pipeline_id,
+                                sentence: "Lo siento, no pude conectar con el modelo de lenguaje."
+                                    .to_string(),
+                            })
+                            .await;
+                        let _ = sentences_tx
+                            .send(super::frames::PipelineFrame::LLMResponseDone {
+                                utterance_id: pipeline_id,
+                                full_text: String::new(),
+                            })
+                            .await;
+                        events.llm_post_finished.notify_one();
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::AssistantDone).ok();
                         }
                         break 'pipeline;
                     }
-                } // end else (non-deterministic LLM stream path)
+                };
+
+                *t_llm_post_send.lock().unwrap() = Some(Instant::now());
+
+                let mut token_rx = token_rx;
+
+                loop {
+                    tokio::select! {
+                        token = token_rx.recv() => {
+                            match token {
+                                Some(StreamToken::Content(t)) => {
+                                    let t = if llm_text.is_empty() {
+                                        t.trim_start_matches('\n').to_string()
+                                    } else {
+                                        t
+                                    };
+                                    if t.is_empty() { continue; }
+                                    if !first_token_logged {
+                                        first_token_logged = true;
+                                        if let Some(t0) = t_llm_post_send.lock().unwrap().as_ref() {
+                                            info!(target: "performance", "[+{}ms] LLM first token (TTFT)", t0.elapsed().as_millis());
+                                        }
+                                    }
+                                    llm_text.push_str(&t);
+                                    let _ = llm_tx.send(super::frames::PipelineFrame::LLMToken {
+                                        utterance_id: pipeline_id,
+                                        token: t.clone(),
+                                    }).await;
+                                    if let Some(ref tx) = tui_tx {
+                                        tx.send(TuiEvent::AssistantToken(t.clone())).ok();
+                                    }
+                                    if let Some(ref ctrl) = control_broadcast {
+                                        ctrl.send(ControlEvent::LlmToken {
+                                            utterance_id: pipeline_id,
+                                            token: t,
+                                        });
+                                    }
+                                }
+                                Some(StreamToken::ToolCall { name, args }) => {
+                                    info!(target: "pipeline", "ToolCall received: name={} args={}", name, args);
+                                    tool_call = Some((name, args));
+                                    break;
+                                }
+                                None => {
+                                    let _ = llm_tx.send(super::frames::PipelineFrame::LLMResponseDone {
+                                        utterance_id: pipeline_id,
+                                        full_text: llm_text.clone(),
+                                    }).await;
+                                    events.llm_post_finished.notify_one();
+                                    if let Some(ref tx) = tui_tx {
+                                        tx.send(TuiEvent::AssistantDone).ok();
+                                    }
+                                    if let Some(ref ctrl) = control_broadcast {
+                                        ctrl.send(ControlEvent::LlmDone {
+                                            utterance_id: pipeline_id,
+                                            full_text: llm_text.clone(),
+                                        });
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        _ = cancel_rx.recv() => {
+                            cancelled = true;
+                            drop(token_rx);
+                            stream_handle.abort();
+                            break;
+                        }
+                    }
+                }
+
+                if cancelled {
+                    if !llm_text.is_empty() {
+                        let db_c = db.clone();
+                        let resp_c = llm_text.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) =
+                                db_c.save_message(session_id, "Assistant", &resp_c).await
+                            {
+                                warn!(target: "db", "Failed to save partial assistant message: {}", e);
+                            }
+                        });
+                        llm_session.lock().unwrap().add_assistant_turn(&llm_text);
+                        info!(
+                            target: "pipeline",
+                            "[pipe={}] Cancelled — partial response saved: {} chars",
+                            pipeline_id, llm_text.len()
+                        );
+                    }
+                    break 'pipeline;
+                }
 
                 match tool_call {
                     Some((name, args)) => {
@@ -437,9 +392,6 @@ pub async fn llm_task(
                             {
                                 let mut s = llm_session.lock().unwrap();
                                 s.add_tool_exchange(exchanges.clone());
-                                if let Ok(mut h) = shared_history.write() {
-                                    *h = s.format_history();
-                                }
                             }
                             {
                                 let db_c = db.clone();

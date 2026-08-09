@@ -196,7 +196,6 @@ impl OpenAIClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
-        forced_tool: Option<&str>,
         options: RequestOptions,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
         let effective_thinking = options.thinking.unwrap_or(self.thinking);
@@ -210,10 +209,7 @@ impl OpenAIClient {
             "repetition_penalty": 1.1,
             "top_k": 40,
         });
-        let tool_choice_override = options.tool_choice.unwrap_or(match forced_tool {
-            Some(_) => ToolChoice::Required,
-            None => ToolChoice::Auto,
-        });
+        let tool_choice_override = options.tool_choice.unwrap_or(ToolChoice::Auto);
 
         // Always include `tools` when non-empty so the request shape stays
         // stable across Simple/Complex turns (KV-cache prefix reuse, #191).
@@ -527,7 +523,6 @@ impl OpenAIClient {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
-        forced_tool: Option<&str>,
         options: RequestOptions,
     ) -> serde_json::Value {
         let effective_thinking = options.thinking.unwrap_or(self.thinking);
@@ -541,10 +536,7 @@ impl OpenAIClient {
             "repetition_penalty": 1.1,
             "top_k": 40,
         });
-        let tool_choice_override = options.tool_choice.unwrap_or(match forced_tool {
-            Some(_) => ToolChoice::Required,
-            None => ToolChoice::Auto,
-        });
+        let tool_choice_override = options.tool_choice.unwrap_or(ToolChoice::Auto);
 
         // Mirror stream() payload rules (keep tests in sync with production).
         if !tools.is_empty() {
@@ -713,12 +705,7 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let messages = make_messages();
         let (mut rx, _handle) = client
-            .stream(
-                &messages_to_json(&messages),
-                &[],
-                None,
-                RequestOptions::default(),
-            )
+            .stream(&messages_to_json(&messages), &[], RequestOptions::default())
             .await
             .unwrap();
 
@@ -752,12 +739,7 @@ mod tests {
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let messages = make_messages();
         let (mut rx, _handle) = client
-            .stream(
-                &messages_to_json(&messages),
-                &[],
-                None,
-                RequestOptions::default(),
-            )
+            .stream(&messages_to_json(&messages), &[], RequestOptions::default())
             .await
             .unwrap();
 
@@ -870,7 +852,7 @@ mod tests {
 
         let client = OpenAIClient::new(&server.uri(), "test-model", 400, 0.7);
         let (mut rx, _handle) = client
-            .stream(&[], &[], None, RequestOptions::default())
+            .stream(&[], &[], RequestOptions::default())
             .await
             .unwrap();
 
@@ -943,27 +925,11 @@ mod tests {
         let payload = client.build_stream_payload(
             &messages,
             &[],
-            None,
             RequestOptions::new().with_tool_choice(ToolChoice::None),
         );
         assert_eq!(payload["tool_choice"], serde_json::json!("none"));
         assert!(payload.get("tools").is_none());
         assert!(payload.get("chat_template_kwargs").is_some());
-    }
-
-    #[test]
-    fn tool_choice_required_when_forced_tool() {
-        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.3);
-        let tools = vec![serde_json::json!({
-            "type": "function",
-            "function": {"name": "my_tool", "description": "desc", "parameters": {}}
-        })];
-        let payload =
-            client.build_stream_payload(&[], &tools, Some("my_tool"), RequestOptions::new());
-        // llama.cpp / LM Studio only supports string tool_choice values.
-        assert_eq!(payload["tool_choice"], serde_json::json!("required"));
-        assert!(payload.get("tools").is_some());
-        assert!(payload.get("chat_template_kwargs").is_none());
     }
 
     /// #191: Simple intent keeps tool definitions + tool_choice "none" so the
@@ -978,7 +944,6 @@ mod tests {
         let payload = client.build_stream_payload(
             &[],
             &tools,
-            None,
             RequestOptions::new().with_tool_choice(ToolChoice::None),
         );
         assert_eq!(payload["tool_choice"], serde_json::json!("none"));
@@ -998,7 +963,7 @@ mod tests {
             "type": "function",
             "function": {"name": "web_search", "description": "search", "parameters": {}}
         })];
-        let payload = client.build_stream_payload(&[], &tools, None, RequestOptions::new());
+        let payload = client.build_stream_payload(&[], &tools, RequestOptions::new());
         assert_eq!(payload["tool_choice"], serde_json::json!("auto"));
         assert!(payload.get("tools").is_some());
         assert!(payload.get("chat_template_kwargs").is_none());

@@ -69,14 +69,10 @@ pub trait LlmProvider: Send + Sync {
     /// Returns a channel receiver that yields `StreamToken::Content` tokens as
     /// they are generated, or `StreamToken::ToolCall` when the model decides to
     /// invoke a tool. The returned `JoinHandle` drives the generation loop.
-    ///
-    /// `forced_tool` is the name of a tool that must be called (sets
-    /// `tool_choice` to that function). `None` leaves the choice to the model.
     async fn stream(
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
-        forced_tool: Option<&str>,
         options: RequestOptions,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)>;
 
@@ -129,12 +125,9 @@ impl LlmProvider for OpenAiLlmProvider {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
-        forced_tool: Option<&str>,
         options: RequestOptions,
     ) -> Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
-        self.inner
-            .stream(messages, tools, forced_tool, options)
-            .await
+        self.inner.stream(messages, tools, options).await
     }
 
     async fn complete(&self, messages: &[Message]) -> Result<String> {

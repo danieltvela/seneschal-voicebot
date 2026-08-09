@@ -48,18 +48,6 @@ impl Tool for SetPromptBuildTool {
         })
     }
 
-    fn should_force_for(&self, user_message: &str) -> bool {
-        let lower = user_message.to_lowercase();
-        // Detect phrases that should trigger prompt-build mode
-        lower.contains("prompt build")
-            || lower.contains("build a prompt")
-            || lower.contains("construir un prompt")
-            || lower.contains("construir prompt")
-            || lower.contains("crear un prompt")
-            || lower.contains("crear prompt")
-            || lower.contains("prompt builder")
-    }
-
     async fn run(&self, args: &str) -> String {
         let parsed: serde_json::Value = match serde_json::from_str(args) {
             Ok(v) => v,

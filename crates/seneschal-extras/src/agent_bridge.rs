@@ -45,7 +45,6 @@ pub fn resolve_plugin_agents(
 pub fn register_plugin_agent_tools(
     agents: &[AgentConfig],
     tool_registry: &mut ToolRegistry,
-    shared_history: Arc<std::sync::RwLock<String>>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     session_manager: Option<Arc<AcpSessionManager>>,
     secondary_llm: Option<Arc<dyn LlmProvider>>,
@@ -54,12 +53,7 @@ pub fn register_plugin_agent_tools(
 
     for agent in agents {
         let task_map: Arc<DashMap<String, ActiveTask>> = Arc::new(DashMap::new());
-        let mut run_agent_tool = RunAgentTool::new(
-            agent.clone(),
-            task_map,
-            shared_history.clone(),
-            proactive_tx.clone(),
-        );
+        let mut run_agent_tool = RunAgentTool::new(agent.clone(), task_map, proactive_tx.clone());
 
         if let Some(ref client) = secondary_llm {
             run_agent_tool = run_agent_tool.with_synthesis(Arc::clone(client));
