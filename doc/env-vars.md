@@ -67,7 +67,9 @@ mode = "visible"
 # CLI command to invoke the agent in the PTY
 command = "hermes chat"
 when_to_use = "For complex multi-step tasks that require extended reasoning."
-instructions = "Eres el agente externo Hermes."
+prompt = "Eres el agente externo Hermes."
+description = "Delegates complex research and multi-step tasks to Hermes."
+task_description = "The research task or action to perform"
 ```
 
 Env var equivalents:

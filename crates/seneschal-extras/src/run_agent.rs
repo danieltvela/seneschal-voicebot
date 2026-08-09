@@ -187,6 +187,10 @@ pub struct RunAgentTool {
     /// Directory for visible session log files.
     session_dir: String,
     tool_name: OnceLock<&'static str>,
+    /// Resolved tool description (config.description or built-in fallback).
+    tool_description: String,
+    /// Resolved task parameter description (config.task_description or built-in fallback).
+    task_description: String,
 }
 
 impl RunAgentTool {
@@ -196,6 +200,19 @@ impl RunAgentTool {
         history: Arc<RwLock<String>>,
         proactive_tx: mpsc::Sender<ProactiveEvent>,
     ) -> Self {
+        let tool_description = if config.description.is_empty() {
+            "Delegates a task to an external agent for execution. \
+             Use when the user asks for web search, complex reasoning, \
+             or file system actions. The result arrives asynchronously."
+                .to_string()
+        } else {
+            config.description.clone()
+        };
+        let task_description = if config.task_description.is_empty() {
+            "The task to delegate".to_string()
+        } else {
+            config.task_description.clone()
+        };
         Self {
             config,
             task_map,
@@ -207,6 +224,8 @@ impl RunAgentTool {
             visible_manager: None,
             session_dir: "/tmp/seneschal_sessions".to_string(),
             tool_name: OnceLock::new(),
+            tool_description,
+            task_description,
         }
     }
 
@@ -297,7 +316,7 @@ impl RunAgentTool {
         }
 
         // ── OpenCode mode ─────────────────────────────────────────────────
-        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let query = build_agent_query(&self.history, &task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
@@ -392,7 +411,7 @@ impl RunAgentTool {
     /// Hermes remote mode: submit prompt via Hermes protocol
     /// (POST /v1/runs with {"input": prompt}, per-run events, cancel via POST /v1/runs/{id}/stop).
     async fn run_remote_hermes(&self, transport: Arc<HttpAgentTransport>, task: String) -> String {
-        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let query = build_agent_query(&self.history, &task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
@@ -492,7 +511,7 @@ impl RunAgentTool {
             Some(c) => c.clone(),
             None => return "Error: Visible agent command not configured.".to_string(),
         };
-        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let query = build_agent_query(&self.history, &task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
         let visible_mgr = match &self.visible_manager {
@@ -612,7 +631,7 @@ impl RunAgentTool {
             Some(c) => c.clone(),
             None => return "Error: CLI agent command not configured.".to_string(),
         };
-        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let query = build_agent_query(&self.history, &task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
         let synthesis_client = self.synthesis_client.clone();
 
@@ -646,7 +665,7 @@ impl RunAgentTool {
         let task_id_return = task_id.clone();
         info!(target: "agent", "RunAgentTool(acp): task started: {:?} (id={})", task, task_id);
 
-        let query = build_agent_query(&self.history, &task, &self.config.instructions);
+        let query = build_agent_query(&self.history, &task, &self.config.prompt);
         let task_c = task.clone();
         let task_map = Arc::clone(&self.task_map);
         let proactive_tx = self.proactive_tx.clone();
@@ -891,9 +910,7 @@ impl Tool for RunAgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegates a task to an external agent for execution. \
-         Use when the user asks for web search, complex reasoning, \
-         or file system actions. The result arrives asynchronously."
+        &self.tool_description
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -902,7 +919,7 @@ impl Tool for RunAgentTool {
             "properties": {
                 "task": {
                     "type": "string",
-                    "description": "The task to delegate"
+                    "description": &self.task_description
                 }
             },
             "required": ["task"],
@@ -941,17 +958,13 @@ impl Tool for RunAgentTool {
 /// Build the prompt sent to the agent.
 ///
 /// Always includes the delegated `task` so the agent knows exactly what to do.
-/// Prepends the agent's own instructions (role, capabilities, style) and the
+/// Prepends the agent's own prompt (role, capabilities, style) and the
 /// conversation history when available so the agent has full context.
-fn build_agent_query(
-    history: &std::sync::RwLock<String>,
-    task: &str,
-    instructions: &str,
-) -> String {
+fn build_agent_query(history: &std::sync::RwLock<String>, task: &str, prompt: &str) -> String {
     let history = history.read().map(|h| h.clone()).unwrap_or_default();
     let mut parts = Vec::new();
-    if !instructions.is_empty() {
-        parts.push(format!("[Instrucciones del agente]: {instructions}"));
+    if !prompt.is_empty() {
+        parts.push(format!("[Prompt del agente]: {prompt}"));
     }
     if !history.is_empty() {
         parts.push(history);
@@ -1282,7 +1295,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "Test".to_string(),
-            instructions: "Test instructions".to_string(),
+            prompt: "Test prompt".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         }
     }
 

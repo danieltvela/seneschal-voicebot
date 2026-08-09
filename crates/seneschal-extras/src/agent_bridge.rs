@@ -123,11 +123,11 @@ pub fn build_plugin_agent_prompt_section(agents: &[AgentConfig]) -> String {
         section.push_str(&format!(
             "\n### {display_name} (run_{name})\n\
              Cuándo usar: {when}\n\
-             Instrucciones para el agente: {instructions}\n",
+             Prompt del agente: {prompt}\n",
             display_name = capitalize(&agent.name),
             name = agent.name,
             when = agent.when_to_use,
-            instructions = agent.instructions,
+            prompt = agent.prompt,
         ));
     }
 

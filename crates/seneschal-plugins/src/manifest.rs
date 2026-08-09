@@ -62,7 +62,12 @@ pub struct PluginAgentConfig {
     #[serde(default)]
     pub remote_api_key: String,
     pub when_to_use: String,
-    pub instructions: String,
+    #[serde(alias = "instructions")]
+    pub prompt: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub task_description: String,
 }
 
 impl From<PluginAgentConfig> for AgentConfig {
@@ -80,7 +85,9 @@ impl From<PluginAgentConfig> for AgentConfig {
             remote_event_path: src.remote_event_path,
             remote_api_key: src.remote_api_key,
             when_to_use: src.when_to_use,
-            instructions: src.instructions,
+            prompt: src.prompt,
+            description: src.description,
+            task_description: src.task_description,
         }
     }
 }
@@ -160,7 +167,7 @@ tool_timeout_secs = 60
 name = "test-agent"
 mode = "acp"
 when_to_use = "testing"
-instructions = "be helpful"
+prompt = "be helpful"
 "#
         .trim()
         .to_string()
@@ -335,7 +342,7 @@ content = "C"
         assert_eq!(ac.name, "test-agent");
         assert_eq!(ac.mode, "acp");
         assert_eq!(ac.when_to_use, "testing");
-        assert_eq!(ac.instructions, "be helpful");
+        assert_eq!(ac.prompt, "be helpful");
         assert_eq!(ac.acp_command, "");
         assert!(!ac.acp_warmup);
     }

@@ -628,7 +628,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "test".to_string(),
-            instructions: "test".to_string(),
+            prompt: "test".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         };
 
         mgr.sessions
@@ -664,7 +666,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "test".to_string(),
-            instructions: "test".to_string(),
+            prompt: "test".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         };
 
         let before_ts = mgr.sessions.get("hermes").unwrap().value().last_used;
@@ -762,7 +766,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "test".to_string(),
-            instructions: "test".to_string(),
+            prompt: "test".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         };
 
         let first = mgr.get_or_create_session(&cfg).await.unwrap();
@@ -793,7 +799,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "test".to_string(),
-            instructions: "test".to_string(),
+            prompt: "test".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         };
 
         let first = mgr.get_or_create_session(&cfg).await.unwrap();
@@ -853,7 +861,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "test".to_string(),
-            instructions: "test".to_string(),
+            prompt: "test".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         };
 
         let s1 = mgr.get_or_create_session(&cfg).await.unwrap();
@@ -1148,7 +1158,9 @@ mod tests {
             remote_event_path: String::new(),
             remote_api_key: String::new(),
             when_to_use: "test".to_string(),
-            instructions: "test".to_string(),
+            prompt: "test".to_string(),
+            description: String::new(),
+            task_description: String::new(),
         };
 
         let sid = mgr.prewarm_agent(&cfg).await.unwrap();

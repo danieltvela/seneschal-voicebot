@@ -1029,7 +1029,7 @@ select_voice_kokoro() {
 #   mode = "acp"
 #   acp_command = "hermes acp"
 #   when_to_use = "..."
-#   instructions = "..."
+#   prompt = "..."
 #
 # Sets global arrays (consumed by create_env → TOML [[agents]]):
 #   _AGENT_NAMES[]     — agent name
@@ -1038,13 +1038,13 @@ select_voice_kokoro() {
 #   _AGENT_ACP_CMDS[]  — ACP command per agent
 #   _AGENT_WARMUPS[]   — "1" or "" per agent
 #   _AGENT_WHEN[]      — when_to_use description per agent
-#   _AGENT_INSTR[]     — instructions per agent
+#   _AGENT_PROMPT[]    — prompt per agent
 
 # Internal counter for agent arrays
 _AGENT_COUNT=0
 
 # Add an agent to the configuration arrays.
-# Args: name mode [cli_command] [acp_command] [warmup] [when_to_use] [instructions]
+# Args: name mode [cli_command] [acp_command] [warmup] [when_to_use] [prompt]
 _add_agent() {
     _idx=$_AGENT_COUNT
     _AGENT_NAMES[$_idx]="$1"
@@ -1053,7 +1053,7 @@ _add_agent() {
     _AGENT_ACP_CMDS[$_idx]="${4:-}"
     _AGENT_WARMUPS[$_idx]="${5:-}"
     _AGENT_WHEN[$_idx]="${6:-}"
-    _AGENT_INSTR[$_idx]="${7:-}"
+    _AGENT_PROMPT[$_idx]="${7:-}"
     _AGENT_COUNT=$((_AGENT_COUNT + 1))
 }
 
@@ -1120,17 +1120,17 @@ _configure_hermes() {
     # Default when_to_use and instructions based on language
     if [ "${_LANGUAGE:-en}" = "es" ]; then
         _hermes_when="Único agente externo disponible. Punto de contacto para lo que Seneschal no puede resolver con sus propias herramientas: programación y código, investigación profunda, gestión de calendario, flujos de múltiples pasos, y cualquier tarea que requiera razonamiento extendido o herramientas del sistema."
-        _hermes_instr="Eres Hermes, el gateway de agentes externos. Puedes redirigir internamente a especialistas (programadores, investigadores, etc.). Recibe la consulta de Seneschal, coordina los recursos necesarios y devuelves una respuesta clara y ejecutable."
+        _hermes_prompt="Eres Hermes, el gateway de agentes externos. Puedes redirigir internamente a especialistas (programadores, investigadores, etc.). Recibe la consulta de Seneschal, coordina los recursos necesarios y devuelves una respuesta clara y ejecutable."
     else
         _hermes_when="Primary external agent. Handle tasks Seneschal cannot resolve with its own tools: code generation, deep research, calendar management, multi-step workflows, and any task requiring extended reasoning or system tools."
-        _hermes_instr="You are Hermes, the external agent gateway. You can internally redirect to specialists (programmers, researchers, etc.). Receive the query from Seneschal, coordinate the necessary resources, and return a clear, actionable response."
+        _hermes_prompt="You are Hermes, the external agent gateway. You can internally redirect to specialists (programmers, researchers, etc.). Receive the query from Seneschal, coordinate the necessary resources, and return a clear, actionable response."
     fi
 
     _hermes_when=$(ask "When to use Hermes (press Enter for default)" "$_hermes_when")
-    _hermes_instr=$(ask "Hermes instructions (press Enter for default)" "$_hermes_instr")
+    _hermes_prompt=$(ask "Hermes prompt (press Enter for default)" "$_hermes_prompt")
 
     _add_agent "hermes" "$_hermes_mode_val" "$_hermes_cli_cmd" "$_hermes_acp_cmd" \
-        "$_hermes_warmup_val" "$_hermes_when" "$_hermes_instr"
+        "$_hermes_warmup_val" "$_hermes_when" "$_hermes_prompt"
     info "  Hermes agent configured (mode=$_hermes_mode_val)."
 }
 
@@ -1168,16 +1168,16 @@ _configure_opencode() {
 
     if [ "${_LANGUAGE:-en}" = "es" ]; then
         _opencode_when="Tareas de programación en Rust, refactorización, búsqueda en código base, y edición de archivos. Úsalo para cambios de código complejos."
-        _opencode_instr="Eres OpenCode, un agente de programación autónomo. Recibe tareas de código de Seneschal y ejecútalas: generar código, refactorizar, buscar patrones, y editar archivos. Devuelve un resumen claro de lo que hiciste."
+        _opencode_prompt="Eres OpenCode, un agente de programación autónomo. Recibe tareas de código de Seneschal y ejecútalas: generar código, refactorizar, buscar patrones, y editar archivos. Devuelve un resumen claro de lo que hiciste."
     else
-        _opencode_instr="You are OpenCode, an autonomous programming agent. Receive code tasks from Seneschal and execute them: generate code, refactor, search patterns, and edit files. Return a clear summary of what you did."
+        _opencode_prompt="You are OpenCode, an autonomous programming agent. Receive code tasks from Seneschal and execute them: generate code, refactor, search patterns, and edit files. Return a clear summary of what you did."
     fi
 
     _opencode_when=$(ask "When to use OpenCode (press Enter for default)" "$_opencode_when")
-    _opencode_instr=$(ask "OpenCode instructions (press Enter for default)" "$_opencode_instr")
+    _opencode_prompt=$(ask "OpenCode prompt (press Enter for default)" "$_opencode_prompt")
 
     _add_agent "opencode" "$_opencode_mode_val" "$_opencode_cli_cmd" "$_opencode_acp_cmd" \
-        "" "$_opencode_when" "$_opencode_instr"
+        "" "$_opencode_when" "$_opencode_prompt"
     info "  OpenCode agent configured (mode=$_opencode_mode_val)."
 }
 
@@ -1552,8 +1552,8 @@ CONFIGEOF
                 if [ -n "${_AGENT_WHEN[$_i]}" ]; then
                     printf "when_to_use = '%s'\n" "${_AGENT_WHEN[$_i]}"
                 fi
-                if [ -n "${_AGENT_INSTR[$_i]}" ]; then
-                    printf "instructions = '%s'\n" "${_AGENT_INSTR[$_i]}"
+                if [ -n "${_AGENT_PROMPT[$_i]}" ]; then
+                    printf "prompt = '%s'\n" "${_AGENT_PROMPT[$_i]}"
                 fi
                 _i=$((_i + 1))
             done

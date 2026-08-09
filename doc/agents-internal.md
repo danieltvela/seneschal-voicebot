@@ -43,7 +43,9 @@ pub struct AgentConfig {
     pub remote_event_path: String,
     pub remote_api_key: String,    // non-empty = Hermes protocol
     pub when_to_use: String,       // LLM-facing delegation instructions
-    pub instructions: String,      // agent-facing instructions
+    pub prompt: String,             // agent-facing prompt
+    pub description: String,        // tool definition description
+    pub task_description: String,   // task parameter description
 }
 ```
 

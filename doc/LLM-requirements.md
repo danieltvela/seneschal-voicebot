@@ -296,7 +296,9 @@ JSON-RPC 2.0 sobre stdio. Mensajes: `initialize`, `session/new`, `session/prompt
 | `AGENT_<NAME>_MODE` | `"cli"` o `"acp"` | `"acp"` |
 | `AGENT_<NAME>_ACP_COMMAND` | Comando ACP | `"<name> acp"` |
 | `AGENT_<NAME>_WHEN_TO_USE` | Seccion del system prompt | Default built-in |
-| `AGENT_<NAME>_INSTRUCTIONS` | Instrucciones del agente | Default built-in |
+| `AGENT_<NAME>_PROMPT` | Prompt del subagente | Default built-in |
+| `AGENT_<NAME>_DESCRIPTION` | Descripcion de la tool call | Default built-in |
+| `AGENT_<NAME>_TASK_DESCRIPTION` | Descripcion del parametro "task" | "The task to delegate" |
 | `AGENT_TIMEOUT_SECS` | Timeout duro | 120 |
 
 ### 6.3 Interfaz LLM-facing

@@ -34,8 +34,12 @@ pub struct AgentTomlConfig {
     pub remote_api_key: String,
     #[serde(default)]
     pub when_to_use: String,
+    #[serde(default, alias = "instructions")]
+    pub prompt: String,
     #[serde(default)]
-    pub instructions: String,
+    pub description: String,
+    #[serde(default)]
+    pub task_description: String,
 }
 
 /// MCP server configuration loaded from TOML.

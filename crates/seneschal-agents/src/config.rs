@@ -20,7 +20,9 @@ impl From<AgentTomlConfig> for AgentConfig {
             remote_event_path: src.remote_event_path,
             remote_api_key: src.remote_api_key,
             when_to_use: src.when_to_use,
-            instructions: src.instructions,
+            prompt: src.prompt,
+            description: src.description,
+            task_description: src.task_description,
         }
     }
 }
@@ -28,7 +30,7 @@ impl From<AgentTomlConfig> for AgentConfig {
 /// Single external agent definition loaded from environment variables.
 ///
 /// Each agent gets its own tool (`run_{name}`), its own system prompt
-/// section (when-to-use + instructions), and independent mode (cli/acp/remote).
+/// section (when-to-use), and independent mode (cli/acp/remote).
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     /// Unique name used as tool suffix: `run_{name}`.
@@ -57,9 +59,15 @@ pub struct AgentConfig {
     /// LLM-facing text: when to delegate to this agent.
     /// Appended to the system prompt so the primary LLM knows which agent to pick.
     pub when_to_use: String,
-    /// Agent-facing instructions. Prepended to the query sent to the agent subprocess
+    /// Agent-facing prompt. Prepended to the query sent to the agent subprocess
     /// so it knows how to behave (role, style, capabilities).
-    pub instructions: String,
+    pub prompt: String,
+    /// Tool description shown in the function-calling definition (`Tool::description()`).
+    /// Falls back to a built-in generic delegation description when empty.
+    pub description: String,
+    /// Description of the `task` parameter in the tool's JSON Schema.
+    /// Falls back to "The task to delegate" when empty.
+    pub task_description: String,
 }
 
 /// Registry of all configured external agents.
@@ -222,8 +230,15 @@ fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
     let when_to_use = env::var(format!("AGENT_{}_WHEN_TO_USE", upper))
         .unwrap_or_else(|_| default_when_to_use(name));
 
-    let instructions = env::var(format!("AGENT_{}_INSTRUCTIONS", upper))
-        .unwrap_or_else(|_| default_instructions(name));
+    let prompt = env::var(format!("AGENT_{}_PROMPT", upper))
+        .or_else(|_| env::var(format!("AGENT_{}_INSTRUCTIONS", upper)))
+        .unwrap_or_else(|_| default_prompt(name));
+
+    let description =
+        env::var(format!("AGENT_{}_DESCRIPTION", upper)).unwrap_or_else(|_| default_description());
+
+    let task_description = env::var(format!("AGENT_{}_TASK_DESCRIPTION", upper))
+        .unwrap_or_else(|_| default_task_description());
 
     Some(AgentConfig {
         name: name.to_string(),
@@ -238,7 +253,9 @@ fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
         remote_event_path,
         remote_api_key,
         when_to_use,
-        instructions,
+        prompt,
+        description,
+        task_description,
     })
 }
 
@@ -249,10 +266,12 @@ fn load_legacy_agent() -> Option<AgentConfig> {
     let acp_command = env::var("AGENT_ACP_COMMAND").unwrap_or_else(|_| "hermes acp".to_string());
     let acp_warmup = env::var("AGENT_ACP_WARMUP").as_deref() == Ok("1");
 
-    // Legacy agents use built-in defaults for when_to_use and instructions.
+    // Legacy agents use built-in defaults for when_to_use and prompt.
     let when_to_use = default_when_to_use("hermes");
-    let instructions =
-        env::var("AGENT_PROMPT_INSTRUCTIONS").unwrap_or_else(|_| default_instructions("hermes"));
+    let prompt = env::var("AGENT_PROMPT_INSTRUCTIONS").unwrap_or_else(|_| default_prompt("hermes"));
+
+    let description = default_description();
+    let task_description = default_task_description();
 
     Some(AgentConfig {
         name: "hermes".to_string(),
@@ -267,7 +286,9 @@ fn load_legacy_agent() -> Option<AgentConfig> {
         remote_event_path: String::new(),
         remote_api_key: String::new(),
         when_to_use,
-        instructions,
+        prompt,
+        description,
+        task_description,
     })
 }
 
@@ -292,8 +313,8 @@ fn default_when_to_use(name: &str) -> String {
     }
 }
 
-/// Default instructions for known agent names.
-fn default_instructions(name: &str) -> String {
+/// Default prompt for known agent names.
+fn default_prompt(name: &str) -> String {
     match name {
         "hermes" => "Eres Hermes, el gateway de agentes externos. Puedes redirigir \
                        internamente a especialistas (programadores, investigadores, etc.). \
@@ -304,6 +325,19 @@ fn default_instructions(name: &str) -> String {
             "Eres un agente externo ({name}). Resuelve la tarea delegada de forma autónoma."
         ),
     }
+}
+
+/// Default tool description (used when `AGENT_{}_DESCRIPTION` is not set).
+fn default_description() -> String {
+    "Delegates a task to an external agent for execution. \
+     Use when the user asks for web search, complex reasoning, \
+     or file system actions. The result arrives asynchronously."
+        .to_string()
+}
+
+/// Default task parameter description (used when `AGENT_{}_TASK_DESCRIPTION` is not set).
+fn default_task_description() -> String {
+    "The task to delegate".to_string()
 }
 
 /// Capitalize first letter of a string.
@@ -405,7 +439,9 @@ mod tests {
                 remote_event_path: String::new(),
                 remote_api_key: String::new(),
                 when_to_use: "Test when to use".to_string(),
-                instructions: "Test instructions".to_string(),
+                prompt: "Test prompt".to_string(),
+                description: String::new(),
+                task_description: String::new(),
             }],
         };
         let section = reg.system_prompt_section();
@@ -446,7 +482,9 @@ mod tests {
                     remote_event_path: String::new(),
                     remote_api_key: String::new(),
                     when_to_use: "Para todo".to_string(),
-                    instructions: "Eres Hermes".to_string(),
+                    prompt: "Eres Hermes".to_string(),
+                    description: String::new(),
+                    task_description: String::new(),
                 }];
 
                 let reg = AgentRegistry::from_config_and_env(toml_agents);
@@ -474,7 +512,9 @@ mod tests {
                     remote_event_path: String::new(),
                     remote_api_key: String::new(),
                     when_to_use: "Para pruebas".to_string(),
-                    instructions: "Test agent".to_string(),
+                    prompt: "Test agent".to_string(),
+                    description: String::new(),
+                    task_description: String::new(),
                 }];
 
                 let reg = AgentRegistry::from_config_and_env(toml_agents);
@@ -506,7 +546,9 @@ mod tests {
                 remote_event_path: String::new(),
                 remote_api_key: String::new(),
                 when_to_use: "Para todo".to_string(),
-                instructions: "Eres Hermes".to_string(),
+                prompt: "Eres Hermes".to_string(),
+                description: String::new(),
+                task_description: String::new(),
             };
 
             let agent: AgentConfig = toml.into();
@@ -528,7 +570,7 @@ mod tests {
                     ("AGENT_TESTAGENT_REMOTE_URL", Some("http://localhost:8642")),
                     ("AGENT_TESTAGENT_REMOTE_API_KEY", Some("sk-hermes-key")),
                     ("AGENT_TESTAGENT_WHEN_TO_USE", Some("test")),
-                    ("AGENT_TESTAGENT_INSTRUCTIONS", Some("test")),
+                    ("AGENT_TESTAGENT_PROMPT", Some("test")),
                 ],
                 || {
                     let reg = AgentRegistry::from_env();
@@ -546,7 +588,7 @@ mod tests {
                     ("AGENT_TESTAGENT_MODE", Some("remote")),
                     ("AGENT_TESTAGENT_REMOTE_URL", Some("http://localhost:8642")),
                     ("AGENT_TESTAGENT_WHEN_TO_USE", Some("test")),
-                    ("AGENT_TESTAGENT_INSTRUCTIONS", Some("test")),
+                    ("AGENT_TESTAGENT_PROMPT", Some("test")),
                 ],
                 || {
                     let reg = AgentRegistry::from_env();
@@ -572,7 +614,9 @@ mod tests {
                     remote_event_path: String::new(),
                     remote_api_key: "toml-hermes-key".to_string(),
                     when_to_use: "test".to_string(),
-                    instructions: "test".to_string(),
+                    prompt: "test".to_string(),
+                    description: String::new(),
+                    task_description: String::new(),
                 }];
 
                 let reg = AgentRegistry::from_config_and_env(toml_agents);
