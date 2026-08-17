@@ -5,17 +5,22 @@ bench-models.py — multi-server, multi-runtime, multi-model benchmark
 Loads configuration from config.yaml and for every model runs:
   1. KV-cache speed benchmark (TTFT, PP rate, TG rate)
   2. Quality benchmark — runs fixtures.json tests while the model is still
-     loaded, then evaluates responses via mechanical checks + evaluator LLM.
+     loaded, then evaluates responses via mechanical checks.
+  3. Scenario benchmark — dynamic multi-turn conversations with tool-call
+     mock injection. All messages except assistant turns are scripted/mocked.
+     The real LLM decides which tools to call; the benchmark injects
+     mock results from scenarios.json. Evaluated purely mechanically
+     (persona persistence, tool-call coverage, goal patterns).
 
-The two phases within quality are kept separate so the model under test is
-loaded exactly once: all fixture responses are collected first (Phase 1),
-then the evaluator judges them (Phase 2).
+The three phases are kept separate so the model under test is loaded
+exactly once: speed → quality → scenarios.
 
 Usage:
   python3 scripts/bench-models.py [config.yaml]
 
   Default config path: scripts/config.yaml (next to this script)
   Default fixtures:    scripts/fixtures.json (next to config)
+  Default scenarios:   scripts/scenarios.json (next to config)
 
 Env vars:
   BENCH_TRIALS    hot measurement trials    (default 3)
@@ -1522,6 +1527,666 @@ def print_quality_results(all_results: list, W: int):
         print("  All models passed all quality tests  ✓")
 
 
+# ── Scenario benchmark — dynamic multi-turn + tool mock injection ─────────────
+
+
+def load_scenarios(path: str) -> list[dict]:
+    """Load scenarios.json, filtering out _comment-only entries."""
+    with open(path) as f:
+        data = json.load(f)
+    return [s for s in data if "id" in s]
+
+
+def _find_tool_mock(scenario: dict, tool_name: str, tool_args: str) -> dict | None:
+    """Find the matching mock entry for a tool call.
+
+    For run_agent_async, matches on the `task_contains` field against the task
+    parameter in tool_args. For all other tools, matches on `args_contains`
+    against the raw tool_args string. Falls back to the first mock entry if no
+    exact match is found.
+    """
+    mocks = scenario.get("tool_mocks", {}).get(tool_name)
+    if not mocks:
+        return None
+
+    if tool_name == "run_agent_async":
+        task = ""
+        try:
+            args_parsed = json.loads(tool_args)
+            task = args_parsed.get("task", "")
+        except json.JSONDecodeError:
+            task = tool_args
+        for mock in mocks:
+            tc = mock.get("task_contains", "")
+            if tc and tc.lower() in task.lower():
+                return mock
+        return mocks[0]
+
+    for mock in mocks:
+        ac = mock.get("args_contains", "")
+        if ac and ac.lower() in tool_args.lower():
+            return mock
+    return mocks[0]
+
+
+def _inject_tool_results(scenario: dict, tool_calls: list, conv: list) -> None:
+    """Append mocked tool results for sync tool calls to the conversation.
+
+    run_agent_async is skipped here — it is handled separately by
+    _handle_agent_async because the async result is injected at a later turn.
+    """
+    for tc in tool_calls:
+        tool_name = tc["function"]["name"]
+        if tool_name == "run_agent_async":
+            continue
+        tool_args = tc["function"].get("arguments", "")
+        mock = _find_tool_mock(scenario, tool_name, tool_args)
+        if mock is None:
+            conv.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": f"[mock no definido para {tool_name}]",
+                }
+            )
+        else:
+            conv.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": mock["result"],
+                }
+            )
+
+
+def _handle_agent_async(
+    scenario: dict, tool_calls: list, conv: list, pending_async: list
+) -> None:
+    """Handle run_agent_async calls: inject immediate tool response now,
+    and schedule the real async result for delivery at a future turn.
+    """
+    for tc in tool_calls:
+        tool_name = tc["function"]["name"]
+        if tool_name != "run_agent_async":
+            continue
+        tool_args = tc["function"].get("arguments", "")
+        mock = _find_tool_mock(scenario, tool_name, tool_args)
+        if mock is None:
+            conv.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": "[mock no definido para run_agent_async]",
+                }
+            )
+            continue
+
+        immediate = mock.get(
+            "immediate_response",
+            "[Tarea delegada al agente. El resultado llegará en breve.]",
+        )
+        conv.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": immediate,
+            }
+        )
+
+        delivered_at = mock.get("delivered_at_turn")
+        if delivered_at and mock.get("result"):
+            task = ""
+            try:
+                args_parsed = json.loads(tool_args)
+                task = args_parsed.get("task", "")
+            except json.JSONDecodeError:
+                task = tool_args
+            pending_async.append(
+                {
+                    "turn": delivered_at,
+                    "task": task,
+                    "result": mock["result"],
+                }
+            )
+
+
+def _inject_pending_async(turn: int, pending_async: list, conv: list) -> bool:
+    """Inject any async agent results scheduled for delivery at this turn.
+
+    The result is injected as a synthetic user message so the LLM can produce
+    a proactive announcement (matching seneschal's real ProactiveEvent flow).
+    Returns True if any result was injected.
+    """
+    injected = False
+    for pa in pending_async[:]:
+        if pa["turn"] == turn:
+            task = pa.get("task", "desconocida")
+            result = pa.get("result", "")
+            conv.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"[Resultado del agente "
+                        f'(tarea: "{task}")]:\n{result}'
+                    ),
+                }
+            )
+            pending_async.remove(pa)
+            injected = True
+    return injected
+
+
+def _inject_scheduled_user(turn: int, scenario: dict, conv: list) -> bool:
+    """Inject any scripted user turns scheduled for delivery at this turn.
+
+    Returns True if any user turn was injected.
+    """
+    scheduled = scenario.get("subsequent_user_turns", [])
+    injected = False
+    for su in scheduled:
+        if su.get("at_turn") == turn:
+            conv.append({"role": "user", "content": su["content"]})
+            injected = True
+    return injected
+
+
+def _has_future_items(
+    turn: int, scenario: dict, pending_async: list
+) -> bool:
+    """Check if there are any scheduled items waiting for future turns."""
+    max_t = scenario.get("max_turns", 10)
+    for pa in pending_async:
+        if pa["turn"] > turn:
+            return True
+    for su in scenario.get("subsequent_user_turns", []):
+        if su.get("at_turn", 0) > turn:
+            return True
+    return False
+
+
+def _build_scenario_payload(
+    model_id: str,
+    runtime_name: str,
+    conv: list,
+    bench_thinking: bool,
+) -> dict:
+    """Build the chat completion payload for a scenario turn."""
+    system_content = _no_think_prefix(runtime_name) + SYSTEM_PROMPT
+    messages = [{"role": "system", "content": system_content}]
+    messages.extend(conv)
+    payload = {
+        "model": model_id,
+        "messages": messages,
+        "max_tokens": _quality_max_tokens(),
+        "temperature": 0.0,
+        "tools": TOOL_DEFINITIONS,
+        "tool_choice": "auto",
+    }
+    if bench_thinking:
+        payload.update(_thinking_fields())
+    return payload
+
+
+def run_scenario(
+    host: str,
+    port: int,
+    token: str,
+    model_id: str,
+    runtime_name: str,
+    scenario: dict,
+    bench_thinking: bool = True,
+    use_ssl: bool = False,
+    base_path: str = "",
+) -> tuple[list, str, str, list, float]:
+    """Execute one scenario with the dynamic multi-turn loop.
+
+    The conversation is driven forward by:
+      - seed messages (user)
+      - tool call → mock result → re-injection (sync)
+      - run_agent_async → immediate ack + scheduled async result at later turn
+      - scheduled subsequent user turns at specific turn numbers
+
+    Returns (trace, verdict, checks_log, elapsed_ms).
+    """
+    conv: list = []
+    for msg in scenario.get("seed_messages", []):
+        conv.append(dict(msg))
+
+    pending_async: list = []
+    trace: list = []
+    t_start = time.perf_counter()
+    max_turns = scenario.get("max_turns", 10)
+    turn = 1
+
+    while turn <= max_turns:
+        had_async = _inject_pending_async(turn, pending_async, conv)
+        had_user = _inject_scheduled_user(turn, scenario, conv)
+
+        should_call = (
+            turn == 1
+            or had_async
+            or had_user
+            or (conv and conv[-1].get("role") == "tool")
+        )
+
+        if not should_call:
+            if not _has_future_items(turn, scenario, pending_async):
+                break
+            turn += 1
+            continue
+
+        payload = _build_scenario_payload(
+            model_id, runtime_name, conv, bench_thinking
+        )
+        try:
+            resp = _post_blocking(
+                host, port, token, payload,
+                use_ssl=use_ssl, base_path=base_path,
+            )
+        except Exception as e:
+            trace.append(
+                {
+                    "turn": turn,
+                    "role": "assistant",
+                    "text": "",
+                    "tool_calls": [],
+                    "error": str(e),
+                }
+            )
+            break
+
+        msg_out = resp["choices"][0]["message"]
+        text = _message_text(msg_out)
+        tool_calls = _normalize_tool_calls(msg_out.get("tool_calls") or [])
+
+        trace.append(
+            {
+                "turn": turn,
+                "role": "assistant",
+                "text": text,
+                "tool_calls": tool_calls,
+            }
+        )
+
+        conv_msg = {"role": "assistant", "content": text if text else None}
+        if tool_calls:
+            conv_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": tc["function"],
+                }
+                for tc in tool_calls
+            ]
+        conv.append(conv_msg)
+
+        if tool_calls:
+            _inject_tool_results(scenario, tool_calls, conv)
+            _handle_agent_async(scenario, tool_calls, conv, pending_async)
+        elif not _has_future_items(turn, scenario, pending_async):
+            break
+
+        turn += 1
+
+    elapsed_ms = (time.perf_counter() - t_start) * 1000
+    verdict, reason, checks = evaluate_trace(scenario, trace)
+    return trace, verdict, reason, checks, elapsed_ms
+
+
+def evaluate_trace(
+    scenario: dict, trace: list
+) -> tuple[str, str, list]:
+    """Purely mechanical evaluation of the scenario trace.
+
+    Per-turn checks (persona persistence):
+      - señor presence in every assistant turn
+      - Spanish language dominance
+      - Forbidden patterns (markdown, code fences, etc.)
+      - Max sentences per turn
+
+    Aggregate checks:
+      - must_call_tools (all must appear somewhere)
+      - must_call_any_of (at least one from each group)
+      - Goal patterns on the final assistant turn
+
+    No LLM evaluator is used — all checks are mechanical.
+    Returns (verdict, reason, checks_log).
+    """
+    et = scenario.get("expected_trace", {})
+    pp = et.get("persona_persistence", {})
+    checks: list[tuple] = []
+
+    # ── Per-turn persona checks ────────────────────────────────────────────
+    for entry in trace:
+        text = entry.get("text") or ""
+        t = entry["turn"]
+
+        if pp.get("must_use_senor_every_turn") and text.strip():
+            has_senor = "señor" in text.lower()
+            checks.append(
+                (
+                    f"señor_t{t}",
+                    has_senor,
+                    f'señor {"✓" if has_senor else "✗ NOT found"}',
+                )
+            )
+
+        if pp.get("must_stay_in_spanish") and text.strip():
+            es_matches = len(
+                re.findall(
+                    r"\b(el|la|de|que|en|es|los|las|se|no|con|por|un|una|para|del|como|más|este|esta|le|lo|me|su|ha|hay|han|son|está|están|era|eran|fue|fueron)\b",
+                    text,
+                    re.IGNORECASE,
+                )
+            )
+            en_matches = len(
+                re.findall(
+                    r"\b(the|is|are|of|and|in|to|it|that|for|was|on|with|this|be|have|from|or|by|not|but|you|they|we|can|will|has|been|an|at|its)\b",
+                    text,
+                    re.IGNORECASE,
+                )
+            )
+            is_spanish = es_matches >= en_matches
+            checks.append(
+                (
+                    f"lang_t{t}",
+                    is_spanish,
+                    f"ES:{es_matches} EN:{en_matches} — {'ES ✓' if is_spanish else 'EN ✗'}",
+                )
+            )
+
+        forbidden = pp.get("forbidden_patterns_per_turn", [])
+        for pat in forbidden:
+            m = re.search(pat, text, re.MULTILINE)
+            passed = m is None
+            snippet = repr(m.group()[:40]) if m else ""
+            checks.append(
+                (
+                    f"forbidden_t{t}",
+                    passed,
+                    f"/{pat[:30]}/: {'ok' if passed else f'matched {snippet} ✗'}",
+                )
+            )
+
+        max_s = pp.get("max_assistant_sentences_per_turn")
+        if max_s and text.strip():
+            n = len(re.findall(r"[.!?]+(?:\s|$)", text))
+            passed = n <= max_s
+            checks.append(
+                (
+                    f"sentences_t{t}",
+                    passed,
+                    f"{n} ≤ {max_s} {'✓' if passed else '✗'}",
+                )
+            )
+
+    # ── Aggregate tool checks ──────────────────────────────────────────────
+    all_tools = []
+    for entry in trace:
+        all_tools.extend(
+            tc["function"]["name"] for tc in entry.get("tool_calls", [])
+        )
+
+    for tool in et.get("must_call_tools", []):
+        passed = tool in all_tools
+        checks.append(
+            (
+                "must_call",
+                passed,
+                f"{tool}: {'called ✓' if passed else 'NOT called ✗'}",
+            )
+        )
+
+    for group in et.get("must_call_any_of", []):
+        passed = any(t in all_tools for t in group)
+        checks.append(
+            (
+                "must_call_any",
+                passed,
+                f"any of {group}: {'yes ✓' if passed else 'none ✗'}",
+            )
+        )
+
+    seq = et.get("expected_tool_sequence", [])
+    if seq:
+        it = iter(all_tools)
+        passed = all(item in it for item in seq)
+        checks.append(
+            (
+                "tool_seq",
+                passed,
+                f"expected {seq!r}, actual {all_tools!r}: {'✓' if passed else '✗'}",
+            )
+        )
+
+    # ── Goal patterns on final assistant turn with non‑empty text ──────────
+    gp = et.get("goal_patterns", {})
+    if gp:
+        final_text = ""
+        for entry in reversed(trace):
+            if entry.get("text"):
+                final_text = entry["text"]
+                break
+
+        for pat in gp.get("required_patterns", []):
+            m = re.search(pat, final_text, re.MULTILINE | re.IGNORECASE)
+            passed = m is not None
+            checks.append(
+                (
+                    "goal_pat",
+                    passed,
+                    f"/{pat[:45]}/: {'matched ✓' if passed else 'not found ✗'}",
+                )
+            )
+
+        for s in gp.get("required_strings", []):
+            passed = s.lower() in final_text.lower()
+            checks.append(
+                (
+                    "goal_str",
+                    passed,
+                    f"{s!r}: {'found ✓' if passed else 'missing ✗'}",
+                )
+            )
+
+        req_all = gp.get("required_all_strings", [])
+        if req_all:
+            found = [
+                s for s in req_all if s.lower() in final_text.lower()
+            ]
+            passed = len(found) == len(req_all)
+            checks.append(
+                (
+                    "goal_all",
+                    passed,
+                    f"all of {req_all}: {'✓' if passed else f'only {found} ✗'}",
+                )
+            )
+
+    failed = [
+        (name, detail) for name, passed, detail in checks if not passed
+    ]
+    if failed:
+        reason = "; ".join(
+            f"{n}: {d}" for n, d in failed[:5]
+        )
+        if len(failed) > 5:
+            reason += f" (+{len(failed) - 5} more)"
+        return "FAIL", reason, checks
+    return "PASS", f"all {len(checks)} checks passed", checks
+
+
+# ── Scenario benchmark — per‑model runner ─────────────────────────────────────
+
+
+def run_scenarios_benchmark(
+    host: str,
+    port: int,
+    token: str,
+    model_id: str,
+    runtime_name: str,
+    scenarios: list[dict],
+    W: int,
+    bench_thinking: bool = True,
+    use_ssl: bool = False,
+    base_path: str = "",
+) -> list[dict]:
+    """Run all scenarios against one model and return result list."""
+    total = len(scenarios)
+    pad = len(str(total))
+    print(f"\n{'─' * W}")
+    print(f"  Scenarios — {total} multi-turn dynamic scenarios")
+
+    results: list[dict] = []
+    for i, sc in enumerate(scenarios, 1):
+        sid = sc["id"]
+        label = f"[{i:{pad}}/{total}] {sid}"
+        print(f"    {label:<52}", end="", flush=True)
+        try:
+            trace, verdict, reason, checks, elapsed_ms = run_scenario(
+                host, port, token, model_id, runtime_name, sc,
+                bench_thinking=bench_thinking,
+                use_ssl=use_ssl, base_path=base_path,
+            )
+            sym = {"PASS": "✓", "FAIL": "✗"}.get(verdict, "?")
+            turns = len(trace)
+            tools = []
+            for entry in trace:
+                tools.extend(
+                    tc["function"]["name"]
+                    for tc in entry.get("tool_calls", [])
+                )
+            tools_str = (
+                "→".join(tools[:4]) + ("…" if len(tools) > 4 else "")
+                if tools
+                else "no tools"
+            )
+            print(
+                f"{sym} {verdict:<4}  {turns}t  {elapsed_ms:.0f}ms"
+                f"  [{tools_str}]"
+            )
+            results.append(
+                {
+                    "id": sid,
+                    "group": sc.get("group", "scenarios"),
+                    "verdict": verdict,
+                    "reason": reason,
+                    "turns": turns,
+                    "max_turns": sc.get("max_turns", 10),
+                    "tools_used": tools,
+                    "checks": checks,
+                    "trace_texts": [
+                        e.get("text", "") for e in trace
+                    ],
+                    "latency_ms": elapsed_ms,
+                }
+            )
+        except Exception as e:
+            print(f"ERROR  ({e})")
+            results.append(
+                {
+                    "id": sid,
+                    "group": sc.get("group", "scenarios"),
+                    "verdict": "ERROR",
+                    "reason": str(e)[:120],
+                    "turns": 0,
+                    "max_turns": sc.get("max_turns", 10),
+                    "tools_used": [],
+                    "checks": [],
+                    "trace_texts": [],
+                    "latency_ms": 0,
+                }
+            )
+
+    passing = sum(1 for r in results if r["verdict"] == "PASS")
+    lats = [r["latency_ms"] for r in results if r["latency_ms"]]
+    avg_lat = mean(lats) if lats else 0.0
+    print(
+        f"\n  Scenario score: {passing}/{total}"
+        f"  ({passing * 100 // total if total else 0}%)"
+        f"   avg latency: {avg_lat:.0f}ms"
+    )
+    return results
+
+
+# ── Scenario results display ──────────────────────────────────────────────────
+
+
+def print_scenarios_results(all_results: list, W: int):
+    has_scenarios = any("scenarios" in r for r in all_results)
+    if not has_scenarios:
+        return
+
+    print()
+    print("═" * W)
+    print("  SCENARIO RESULTS  (multi-turn dynamic, no LLM evaluator)")
+    print("═" * W)
+    print()
+
+    col_model = 50
+    col_score = 10
+    col_lat = 10
+
+    hdr = (
+        f"  {'Server/Runtime/Model':<{col_model}}"
+        f"  {'Score':>{col_score}}"
+        f"  {'Avg lat':>{col_lat}}"
+    )
+    print(hdr)
+    print("  " + "─" * (len(hdr) - 2))
+
+    for r in all_results:
+        sc_results = r.get("scenarios", [])
+        if not sc_results:
+            continue
+        total = len(sc_results)
+        passing = sum(1 for sr in sc_results if sr["verdict"] == "PASS")
+        pct = passing * 100 // total if total else 0
+        lats = [
+            sr["latency_ms"]
+            for sr in sc_results
+            if sr["latency_ms"]
+        ]
+        avg_lat_ms = mean(lats) if lats else float("nan")
+        display = (
+            f"{r.get('server','?')}/{r.get('runtime','?')}"
+            f"  {r.get('model_id','?')}"
+        )
+        print(
+            f"  {display:<{col_model}}"
+            f"  {passing}/{total} ({pct:3}%)"
+            f"  {avg_lat_ms:>{col_lat}.0f}ms"
+        )
+
+    # Failure detail
+    print()
+    print("  Failed scenarios:")
+    print("  " + "─" * 40)
+    any_failure = False
+    for r in all_results:
+        sc_results = r.get("scenarios", [])
+        failures = [sr for sr in sc_results if sr["verdict"] == "FAIL"]
+        if not failures:
+            continue
+        any_failure = True
+        display = (
+            f"{r.get('server','?')}/{r.get('runtime','?')}"
+            f"  {r.get('model_id','?')}"
+        )
+        print(f"\n  {display}")
+        for sr in failures:
+            tools_used = "→".join(sr["tools_used"][:4]) or "none"
+            print(
+                f"    ✗ {sr['id']:<42}"
+                f"  {sr['turns']}/{sr['max_turns']} turns"
+                f"  [{tools_used}]"
+            )
+            # Show reason in next line for readability
+            print(f"      {sr['reason'][:100]}")
+    if not any_failure:
+        print("  All models passed all scenarios  ✓")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -1532,6 +2197,9 @@ def main():
     )
     fixtures_path = os.path.join(
         os.path.dirname(os.path.abspath(config_path)), "fixtures.json"
+    )
+    scenarios_path = os.path.join(
+        os.path.dirname(os.path.abspath(config_path)), "scenarios.json"
     )
 
     if not os.path.isfile(config_path):
@@ -1548,6 +2216,11 @@ def main():
     if RUN_QUALITY and os.path.isfile(fixtures_path):
         fixtures = load_fixtures(fixtures_path)
 
+    # Scenario benchmark setup
+    scenarios: list[dict] = []
+    if RUN_QUALITY and os.path.isfile(scenarios_path):
+        scenarios = load_scenarios(scenarios_path)
+
     ev_cfg: dict | None = None
     if RUN_QUALITY and fixtures:
         ev_cfg = load_evaluator_config(config_path)
@@ -1555,7 +2228,7 @@ def main():
     W = 82
     print()
     print("═" * W)
-    print(f"  Multi-Server Benchmark  (speed + quality)")
+    print(f"  Multi-Server Benchmark  (speed + quality + scenarios)")
     print("═" * W)
     print(f"  Config      : {config_path}")
     print(f"  Targets     : {len(targets)} runtime(s)   {total_models} model(s) total")
@@ -1568,6 +2241,11 @@ def main():
         f"  Quality     : {len(fixtures)} fixtures"
         if fixtures
         else "  Quality     : disabled"
+    )
+    print(
+        f"  Scenarios   : {len(scenarios)} dynamic multi-turn scenarios"
+        if scenarios
+        else "  Scenarios   : disabled"
     )
     if ev_cfg:
         ev_ready = _wait_ready(
@@ -1650,11 +2328,27 @@ def main():
                     base_path=base_path,
                 )
 
+            # ── Scenario benchmark (model still loaded) ────────────────────
+            if scenarios:
+                result["scenarios"] = run_scenarios_benchmark(
+                    host,
+                    port,
+                    token,
+                    model_id,
+                    runtime_name,
+                    scenarios,
+                    W,
+                    bench_thinking=bench_thinking,
+                    use_ssl=use_ssl,
+                    base_path=base_path,
+                )
+
             all_results.append(result)
 
     # ── Final results ─────────────────────────────────────────────────────────
     print_speed_results(all_results, W)
     print_quality_results(all_results, W)
+    print_scenarios_results(all_results, W)
 
     print()
     print("═" * W)

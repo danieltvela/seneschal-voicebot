@@ -6,7 +6,8 @@ servers:
       vllm:
         port: 8005
         token: ""
-        models: []
+        models:
+          - nemotron-lightning-30B-A3B-NVFP4
           # - Laguna-S-2.1-NVFP4
           # - Step-3.7-Flash
           # - Qwen3.6-27B-FP8
@@ -23,6 +24,7 @@ servers:
         port: 8006
         token: ""
         models: []
+          # - gemma-4-31B-it-FP8
           # - Qwen3.6-35B-A3B-NVFP4
           # - Gemma4-26B-Uncensored
           # - gemma-4-31B-it-NVFP4
@@ -59,12 +61,13 @@ servers:
       llama-server2:
         port: 8080
         token: "asdf"
-        models:
-          - ./models/LFM2.5-2.6B-Q8_0.gguf
+        models: []
+          # - ./models/LFM2.5-2.6B-Q8_0.gguf
       omlx:
         port: 8000
         token: "asdf"
         models: []
+          # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
           # - gemma-4-26B-A4B-it-QAT-MLX-4bit
           # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
           # - gemma-4-26B-A4B-it-MLX-4bit
