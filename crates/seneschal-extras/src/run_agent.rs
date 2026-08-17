@@ -1,7 +1,7 @@
 // Imports used only in test code (AcpWriter was extracted to common).
 // Suppress warnings in non-test builds.
 #![cfg_attr(not(test), allow(unused_imports))]
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -17,6 +17,7 @@ use seneschal_agents::{
     SessionEventTx,
 };
 use seneschal_common::events::ProactiveEvent;
+use seneschal_common::permission::PermissionGate;
 use seneschal_common::tools::Tool;
 
 use seneschal_core::llm::{LlmProvider, Message};
@@ -156,6 +157,10 @@ pub struct RunAgentTool {
     synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
     opencode_transport: Option<Arc<OpenCodeHttpTransport>>,
+    /// Shared permission gate. When set, any pending permission slots for the
+    /// task's scope are cancelled when the ACP prompt finishes (success,
+    /// cancel, or error). Issue #167.
+    permission_gate: Option<Arc<PermissionGate>>,
     /// Manager for visible (PTY-based) agent sessions.
     visible_manager: Option<Arc<VisibleSessionManager>>,
     /// Directory for visible session log files.
@@ -193,12 +198,22 @@ impl RunAgentTool {
             synthesis_client: None,
             session_manager: None,
             opencode_transport: None,
+            permission_gate: None,
             visible_manager: None,
             session_dir: "/tmp/seneschal_sessions".to_string(),
             tool_name: OnceLock::new(),
             tool_description,
             task_description,
         }
+    }
+
+    /// Attach the shared permission gate. When set, the gate cancels any
+    /// pending permission slots for the task's scope at the end of every
+    /// ACP prompt (so a finishing turn never leaves a permission hanging).
+    /// Issue #167.
+    pub fn with_permission_gate(mut self, gate: Arc<PermissionGate>) -> Self {
+        self.permission_gate = Some(gate);
+        self
     }
 
     /// Attach an optional session manager for persistent ACP sessions.
@@ -646,6 +661,7 @@ impl RunAgentTool {
         let agent_name = self.config.name.clone();
         let config = self.config.clone();
         let session_mgr = self.session_manager.clone();
+        let permission_gate = self.permission_gate.clone();
 
         tokio::spawn(async move {
             let writer_arc: Arc<Mutex<AcpWriter>>;
@@ -794,6 +810,21 @@ impl RunAgentTool {
             let latency_ms = latency_start.elapsed().as_millis();
             info!(target: "acp", latency_ms, task_id, "ACP round-trip complete");
             drop(rx_guard);
+
+            // ── Cancel any dangling permission slots for this task's scope ──
+            // Issued at the end of the ACP prompt so a finishing turn never
+            // leaves permissions hanging past the turn boundary (issue #167).
+            // Any permission that was already answered (normal or HTTP) is
+            // no longer in the gate, so cancel_scope is a no-op for those.
+            if let Some(gate) = &permission_gate {
+                let cancelled = gate.cancel_scope(&task_id);
+                if cancelled > 0 {
+                    info!(
+                        target: "acp",
+                        "Cancelled {cancelled} dangling permission(s) at end of task={task_id}",
+                    );
+                }
+            }
 
             // ── Cleanup ──────────────────────────────────────────────────────
             if let Some(ref mgr) = session_mgr {

@@ -10,6 +10,7 @@ pub mod daemon;
 pub mod deep_research;
 pub mod device_monitor;
 pub mod eyes;
+pub mod permission_tool;
 pub mod prompt_build;
 pub mod recover_historical_context;
 pub mod run_agent;
@@ -27,6 +28,7 @@ pub use conversation_mode::SetConversationModeTool;
 pub use daemon::{AcpKeepAliveDaemon, InferenceDaemon};
 pub use deep_research::DeepResearchTool;
 pub use eyes::EyesDaemon;
+pub use permission_tool::RespondAgentPermissionTool;
 pub use prompt_build::SetPromptBuildTool;
 pub use recover_historical_context::RecoverHistoricalContextTool;
 pub use run_agent::{

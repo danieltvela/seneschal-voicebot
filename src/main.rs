@@ -40,7 +40,7 @@ use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
 use seneschal_common::tools::{ConversationMode, ToolRegistry};
-use seneschal_common::{PermissionGate, ResolveOutcome, map_transcript_to_option_id};
+use seneschal_common::{PermissionGate, find_allow_option_id};
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
 use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
 use seneschal_core::audio::audio_transform::resample_nearest;
@@ -64,7 +64,8 @@ use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin
 use seneschal_extras::analysis::ContextLens;
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
 use seneschal_extras::{
-    RunAgentTool, conversation_mode::SetConversationModeTool, run_agent::ActiveTask,
+    RespondAgentPermissionTool, RunAgentTool, conversation_mode::SetConversationModeTool,
+    run_agent::ActiveTask,
 };
 use seneschal_mcp::mcp::McpToolProxy;
 use seneschal_memory::{SDreamConfig, SDreamDaemon};
@@ -145,6 +146,13 @@ async fn async_main() -> Result<()> {
     info!(target: "seneschal", "Active environment: {}", active_env.as_str());
     info!(target: "seneschal", "Starting seneschal...");
     let mut config = Config::from_env()?;
+
+    // ── Permission gate (issue #167) ─────────────────────────────────────────
+    // Shared across the voice path (gate.enqueue in AgentQuestion handler), the
+    // Control API, the `respond_agent_permission` LLM tool, and the agent
+    // task lifecycle (gate.cancel_scope at end of every ACP prompt). Created
+    // up-front so the same Arc can be handed to every consumer.
+    let permission_gate = Arc::new(PermissionGate::new());
 
     // ── Device listing shortcut ───────────────────────────────────────────────
     let list_devices = config.list_devices
@@ -251,6 +259,12 @@ async fn async_main() -> Result<()> {
 
     let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
     tool_registry.register(CurrentTimeTool);
+    // Permission decision tool (issue #167). Lets the frontend LLM resolve a
+    // pending backend-agent `session/request_permission` request by its
+    // `authorization_id` (mirrors qwen-audio-agent's `respondAgentPermission`).
+    tool_registry.register(RespondAgentPermissionTool::new(Arc::clone(
+        &permission_gate,
+    )));
     // DISABLED (temp)
     // tool_registry.register(ReadFileTool);
     // DISABLED (temp)
@@ -325,6 +339,9 @@ async fn async_main() -> Result<()> {
         info!(target: "seneschal", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
         let task_map: Arc<dashmap::DashMap<String, ActiveTask>> = Arc::new(dashmap::DashMap::new());
         let mut run_agent_tool = RunAgentTool::new(agent.clone(), task_map, proactive_tx.clone());
+        // Issue #167: pass the shared gate so the agent task cancels any
+        // pending permissions for its scope at the end of every ACP prompt.
+        run_agent_tool = run_agent_tool.with_permission_gate(Arc::clone(&permission_gate));
         if let Some(ref sec) = secondary_llm_client {
             run_agent_tool = run_agent_tool.with_synthesis(sec.clone());
             info!(target: "seneschal", "run_{} result synthesis via secondary LLM enabled", agent.name);
@@ -1230,8 +1247,8 @@ async fn async_main() -> Result<()> {
     let announcement_window = Arc::new(std::sync::Mutex::new(
         seneschal_core::pipeline::AnnouncementWindow::new(),
     ));
-    // Shared with Control API (when enabled). Voice path works with control off.
-    let permission_gate = Arc::new(PermissionGate::new());
+    // `permission_gate` is created earlier (right after Config::from_env) so
+    // it can be shared with the tool/agent setup that runs before this point.
 
     let utterance_epoch = Arc::new(AtomicU64::new(0));
 
@@ -1645,6 +1662,28 @@ async fn async_main() -> Result<()> {
                                     transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
                                 }
                                 ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
+                                    // ── Mode "full" (issue #167) ────────────────────────
+                                    // Auto-approve without enqueuing or speaking. Mirrors
+                                    // qwen-audio-agent's `permissionMode === 'full'` and the
+                                    // `acp_agent_chat` test binary's `PermissionMode::Auto`.
+                                    if config.permission_mode == "full" {
+                                        let option_id = find_allow_option_id(&options)
+                                            .unwrap_or_else(|| "cancelled".to_string());
+                                        info!(
+                                            target: "acp",
+                                            "Auto-allowing permission (full mode) task={task_id} agent={agent_name} → {option_id}",
+                                        );
+                                        let _ = response_tx.send(option_id.clone());
+                                        #[cfg(feature = "control")]
+                                        control_broadcast.send(
+                                            seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
+                                                task_id: task_id.clone(),
+                                                option_id,
+                                            },
+                                        );
+                                        continue;
+                                    }
+
                                     #[cfg(feature = "tui")]
                                     {
                                         let display_opts: Vec<String> = options
@@ -1681,17 +1720,44 @@ async fn async_main() -> Result<()> {
                                         .map(|o| o.display_label())
                                         .collect::<Vec<_>>()
                                         .join(" / ");
-                                    let prompt = seneschal_common::i18n::get_notification("acp_permission", &config.language)
+                                    let prompt_template = seneschal_common::i18n::get_notification(
+                                        "acp_permission",
+                                        &config.language,
+                                    );
+                                    let spoken_prompt = prompt_template
                                         .replace("{question}", &question)
                                         .replace("{opts_str}", &opts_str);
-                                    permission_gate.enqueue(
+
+                                    // Mint the permission id (also used as scope) and enqueue.
+                                    let authorization_id = permission_gate.enqueue(
                                         task_id,
                                         agent_name,
-                                        question,
+                                        question.clone(),
                                         options,
                                         response_tx,
                                     );
-                                    transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
+
+                                    // Compose the LLM-visible notification: the natural
+                                    // spoken prompt PLUS the `<backend_permission_request>`
+                                    // block with the authorization_id so the LLM can call
+                                    // `respond_agent_permission` after hearing the user.
+                                    // The model sees the id but won't read it aloud (it
+                                    // generates its own natural question from `spoken_prompt`).
+                                    let llm_prompt = format!(
+                                        "{spoken_prompt}\n\n\
+                                         <backend_permission_request>\n\
+                                         authorization_id={authorization_id}\n\
+                                         operation={question}\n\
+                                         </backend_permission_request>\n\n\
+                                         Cuando el usuario responda en esta vuelta, llama a\n\
+                                         la herramienta `respond_agent_permission` con ese\n\
+                                         `authorization_id` y la `decision` que corresponda\n\
+                                         (`always` si consintió, `reject` si rechazó)."
+                                    );
+                                    transcript_tx
+                                        .send(PipelineFrame::SystemNotification { text: llm_prompt })
+                                        .await
+                                        .ok();
                                 }
                                 ProactiveEvent::PluginSwitch { .. } => {
                                     // No-op: handled via dedicated plugin_switch_rx channel
@@ -2077,77 +2143,15 @@ async fn async_main() -> Result<()> {
                                     *non_user_streak.lock().unwrap() = 0;
                                 }
 
-                                // ── ACP permission gate (FIFO via PermissionGate) ─────
-                                if let Some(claim) = permission_gate.claim_front_for_voice() {
-                                    let audio_for_task = audio.clone();
-                                    let stt_cfg = config.clone();
-                                    let gate = Arc::clone(&permission_gate);
-                                    #[cfg(feature = "control")]
-                                    let ctrl = control_broadcast.clone();
-
-                                    info!(
-                                        target: "acp",
-                                        "Answering pending question for task={} agent={}",
-                                        claim.task_id, claim.agent_name
-                                    );
-
-                                    tokio::spawn(async move {
-                                        let t0 = Instant::now();
-                                        let answer = if let Ok(provider) = create_provider(&stt_cfg) {
-                                            provider
-                                                .transcribe_complete(&audio_for_task)
-                                                .map(|q| q.text)
-                                                .unwrap_or_default()
-                                        } else {
-                                            String::new()
-                                        };
-                                        info!(
-                                            target: "acp",
-                                            "STT for permission question took {}ms",
-                                            t0.elapsed().as_millis()
-                                        );
-                                        let option_id =
-                                            map_transcript_to_option_id(&answer, &claim.options);
-                                        info!(
-                                            target: "acp",
-                                            "Permission answer: {:?} → {}",
-                                            answer, option_id
-                                        );
-                                        match gate.resolve(&claim.task_id, &option_id) {
-                                            ResolveOutcome::Sent => {
-                                                #[cfg(feature = "control")]
-                                                ctrl.send(
-                                                    seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
-                                                        task_id: claim.task_id,
-                                                        option_id,
-                                                    },
-                                                );
-                                            }
-                                            ResolveOutcome::ReceiverDropped => {
-                                                info!(
-                                                    target: "acp",
-                                                    "Permission oneshot closed (ACP timeout) for task={}",
-                                                    claim.task_id
-                                                );
-                                                #[cfg(feature = "control")]
-                                                ctrl.send(
-                                                    seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
-                                                        task_id: claim.task_id,
-                                                        option_id: "cancelled".into(),
-                                                    },
-                                                );
-                                            }
-                                            ResolveOutcome::Unknown => {
-                                                debug!(
-                                                    target: "acp",
-                                                    "Permission slot gone (HTTP race or cleanup) for task={}",
-                                                    claim.task_id
-                                                );
-                                            }
-                                        }
-                                    });
-                                    continue;
-                                }
+                                // ── Permission gate (issue #167) ────────────────────────
+                                // Previously this branch re-transcribed the audio and
+                                // mapped keywords (sí/no) to the ACP option. The voice
+                                // path no longer intercepts permissions: the user's
+                                // spoken answer flows through the normal transcript
+                                // pipeline and the frontend LLM resolves the pending
+                                // permission by calling `respond_agent_permission`. The
+                                // gate itself is still drained by `cancel_scope` at the
+                                // end of every ACP prompt and by the HTTP control API.
 
                                 let stt_elapsed_ms = segment_duration_ms as u128;
                                 info!(

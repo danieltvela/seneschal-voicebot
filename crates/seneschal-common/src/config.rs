@@ -276,6 +276,13 @@ pub struct Config {
     /// Maximum backoff cap in seconds (AGENT_ACP_RESTART_MAX_BACKOFF_SECS, default 60).
     pub agent_acp_restart_max_backoff_secs: u64,
 
+    /// Permission mode for backend agent `session/request_permission` requests.
+    /// "ask" (default) — speak the question and let the user answer via the
+    /// `respond_agent_permission` LLM tool.
+    /// "full" — auto-approve every permission (trusted projects only).
+    /// Env var: SENESCHAL_PERMISSION_MODE.
+    pub permission_mode: String,
+
     // ── Visible agent sessions (PTY) ──────────────────────────────────────────
     /// Directory for visible session log files (SENECHAL_SESSION_DIR, default "/tmp/seneschal_sessions").
     pub session_dir: String,
@@ -723,6 +730,16 @@ impl Config {
             self.agent_acp_restart_max_backoff_secs = v
                 .parse()
                 .context("Invalid AGENT_ACP_RESTART_MAX_BACKOFF_SECS")?;
+        }
+
+        // Permission mode (issue #167). Values: "ask" (default) | "full".
+        if let Ok(v) = env::var("SENESCHAL_PERMISSION_MODE") {
+            match v.to_lowercase().as_str() {
+                "ask" | "full" => self.permission_mode = v.to_lowercase(),
+                _ => anyhow::bail!(
+                    "Invalid SENESCHAL_PERMISSION_MODE '{v}' (expected 'ask' or 'full')"
+                ),
+            }
         }
 
         // Visible agent sessions

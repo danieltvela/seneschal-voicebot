@@ -120,6 +120,13 @@ agent_acp_warmup_timeout_secs = 10
 agent_acp_restart_backoff_secs = 2
 agent_acp_restart_max_backoff_secs = 60
 
+# ── Permissions (issue #167) ───────────────────────────────────────────────────
+# Permission mode for backend agent `session/request_permission` requests.
+# "ask" (default) — speak the question and let the user answer via the
+# `respond_agent_permission` LLM tool.
+# "full" — auto-approve every permission (trusted projects only).
+permission_mode = "ask"
+
 # ── Inference daemon ──────────────────────────────────────────────────────────
 daemon_enabled = false
 daemon_interval_secs = 300

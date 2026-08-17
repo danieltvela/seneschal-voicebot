@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 /// One ACP permission option as exposed on the Control API wire.
 ///
@@ -76,6 +77,10 @@ pub fn permission_options_from_acp_json(options: &serde_json::Value) -> Vec<Perm
 }
 
 /// Map a spoken yes/no transcript to an ACP `optionId` from the pending options.
+///
+/// Kept for compatibility but no longer called by the main voice path
+/// (replaced by the `respond_agent_permission` LLM tool, issue #167).
+#[allow(dead_code)]
 pub fn map_transcript_to_option_id(transcript: &str, options: &[PermissionOptionWire]) -> String {
     let t = transcript.to_lowercase();
     let yes = t.contains("sí")
@@ -137,6 +142,8 @@ pub struct PermissionSlotView {
     pub description: String,
     pub options: Vec<PermissionOptionWire>,
     pub phase: PermissionPhase,
+    pub authorization_id: String,
+    pub scope_id: String,
 }
 
 struct PermissionSlot {
@@ -146,15 +153,33 @@ struct PermissionSlot {
     options: Vec<PermissionOptionWire>,
     response_tx: Option<oneshot::Sender<String>>,
     phase: PermissionPhase,
+    authorization_id: String,
+    scope_id: String,
 }
 
 /// Snapshot returned when voice claims the front Pending slot.
+///
+/// Kept for API compatibility but no longer used by the main voice path
+/// (replaced by the `respond_agent_permission` LLM tool, issue #167).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VoiceClaim {
     pub task_id: String,
     pub agent_name: String,
     pub description: String,
     pub options: Vec<PermissionOptionWire>,
+}
+
+/// Decision from a tool/LLM call. Maps to an ACP `optionId` via the slot's options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionDecision {
+    Always,
+    Reject,
+}
+
+/// Mint a new authorization id (`auth_<32-hex>`) for a pending permission.
+pub fn mint_authorization_id() -> String {
+    format!("auth_{}", Uuid::new_v4().simple())
 }
 
 /// Result of `PermissionGate::resolve` after a claim (voice or internal).
@@ -208,7 +233,12 @@ impl PermissionGate {
         description: String,
         options: Vec<PermissionOptionWire>,
         response_tx: oneshot::Sender<String>,
-    ) {
+    ) -> String {
+        let authorization_id = mint_authorization_id();
+        // Each RunAgentTool invocation is one task / one ACP prompt — reuse it
+        // as the scope id so `cancel_scope` can clean up dangling permissions
+        // when the prompt completes (issue #167).
+        let scope_id = task_id.clone();
         let mut q = self.inner.lock().expect("permission gate lock");
         q.push_back(PermissionSlot {
             task_id,
@@ -217,7 +247,10 @@ impl PermissionGate {
             options,
             response_tx: Some(response_tx),
             phase: PermissionPhase::Pending,
+            authorization_id: authorization_id.clone(),
+            scope_id,
         });
+        authorization_id
     }
 
     pub fn list(&self) -> Vec<PermissionSlotView> {
@@ -229,6 +262,8 @@ impl PermissionGate {
                 description: s.description.clone(),
                 options: s.options.clone(),
                 phase: s.phase,
+                authorization_id: s.authorization_id.clone(),
+                scope_id: s.scope_id.clone(),
             })
             .collect()
     }
@@ -237,7 +272,35 @@ impl PermissionGate {
         !self.inner.lock().expect("permission gate lock").is_empty()
     }
 
+    /// Look up the front Pending slot's `authorization_id` (LLM context injection).
+    pub fn front_pending_authorization_id(&self) -> Option<String> {
+        let q = self.inner.lock().expect("permission gate lock");
+        q.front()
+            .filter(|s| s.phase == PermissionPhase::Pending)
+            .map(|s| s.authorization_id.clone())
+    }
+
+    /// Look up the front Pending slot's description (`task_id`, `description`).
+    pub fn front_pending_view(&self) -> Option<PermissionSlotView> {
+        let q = self.inner.lock().expect("permission gate lock");
+        q.front()
+            .filter(|s| s.phase == PermissionPhase::Pending)
+            .map(|s| PermissionSlotView {
+                task_id: s.task_id.clone(),
+                agent_name: s.agent_name.clone(),
+                description: s.description.clone(),
+                options: s.options.clone(),
+                phase: s.phase,
+                authorization_id: s.authorization_id.clone(),
+                scope_id: s.scope_id.clone(),
+            })
+    }
+
     /// Claim the front Pending slot for the voice path (Pending → Resolving).
+    ///
+    /// Kept for compatibility but no longer called by the main pipeline
+    /// (replaced by `respond_agent_permission` LLM tool, issue #167).
+    #[allow(dead_code)]
     pub fn claim_front_for_voice(&self) -> Option<VoiceClaim> {
         let mut q = self.inner.lock().expect("permission gate lock");
         let slot = q.front_mut()?;
@@ -268,6 +331,78 @@ impl PermissionGate {
             Ok(()) => ResolveOutcome::Sent,
             Err(_) => ResolveOutcome::ReceiverDropped,
         }
+    }
+
+    /// Resolve a pending permission by `authorization_id` with a typed decision.
+    ///
+    /// The decision is mapped to the slot's options: `Always` → allow-kind
+    /// option (or first option), `Reject` → reject-kind option. Mirrors the
+    /// `respond_agent_permission` LLM tool (issue #167).
+    pub fn resolve_by_authorization_id(
+        &self,
+        authorization_id: &str,
+        decision: PermissionDecision,
+    ) -> ResolveOutcome {
+        let mut q = self.inner.lock().expect("permission gate lock");
+        let idx = match q
+            .iter()
+            .position(|s| s.authorization_id == authorization_id)
+        {
+            Some(i) => i,
+            None => return ResolveOutcome::Unknown,
+        };
+        let slot = &q[idx];
+        let option_id = match decision {
+            PermissionDecision::Always => {
+                find_allow_option_id(&slot.options).unwrap_or_else(|| "cancelled".to_string())
+            }
+            PermissionDecision::Reject => {
+                find_deny_option_id(&slot.options).unwrap_or_else(|| "cancelled".to_string())
+            }
+        };
+        let mut slot = q.remove(idx).expect("index valid");
+        let Some(tx) = slot.response_tx.take() else {
+            return ResolveOutcome::Unknown;
+        };
+        match tx.send(option_id) {
+            Ok(()) => ResolveOutcome::Sent,
+            Err(_) => ResolveOutcome::ReceiverDropped,
+        }
+    }
+
+    /// Cancel every pending slot whose `scope_id` matches. Returns the number
+    /// of slots that were cancelled (resolved with `"cancelled"` so the ACP
+    /// `request_permission` RPC receives a cancelled outcome).
+    ///
+    /// Called at end of an ACP coordinator turn so no permission hangs past
+    /// the turn boundary (issue #167).
+    pub fn cancel_scope(&self, scope_id: &str) -> usize {
+        if scope_id.is_empty() {
+            return 0;
+        }
+        let mut q = self.inner.lock().expect("permission gate lock");
+        let mut cancelled = 0usize;
+        // Collect indexes first to avoid borrow issues while removing.
+        let indexes: Vec<usize> = q
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                if s.scope_id == scope_id {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Remove from the back to preserve indexes.
+        for idx in indexes.into_iter().rev() {
+            let mut slot = q.remove(idx).expect("index valid");
+            if let Some(tx) = slot.response_tx.take() {
+                let _ = tx.send("cancelled".to_string());
+                cancelled += 1;
+            }
+        }
+        cancelled
     }
 
     /// HTTP claim+resolve in one step. Pending only; Resolving → Conflict.
@@ -445,5 +580,177 @@ mod tests {
         assert_eq!(gate.resolve(&claim.task_id, "allow"), ResolveOutcome::Sent);
         assert_eq!(rx.try_recv().unwrap(), "allow");
         assert_eq!(gate.resolve("t1", "allow"), ResolveOutcome::Unknown);
+    }
+
+    #[test]
+    fn mint_authorization_id_has_auth_prefix_and_uuid_shape() {
+        let id = mint_authorization_id();
+        assert!(id.starts_with("auth_"));
+        let suffix = &id["auth_".len()..];
+        assert_eq!(suffix.len(), 32, "expected 32 hex chars, got {suffix:?}");
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn enqueue_mints_unique_authorization_id_and_scope() {
+        let gate = PermissionGate::new();
+        let (tx1, _rx1) = oneshot::channel();
+        let (tx2, _rx2) = oneshot::channel();
+        let auth1 = gate.enqueue(
+            "task-1".into(),
+            "hermes".into(),
+            "q".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx1,
+        );
+        let auth2 = gate.enqueue(
+            "task-2".into(),
+            "hermes".into(),
+            "q".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx2,
+        );
+        assert_ne!(auth1, auth2);
+        assert!(auth1.starts_with("auth_"));
+        let list = gate.list();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].authorization_id, auth1);
+        assert_eq!(list[0].scope_id, "task-1");
+        assert_eq!(list[1].authorization_id, auth2);
+        assert_eq!(list[1].scope_id, "task-2");
+    }
+
+    #[test]
+    fn front_pending_authorization_id_returns_front_only() {
+        let gate = PermissionGate::new();
+        assert_eq!(gate.front_pending_authorization_id(), None);
+        let (tx, _rx) = oneshot::channel();
+        let auth = gate.enqueue(
+            "t1".into(),
+            "a".into(),
+            "q".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx,
+        );
+        assert_eq!(
+            gate.front_pending_authorization_id().as_deref(),
+            Some(auth.as_str())
+        );
+    }
+
+    #[test]
+    fn resolve_by_authorization_id_always_picks_allow() {
+        let gate = PermissionGate::new();
+        let (tx, mut rx) = oneshot::channel();
+        let auth = gate.enqueue(
+            "t1".into(),
+            "a".into(),
+            "q".into(),
+            vec![
+                PermissionOptionWire::with_kind("allow", "Allow", "allow"),
+                PermissionOptionWire::with_kind("deny", "Deny", "reject"),
+            ],
+            tx,
+        );
+        assert_eq!(
+            gate.resolve_by_authorization_id(&auth, PermissionDecision::Always),
+            ResolveOutcome::Sent
+        );
+        assert_eq!(rx.try_recv().unwrap(), "allow");
+        assert!(!gate.has_pending_or_resolving());
+    }
+
+    #[test]
+    fn resolve_by_authorization_id_reject_picks_deny() {
+        let gate = PermissionGate::new();
+        let (tx, mut rx) = oneshot::channel();
+        let auth = gate.enqueue(
+            "t1".into(),
+            "a".into(),
+            "q".into(),
+            vec![
+                PermissionOptionWire::with_kind("allow", "Allow", "allow"),
+                PermissionOptionWire::with_kind("deny", "Deny", "reject"),
+            ],
+            tx,
+        );
+        assert_eq!(
+            gate.resolve_by_authorization_id(&auth, PermissionDecision::Reject),
+            ResolveOutcome::Sent
+        );
+        assert_eq!(rx.try_recv().unwrap(), "deny");
+    }
+
+    #[test]
+    fn resolve_by_authorization_id_unknown_id_returns_unknown() {
+        let gate = PermissionGate::new();
+        let (tx, _rx) = oneshot::channel();
+        gate.enqueue(
+            "t1".into(),
+            "a".into(),
+            "q".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx,
+        );
+        assert_eq!(
+            gate.resolve_by_authorization_id("auth_does_not_exist", PermissionDecision::Always),
+            ResolveOutcome::Unknown
+        );
+        // Original slot still pending.
+        assert!(gate.has_pending_or_resolving());
+    }
+
+    #[test]
+    fn cancel_scope_resolves_only_matching_slots() {
+        let gate = PermissionGate::new();
+        let (tx1, mut rx1) = oneshot::channel();
+        let (tx2, mut rx2) = oneshot::channel();
+        let (tx3, _rx3) = oneshot::channel();
+        gate.enqueue(
+            "task-1".into(),
+            "a".into(),
+            "q1".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx1,
+        );
+        gate.enqueue(
+            "task-1".into(),
+            "a".into(),
+            "q2".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx2,
+        );
+        gate.enqueue(
+            "task-2".into(),
+            "a".into(),
+            "q3".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx3,
+        );
+        let cancelled = gate.cancel_scope("task-1");
+        assert_eq!(cancelled, 2);
+        assert_eq!(rx1.try_recv().unwrap(), "cancelled");
+        assert_eq!(rx2.try_recv().unwrap(), "cancelled");
+        // task-2 still pending.
+        assert!(gate.has_pending_or_resolving());
+        let list = gate.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].scope_id, "task-2");
+    }
+
+    #[test]
+    fn cancel_scope_empty_scope_is_noop() {
+        let gate = PermissionGate::new();
+        let (tx, mut rx) = oneshot::channel();
+        gate.enqueue(
+            "t1".into(),
+            "a".into(),
+            "q".into(),
+            vec![PermissionOptionWire::new("allow", "Allow")],
+            tx,
+        );
+        assert_eq!(gate.cancel_scope(""), 0);
+        assert!(gate.has_pending_or_resolving());
+        assert_eq!(rx.try_recv().ok(), None);
     }
 }

@@ -33,9 +33,10 @@ pub use config::SeneschalEnv;
 pub use db::Database;
 pub use events::{PluginPromptSections, PluginSwitchEvent, ProactiveEvent};
 pub use permission::{
-    HttpPermissionResult, PermissionGate, PermissionOptionWire, PermissionPhase,
-    PermissionSlotView, ResolveOutcome, VoiceClaim, find_allow_option_id, find_deny_option_id,
-    map_transcript_to_option_id, permission_options_from_acp_json,
+    HttpPermissionResult, PermissionDecision, PermissionGate, PermissionOptionWire,
+    PermissionPhase, PermissionSlotView, ResolveOutcome, VoiceClaim, find_allow_option_id,
+    find_deny_option_id, map_transcript_to_option_id, mint_authorization_id,
+    permission_options_from_acp_json,
 };
 pub use tools::ConversationMode;
 pub use tools::PromptBuildState;

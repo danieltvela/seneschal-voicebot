@@ -22,6 +22,7 @@ pub use seneschal_extras::RecoverHistoricalContextTool;
 pub use seneschal_extras::SwitchPluginTool;
 pub use seneschal_extras::TakeScreenshotTool;
 pub use seneschal_extras::conversation_mode::SetConversationModeTool;
+pub use seneschal_extras::permission_tool::RespondAgentPermissionTool;
 pub use seneschal_extras::prompt_build::SetPromptBuildTool;
 pub use seneschal_extras::run_agent::{
     AcpWriter, ActiveTask, PendingInteractionEntry, RunAgentTool,
