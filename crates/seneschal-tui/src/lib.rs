@@ -101,6 +101,9 @@ pub async fn run(
                                     tts_muted.store(!was_muted, Ordering::SeqCst);
                                     app.tts_enabled = was_muted;
                                 }
+                                Action::ScrollToBottom => {
+                                    app.auto_scroll_to_bottom = true;
+                                }
                             }
                         }
                     }

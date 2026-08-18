@@ -12,6 +12,8 @@ pub enum Action {
     /// Send typed text to the main Seneschal pipeline.
     SubmitToSeneschal(String),
     ToggleTts,
+    /// Re-pin the chat view to the bottom and re-enable auto-follow.
+    ScrollToBottom,
 }
 
 /// Role label for conversation messages.
@@ -60,6 +62,7 @@ pub struct StatusBarSegment {
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatusBarAction {
     ToggleTts,
+    ScrollToBottom,
 }
 
 /// A single message in the conversation view.
@@ -136,6 +139,10 @@ pub struct App {
     pub item_line_ranges: Vec<(usize, usize)>,
     /// Total number of display lines in the chat history (for scrollbar).
     pub total_chat_lines: usize,
+    /// Number of lines hidden below the current viewport (derived each frame
+    /// when the view is not pinned to the bottom). Drives the "↓ N nuevos"
+    /// status-bar indicator.
+    pub new_lines_below: usize,
     /// Status bar segment regions computed during the last render (used for click mapping).
     pub status_bar_segments: Vec<StatusBarSegment>,
     /// The history area from the last render (used for mouse click mapping).
@@ -161,6 +168,7 @@ impl App {
             auto_scroll_to_bottom: true,
             item_line_ranges: Vec::new(),
             total_chat_lines: 0,
+            new_lines_below: 0,
             status_bar_segments: Vec::new(),
             history_area: Rect::default(),
         }
@@ -432,6 +440,34 @@ impl App {
         Some(Action::SubmitToSeneschal(text))
     }
 
+    /// Maximum scroll offset for the current history viewport. Returns 0 when
+    /// the viewport has not been computed yet (pre-render).
+    pub fn current_bottom(&self) -> usize {
+        if self.history_area.height == 0 {
+            0
+        } else {
+            self.total_chat_lines
+                .saturating_sub(self.history_area.height as usize)
+        }
+    }
+
+    /// Scroll down by `n` lines, clamped to the current bottom. Re-pins
+    /// auto-scroll when the bottom is reached.
+    pub fn scroll_down_lines(&mut self, n: usize) {
+        let bottom = self.current_bottom();
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(bottom);
+        if self.scroll_offset >= bottom {
+            self.auto_scroll_to_bottom = true;
+        }
+    }
+
+    /// Scroll up by `n` lines (saturating). Disables auto-scroll so the user
+    /// can browse history without being yanked back to the bottom.
+    pub fn scroll_up_lines(&mut self, n: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+        self.auto_scroll_to_bottom = false;
+    }
+
     /// Process a crossterm event. Returns an Action if one should be taken.
     pub fn handle_event(&mut self, event: Event, history_area: Rect) -> Option<Action> {
         match event {
@@ -467,6 +503,7 @@ impl App {
                     {
                         return match segment.action {
                             StatusBarAction::ToggleTts => Some(Action::ToggleTts),
+                            StatusBarAction::ScrollToBottom => Some(Action::ScrollToBottom),
                         };
                     }
                 }
@@ -487,18 +524,11 @@ impl App {
                 None
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_offset = self
-                    .scroll_offset
-                    .saturating_add(3)
-                    .min(self.total_chat_lines.saturating_sub(1));
-                if self.scroll_offset >= self.total_chat_lines.saturating_sub(1) {
-                    self.auto_scroll_to_bottom = true;
-                }
+                self.scroll_down_lines(3);
                 None
             }
             MouseEventKind::ScrollUp => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(3);
-                self.auto_scroll_to_bottom = false;
+                self.scroll_up_lines(3);
                 None
             }
             _ => None,
@@ -527,34 +557,28 @@ impl App {
             (_, KeyCode::Enter) => self.take_submit_action(),
             // Scroll with Up/Down when input is empty
             (m, KeyCode::Up) if m.is_empty() && self.input.is_empty() => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(3);
-                self.auto_scroll_to_bottom = false;
+                self.scroll_up_lines(3);
                 None
             }
             (m, KeyCode::Down) if m.is_empty() && self.input.is_empty() => {
-                self.scroll_offset = self
-                    .scroll_offset
-                    .saturating_add(3)
-                    .min(self.total_chat_lines.saturating_sub(1));
-                if self.scroll_offset >= self.total_chat_lines.saturating_sub(1) {
-                    self.auto_scroll_to_bottom = true;
-                }
+                self.scroll_down_lines(3);
                 None
             }
             (m, KeyCode::PageUp) if m.is_empty() => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(15);
-                self.auto_scroll_to_bottom = false;
+                self.scroll_up_lines(15);
                 None
             }
             (m, KeyCode::PageDown) if m.is_empty() => {
-                self.scroll_offset = self
-                    .scroll_offset
-                    .saturating_add(15)
-                    .min(self.total_chat_lines.saturating_sub(1));
-                if self.scroll_offset >= self.total_chat_lines.saturating_sub(1) {
-                    self.auto_scroll_to_bottom = true;
-                }
+                self.scroll_down_lines(15);
                 None
+            }
+            // G jumps to the bottom (re-pins auto-scroll) when input is empty.
+            (m, KeyCode::Char(c))
+                if (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT)
+                    && self.input.is_empty()
+                    && c.eq_ignore_ascii_case(&'g') =>
+            {
+                Some(Action::ScrollToBottom)
             }
             // Space toggles expand/collapse on the last expandable message
             (m, KeyCode::Char(' ')) if m.is_empty() && self.input.is_empty() => {
@@ -728,5 +752,79 @@ mod tests {
             app.messages.last().unwrap().content,
             format!("msg {}", App::UI_HISTORY_HARD_CAP + 24)
         );
+    }
+
+    // scroll helpers — issue #219
+
+    #[test]
+    fn current_bottom_is_zero_when_history_area_unset() {
+        // history_area == Rect::default() (pre-primer render) -> 0
+        let app = test_app();
+        assert_eq!(app.history_area, Rect::default());
+        assert_eq!(app.current_bottom(), 0);
+    }
+
+    #[test]
+    fn current_bottom_uses_viewport_height() {
+        let mut app = test_app();
+        app.history_area = Rect::new(0, 0, 80, 20);
+        app.total_chat_lines = 100;
+        assert_eq!(app.current_bottom(), 80);
+    }
+
+    #[test]
+    fn scroll_down_lines_jump_re_pins_when_reaching_bottom() {
+        // Partimos con offset lejano y pin desactivado (como si el usuario
+        // estuviera leyendo el historico). Un solo paso grande debe clavar
+        // offset al bottom y re-activar auto_scroll_to_bottom.
+        let mut app = test_app();
+        app.history_area = Rect::new(0, 0, 80, 20);
+        app.total_chat_lines = 100;
+        app.scroll_offset = 10;
+        app.auto_scroll_to_bottom = false;
+        app.scroll_down_lines(500);
+        assert_eq!(app.scroll_offset, 80);
+        assert!(app.auto_scroll_to_bottom);
+    }
+
+    #[test]
+    fn scroll_up_lines_with_pin_active_disables_auto_scroll() {
+        // Partimos con pin activo (recien enviado / nuevo arranque). Un scroll
+        // up debe desactivar auto_scroll para que el usuario pueda leer.
+        let mut app = test_app();
+        app.history_area = Rect::new(0, 0, 80, 20);
+        app.total_chat_lines = 100;
+        app.scroll_offset = 80;
+        app.auto_scroll_to_bottom = true;
+        app.scroll_up_lines(5);
+        assert_eq!(app.scroll_offset, 75);
+        assert!(!app.auto_scroll_to_bottom);
+    }
+
+    #[test]
+    fn key_g_with_empty_input_jumps_to_bottom() {
+        // G con input vacio -> Action::ScrollToBottom
+        let mut app = test_app();
+        let action = app.handle_event(key(KeyCode::Char('g'), KeyModifiers::NONE), Rect::default());
+        match action {
+            Some(Action::ScrollToBottom) => {}
+            other => panic!("expected ScrollToBottom, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn key_g_with_non_empty_input_inserts_letter() {
+        // G con input NO vacio -> inserta la letra 'g' (no se dispara como
+        // atajo de scroll). Patron equivalente a Up/Down/Space.
+        let mut app = test_app();
+        app.input = "hola".into();
+        app.cursor = 4;
+        let action = app.handle_event(key(KeyCode::Char('g'), KeyModifiers::NONE), Rect::default());
+        assert!(
+            action.is_none(),
+            "G must not produce an action while typing"
+        );
+        assert_eq!(app.input, "holag");
+        assert_eq!(app.cursor, 5);
     }
 }

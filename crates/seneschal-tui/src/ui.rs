@@ -131,6 +131,27 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_status(frame, app, status_area);
 }
 
+/// Resolve the effective scroll offset for the history view.
+///
+/// - When `auto_scroll` is true the offset always tracks the content end
+///   (`total - viewport`, saturated at 0). Any prior `current` value is ignored.
+/// - When `auto_scroll` is false the user's `current` offset is preserved,
+///   but clamped to the current bottom so it cannot exceed the valid range
+///   when the content shrinks.
+pub fn resolve_scroll_offset(
+    auto_scroll: bool,
+    current: usize,
+    total_lines: usize,
+    viewport: usize,
+) -> usize {
+    let bottom = total_lines.saturating_sub(viewport);
+    if auto_scroll {
+        bottom
+    } else {
+        current.min(bottom)
+    }
+}
+
 /// Render the message history using a scrollable Paragraph with line-based scrolling.
 fn render_chat_list(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.height == 0 {
@@ -138,17 +159,19 @@ fn render_chat_list(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let (text, total_lines, line_ranges) = build_chat_text(app, area.width);
-    let scroll_offset = if app.auto_scroll_to_bottom {
-        let bottom = total_lines.saturating_sub(area.height as usize);
-        if app.scroll_offset >= bottom.saturating_sub(3) {
-            app.scroll_offset = bottom;
-            bottom
-        } else {
-            app.scroll_offset
-        }
+    let viewport = area.height as usize;
+
+    let scroll_offset = resolve_scroll_offset(
+        app.auto_scroll_to_bottom,
+        app.scroll_offset,
+        total_lines,
+        viewport,
+    );
+    app.scroll_offset = scroll_offset;
+    app.new_lines_below = if app.auto_scroll_to_bottom {
+        0
     } else {
-        app.scroll_offset
-            .min(total_lines.saturating_sub(area.height as usize))
+        total_lines.saturating_sub(scroll_offset + viewport)
     };
 
     let scrollbar_width = 1u16;
@@ -766,36 +789,85 @@ fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
         ConversationMode::AmbientLocked => ("AMBIENT🔒", Color::Yellow),
     };
 
-    let text = Text::from(vec![Line::from(vec![
-        Span::styled(
-            " seneschal ",
-            Style::default().fg(Color::Rgb(200, 200, 200)).bold(),
-        ),
-        Span::raw(" "),
-        Span::styled(state_label, Style::default().fg(state_color)),
-        Span::raw(" │ "),
-        Span::styled(tts_label, Style::default().fg(tts_color)),
-        Span::raw(" │ "),
-        Span::styled(conv_label, Style::default().fg(conv_color)),
-        Span::raw(" │ "),
-        Span::styled(
-            "Ctrl+T TTS  Ctrl+C quit",
-            Style::default().fg(Color::Rgb(100, 100, 100)),
-        ),
-    ])]);
+    let new_lines = app.new_lines_below;
+    let new_label = if new_lines > 0 {
+        Some(format!("↓ {new_lines} nuevos"))
+    } else {
+        None
+    };
+
+    let mut spans: Vec<Span> = Vec::new();
+    let mut cursor_x: u16 = area.x;
+    let push = |spans: &mut Vec<Span>, cursor: &mut u16, text: &str, style: Style| {
+        spans.push(Span::styled(text.to_string(), style));
+        *cursor += text.chars().count() as u16;
+    };
+    push(
+        &mut spans,
+        &mut cursor_x,
+        " seneschal ",
+        Style::default().fg(Color::Rgb(200, 200, 200)).bold(),
+    );
+    push(&mut spans, &mut cursor_x, " ", Style::default());
+    push(
+        &mut spans,
+        &mut cursor_x,
+        state_label,
+        Style::default().fg(state_color),
+    );
+    push(&mut spans, &mut cursor_x, " │ ", Style::default());
+    let tts_x = cursor_x;
+    push(
+        &mut spans,
+        &mut cursor_x,
+        tts_label,
+        Style::default().fg(tts_color),
+    );
+    push(&mut spans, &mut cursor_x, " │ ", Style::default());
+    push(
+        &mut spans,
+        &mut cursor_x,
+        conv_label,
+        Style::default().fg(conv_color),
+    );
+    let mut new_x: Option<u16> = None;
+    if let Some(ref label) = new_label {
+        push(&mut spans, &mut cursor_x, " │ ", Style::default());
+        new_x = Some(cursor_x);
+        push(
+            &mut spans,
+            &mut cursor_x,
+            label.as_str(),
+            Style::default().fg(Color::Cyan).bold(),
+        );
+    }
+    push(&mut spans, &mut cursor_x, " │ ", Style::default());
+    push(
+        &mut spans,
+        &mut cursor_x,
+        "Ctrl+T TTS  G↓ bottom  Ctrl+C quit",
+        Style::default().fg(Color::Rgb(100, 100, 100)),
+    );
+
+    let text = Text::from(vec![Line::from(spans)]);
 
     let block = Block::default().style(Style::default().bg(Color::Rgb(40, 40, 50)));
 
     frame.render_widget(Paragraph::new(text).block(block), area);
 
     let mut segments = Vec::new();
-    let x =
-        area.x + 1 + " seneschal ".len() as u16 + 1 + state_label.len() as u16 + " │ ".len() as u16;
     segments.push((
         tts_label.to_string(),
         super::app::StatusBarAction::ToggleTts,
-        Rect::new(x, area.y, tts_label.len() as u16, 1),
+        Rect::new(tts_x, area.y, tts_label.chars().count() as u16, 1),
     ));
+    if let (Some(label), Some(x)) = (new_label.as_ref(), new_x) {
+        segments.push((
+            label.clone(),
+            super::app::StatusBarAction::ScrollToBottom,
+            Rect::new(x, area.y, label.chars().count() as u16, 1),
+        ));
+    }
     app.status_bar_segments = segments
         .into_iter()
         .map(|(label, action, region)| super::app::StatusBarSegment {
@@ -897,6 +969,45 @@ fn place_word_at_row_start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // resolve_scroll_offset — pinned to bottom (auto_scroll == true)
+
+    #[test]
+    fn resolve_scroll_offset_pinned_growing_content_tracks_bottom() {
+        // Fijado + contenido que crece 10 lineas: ignora `current` y devuelve
+        // exactamente `total - viewport` aunque `current` estuviese muy por
+        // debajo del fondo (caso del bug original con respuestas largas).
+        let r = resolve_scroll_offset(true, 5, 110, 20);
+        assert_eq!(r, 90);
+    }
+
+    #[test]
+    fn resolve_scroll_offset_pinned_short_content_clamps_to_zero() {
+        // Fijado + contenido corto (total <= viewport): saturating_sub a 0,
+        // no negativos, no panic.
+        let r = resolve_scroll_offset(true, 999, 5, 20);
+        assert_eq!(r, 0);
+    }
+
+    // resolve_scroll_offset — manual scroll (auto_scroll == false)
+
+    #[test]
+    fn resolve_scroll_offset_manual_preserves_current_when_in_range() {
+        // No fijado: devuelve `current` clamped al bottom. current=10, total=100,
+        // viewport=20 -> bottom=80, current esta dentro -> 10.
+        let r = resolve_scroll_offset(false, 10, 100, 20);
+        assert_eq!(r, 10);
+    }
+
+    #[test]
+    fn resolve_scroll_offset_manual_clamps_when_content_shrinks() {
+        // No fijado + current > bottom (el contenido se ha encogido por debajo
+        // del offset que el usuario dejo): clamp al nuevo bottom.
+        let r = resolve_scroll_offset(false, 200, 50, 20);
+        assert_eq!(r, 30);
+    }
+
+    // word_wrap_plain tests
 
     #[test]
     fn empty_text_returns_one_row() {
