@@ -21,6 +21,20 @@ static PIPELINE_RUN_ID: AtomicU64 = AtomicU64::new(0);
 /// Maximum number of sequential tool calls allowed per user turn.
 pub const MAX_TOOL_ITERATIONS: usize = 5;
 
+/// Decide whether a background tool call must emit the ack text as an
+/// `LLMToken` before flushing the sentence splitter (issue #218).
+///
+/// The narration accumulated in `llm_text` was already delivered to the
+/// sentence splitter token-by-token during streaming. Re-sending it as a
+/// single `LLMToken` would enqueue it a second time (double TTS). So the ack
+/// token is only emitted when there was NO prior narration — in that case the
+/// default fallback text was never spoken and must be sent. A narration
+/// already streamed must NOT be re-emitted; the subsequent `LLMResponseDone`
+/// flushes any unpunctuated remainder exactly once.
+pub fn should_emit_ack_token(llm_text: &str) -> bool {
+    llm_text.trim().is_empty()
+}
+
 /// LLM task: receives transcript frames, runs the LLM+tools pipeline, fires events.
 #[allow(clippy::too_many_arguments)]
 pub async fn llm_task(
@@ -332,17 +346,32 @@ pub async fn llm_task(
                 match tool_call {
                     Some((name, args)) => {
                         if tools.lock().unwrap().is_background(&name) {
-                            let ack_text = if !llm_text.trim().is_empty() {
+                            // The narration (llm_text) was already streamed
+                            // token-by-token to the sentence splitter above
+                            // (StreamToken::Content → LLMToken). Re-sending the
+                            // whole thing as a single LLMToken here would
+                            // enqueue it a SECOND time (issue #218: doble TTS).
+                            // So:
+                            //   - narration present → only flush the splitter
+                            //     (LLMResponseDone); an unpunctuated remainder
+                            //     is spoken exactly once, nothing is repeated.
+                            //   - no narration → emit the default fallback ack
+                            //     as a single LLMToken (it was never spoken)
+                            //     then flush.
+                            let had_narration = !should_emit_ack_token(&llm_text);
+                            let ack_text = if had_narration {
                                 llm_text.clone()
                             } else {
                                 "Procesando en segundo plano, le aviso al terminar.".to_string()
                             };
-                            let _ = llm_tx
-                                .send(super::frames::PipelineFrame::LLMToken {
-                                    utterance_id: pipeline_id,
-                                    token: ack_text.clone(),
-                                })
-                                .await;
+                            if !had_narration {
+                                let _ = llm_tx
+                                    .send(super::frames::PipelineFrame::LLMToken {
+                                        utterance_id: pipeline_id,
+                                        token: ack_text.clone(),
+                                    })
+                                    .await;
+                            }
                             let _ = llm_tx
                                 .send(super::frames::PipelineFrame::LLMResponseDone {
                                     utterance_id: pipeline_id,
@@ -606,5 +635,27 @@ pub async fn llm_task(
         }
 
         while cancel_rx.try_recv().is_ok() {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// issue #218: when the LLM already streamed a narration before the
+    /// background tool call, the ack must NOT be re-emitted as a token (it
+    /// would be enqueued to TTS a second time). Only the no-narration case
+    /// (pure fallback text, never spoken) emits a token.
+    #[test]
+    fn should_emit_ack_token_only_without_narration() {
+        // Narration present → already streamed → do NOT re-emit.
+        assert!(!should_emit_ack_token(
+            "Buscando en internet las novedades."
+        ));
+        assert!(!should_emit_ack_token("Ok, lo dejo en segundo plano."));
+        // Whitespace-only counts as no narration → emit the fallback.
+        assert!(should_emit_ack_token(""));
+        assert!(should_emit_ack_token("   "));
+        assert!(should_emit_ack_token("\n\t"));
     }
 }
