@@ -27,7 +27,14 @@ pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
     };
 
     match config.stt_provider.to_lowercase().as_str() {
-        "whisper" => Ok(Box::new(WhisperSttProvider::new(whisper_cfg)?)),
+        "whisper" => {
+            // Whisper uses the dedicated stt_language (issue #217): "auto" by
+            // default enables auto-detection for code-switched phrases. The
+            // shared whisper_cfg keeps config.language for parakeet/speech.
+            let mut cfg = whisper_cfg;
+            cfg.language = config.stt_language.clone();
+            Ok(Box::new(WhisperSttProvider::new(cfg)?))
+        }
         "parakeet" => {
             #[cfg(feature = "parakeet")]
             {

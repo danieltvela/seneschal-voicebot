@@ -21,10 +21,15 @@ vad_model = "models/ggml-silero-vad.bin"
 vad_confirm_probes = 2
 
 # ── Language ──────────────────────────────────────────────────────────────────
-language = "en"
+# Drives i18n (startup/announcement prompts) + agent language hint.
+# NOTE: SENECHAL_LANGUAGE in .env (and the launcher) overrides this.
+language = "es"
 
 # ── STT ───────────────────────────────────────────────────────────────────────
 stt_provider = "whisper"
+# STT language (issue #217): auto = auto-detect for ES/EN code-switching.
+# Independent of `language` above.
+stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"
 whisper_threads = 0
 stt_early_reuse_enabled = false

@@ -143,6 +143,12 @@ pub struct Config {
     // ── STT ──────────────────────────────────────────────────────────────────
     /// STT backend provider: "speech" (default on macOS), "whisper", or "parakeet".
     pub stt_provider: String,
+    /// Language hint for STT. "auto" (default) enables auto-detection (whisper
+    /// large-v3-turbo) so code-switched phrases (ES with EN terms) transcribe
+    /// correctly; a concrete code ("es", "en", "es-ES") pins the language.
+    /// Independent from `language`, which drives i18n + agent prompts.
+    #[serde(default = "default_stt_language")]
+    pub stt_language: String,
     /// Path to whisper.cpp GGML model file (.bin)
     pub whisper_model: String,
     /// Path to Parakeet model directory (required when STT_PROVIDER=parakeet).
@@ -464,6 +470,12 @@ fn default_speaker_enabled() -> bool {
     true
 }
 
+/// STT auto-detects the spoken language by default (issue #217). A concrete
+/// code can be pinned via STT_LANGUAGE to keep fixed-language transcription.
+fn default_stt_language() -> String {
+    "auto".to_string()
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let mut config = Self::load_defaults()?;
@@ -590,6 +602,10 @@ impl Config {
         // Language
         if let Ok(v) = env::var("SENECHAL_LANGUAGE") {
             self.language = v;
+        }
+        // STT language (issue #217): "auto" = auto-detect, concrete code = pin.
+        if let Ok(v) = env::var("STT_LANGUAGE") {
+            self.stt_language = v;
         }
 
         // STT

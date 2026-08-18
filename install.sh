@@ -1480,13 +1480,10 @@ kokoro_voices = \"${SENESCHAL_MODELS_DIR}/voices-v1.0.bin\""
     fi
     info "  Bot name set to: $_WAKE_WORD"
 
-    # Default STT provider: speech on macOS, whisper elsewhere
-    if [ "$OS" = "Darwin" ]; then
-        _STT_PROVIDER="speech"
-    else
-        _STT_PROVIDER="whisper"
-    fi
-    # Ensure WHISPER_MODEL_FILE is set (may be empty on macOS if Whisper was skipped)
+    # Default STT provider: whisper everywhere (issue #217 — large-v3-turbo
+    # handles ES/EN code-switching better than SFSpeechRecognizer).
+    _STT_PROVIDER="whisper"
+    # Ensure WHISPER_MODEL_FILE is set
     WHISPER_MODEL_FILE="${WHISPER_MODEL_FILE:-ggml-large-v3-turbo.bin}"
 
     cat > "$_config_file" << CONFIGEOF

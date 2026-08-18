@@ -346,6 +346,23 @@ impl SttProvider for WhisperSttProvider {
 
 pub type WhisperSTTVAD = WhisperSttProvider;
 
+/// Map the configured STT language to the value passed to whisper-cpp.
+///
+/// "auto" (case-insensitive) or an empty string selects language
+/// auto-detection. whisper-cpp-plus's `FullParams::new()` calls
+/// `whisper_full_default_params`, which defaults `language` to "en" — so we
+/// must explicitly pass an empty string to opt into auto-detection (the C
+/// layer treats "" / nullptr / "auto" as auto-detect, see
+/// `whisper_full_with_state`). Any concrete code ("es", "en", "es-ES") is
+/// passed through unchanged to pin the language.
+pub fn resolve_whisper_language(language: &str) -> &str {
+    if language.eq_ignore_ascii_case("auto") || language.is_empty() {
+        ""
+    } else {
+        language
+    }
+}
+
 fn transcribe(ctx: &WhisperContext, language: &str, audio: &[f32]) -> Result<TranscriptionQuality> {
     if audio.is_empty() {
         return Ok(TranscriptionQuality {
@@ -358,7 +375,7 @@ fn transcribe(ctx: &WhisperContext, language: &str, audio: &[f32]) -> Result<Tra
 
     let mut state = ctx.create_state()?;
     let params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
-        .language(language)
+        .language(resolve_whisper_language(language))
         .print_special(false)
         .print_progress(false)
         .print_realtime(false)
@@ -418,4 +435,24 @@ fn transcribe(ctx: &WhisperContext, language: &str, audio: &[f32]) -> Result<Tra
         avg_logprob,
         compression_ratio,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// "auto" (any case) and empty string must map to "" so whisper-cpp
+    /// auto-detects the spoken language (issue #217 — code-switching).
+    /// A concrete code is passed through unchanged.
+    #[test]
+    fn resolve_whisper_language_auto_detects() {
+        assert_eq!(resolve_whisper_language("auto"), "");
+        assert_eq!(resolve_whisper_language("AUTO"), "");
+        assert_eq!(resolve_whisper_language("Auto"), "");
+        assert_eq!(resolve_whisper_language(""), "");
+        // Concrete codes pin the language verbatim.
+        assert_eq!(resolve_whisper_language("es"), "es");
+        assert_eq!(resolve_whisper_language("en"), "en");
+        assert_eq!(resolve_whisper_language("es-ES"), "es-ES");
+    }
 }
