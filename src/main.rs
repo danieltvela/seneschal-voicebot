@@ -1006,6 +1006,43 @@ async fn async_main() -> Result<()> {
     }
     // pipeline_state_rx is kept alive and cloned for each consumer below.
 
+    // ── Stuck-state watchdog (issue #220, defense in depth) ─────────────────
+    // The TUI status bar is driven solely by `StateChange` events on the tui
+    // channel, and the channel is consumed by the TUI (no tap). So we run an
+    // instrumented tap: producers send to an internal channel, a forwarder
+    // records each `StateChange` in `tui_state` below and re-sends to the
+    // real TUI. The watchdog task (spawned after the ambient checker) reads
+    // the tracker and, when `Transcribing`/`Thinking` has persisted past
+    // `STUCK_STATE_TIMEOUT_SECS` with no further state change, force-resets
+    // the TUI to `Idle` and warns. It is a safety net, not the fix — the
+    // primary fix is the explicit `StateChange(Idle)` in the SpeechEnd
+    // rejection branches above. Without feature "tui" there is no bar to
+    // stick, so the whole mechanism is compiled out.
+    const STUCK_STATE_TIMEOUT_SECS: u64 = 30;
+    const STUCK_STATE_POLL_SECS: u64 = 5;
+    #[cfg(feature = "tui")]
+    #[derive(Clone)]
+    struct TuiStateTracker {
+        /// Current state of the TUI status bar (last StateChange seen).
+        state: seneschal_common::tui_events::PipelineState,
+        /// Bumped on every StateChange, so the watchdog can tell one stuck
+        /// period from the next (and reset each one at most once).
+        generation: u64,
+        /// Last pipeline activity (a state change, or an LLM token while
+        /// Thinking). The watchdog clock measures silence since this instant.
+        last_activity: Instant,
+        /// Generation that was already reset; a new stuck period (new
+        /// generation) can reset again, the same one cannot.
+        reset_generation: Option<u64>,
+    }
+    #[cfg(feature = "tui")]
+    let tui_state: Arc<Mutex<TuiStateTracker>> = Arc::new(Mutex::new(TuiStateTracker {
+        state: seneschal_common::tui_events::PipelineState::Idle,
+        generation: 0,
+        last_activity: Instant::now(),
+        reset_generation: None,
+    }));
+
     // Periodic Ambient timeout checker — replaces dead SpeechEvent::Silence handler
     {
         let conv_mode_clone = conv_mode.clone();
@@ -1045,8 +1082,47 @@ async fn async_main() -> Result<()> {
         Arc::new(tokio::sync::Mutex::new(None));
 
     #[cfg(feature = "tui")]
-    let (tui_tx, tui_rx) =
+    let (tui_tx, mut tui_internal_rx) =
         tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
+
+    #[cfg(feature = "tui")]
+    let (tui_tx_out, tui_rx) =
+        tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
+
+    #[cfg(feature = "tui")]
+    {
+        // Forwarder: records StateChange (and LLM-token activity) in
+        // `tui_state`, then re-sends every event to `tui_rx` for the TUI.
+        let tracker = tui_state.clone();
+        let out = tui_tx_out;
+        tokio::spawn(async move {
+            use seneschal_common::tui_events::{PipelineState as TuiPs, TuiEvent};
+            let mut out = out;
+            let mut tracker = tracker;
+            while let Some(event) = tui_internal_rx.recv().await {
+                match &event {
+                    TuiEvent::StateChange(s) => {
+                        let mut t = tracker.lock().unwrap();
+                        t.state = s.clone();
+                        t.generation += 1;
+                        t.last_activity = Instant::now();
+                    }
+                    // Activity while Thinking: the LLM is alive and
+                    // streaming — keep the watchdog clock fresh.
+                    TuiEvent::AssistantToken(_) => {
+                        let mut t = tracker.lock().unwrap();
+                        if matches!(t.state, TuiPs::Thinking) {
+                            t.last_activity = Instant::now();
+                        }
+                    }
+                    _ => {}
+                }
+                if out.send(event).is_err() {
+                    break; // TUI gone — stop forwarding
+                }
+            }
+        });
+    }
 
     #[cfg(feature = "tui")]
     let tui_tx_llm: Option<seneschal_common::tui_events::TuiEventTx> = Some(tui_tx.clone());
@@ -1057,6 +1133,54 @@ async fn async_main() -> Result<()> {
     let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = Some(tui_tx.clone());
     #[cfg(not(feature = "tui"))]
     let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = None;
+
+    // ── Stuck-state watchdog task (issue #220, defense in depth) ────────────
+    // Every `STUCK_STATE_POLL_SECS`, check the TUI state tracker: if the bar
+    // has been on `Transcribing` or `Thinking` for longer than
+    // `STUCK_STATE_TIMEOUT_SECS` with no state change or LLM-token activity,
+    // force it back to `Idle` (once per stuck period) and warn. It is the
+    // safety net for any future rejection branch that forgets to reset —
+    // the explicit resets in the SpeechEnd handler are the primary fix.
+    #[cfg(feature = "tui")]
+    {
+        let tracker = tui_state.clone();
+        let tui_tx_wd = tui_tx.clone();
+        let shutdown_clone = shutdown.clone();
+        let poll = STUCK_STATE_POLL_SECS;
+        let timeout = STUCK_STATE_TIMEOUT_SECS;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(poll));
+            loop {
+                interval.tick().await;
+                if shutdown_clone.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut t = tracker.lock().unwrap();
+                let idle_secs = t.last_activity.elapsed().as_secs();
+                let already = t.reset_generation == Some(t.generation);
+                if seneschal_common::tui_events::should_reset_stuck_state(
+                    &t.state, idle_secs, timeout, already,
+                ) {
+                    let stuck_state = format!("{:?}", t.state);
+                    t.reset_generation = Some(t.generation);
+                    t.state = seneschal_common::tui_events::PipelineState::Idle;
+                    t.generation += 1;
+                    t.last_activity = Instant::now();
+                    drop(t);
+                    warn!(
+                        target: "pipeline",
+                        "Stuck-state watchdog: TUI was {stuck_state} for {idle_secs}s \
+                         (no LLM/TTS activity) — resetting to Idle"
+                    );
+                    tui_tx_wd
+                        .send(seneschal_tui::events::TuiEvent::StateChange(
+                            seneschal_tui::events::PipelineState::Idle,
+                        ))
+                        .ok();
+                }
+            }
+        });
+    }
 
     // ── Bridge ACP session events → TUI + Control agent task events ───────────
     #[cfg(any(feature = "tui", feature = "control"))]
@@ -2106,18 +2230,33 @@ async fn async_main() -> Result<()> {
                                 *last_speech_at.lock().unwrap() = Instant::now();
 
                                 // ── Speaker verification (synchronous, CPU-blocking) ──
+                                // issue #220: the verification is best-effort. A failed
+                                // JoinHandle used to `.unwrap()` — panicking the audio
+                                // loop and killing the whole pipeline (no state events
+                                // ever reach the TUI again). On failure, fall back to the
+                                // default speaker identity so the utterance still flows.
                                 let (is_main_speaker, speaker_label) =
                                     if let Some(ref analyzer) = identity_analyzer {
                                         let analyzer = Arc::clone(analyzer);
                                         let audio_c = audio.clone();
                                         let sample_rate = config.sample_rate;
-                                        tokio::task::spawn_blocking(move || {
+                                        match tokio::task::spawn_blocking(move || {
                                             let mut a = analyzer.lock().unwrap();
                                             let result = a.verify(sample_rate, &audio_c);
                                             (result.is_main_speaker, result.speaker_label)
                                         })
                                         .await
-                                        .unwrap()
+                                        {
+                                            Ok(result) => result,
+                                            Err(e) => {
+                                                warn!(
+                                                    target: "pipeline",
+                                                    "Speaker verification task failed ({e}) — \
+                                                     defaulting to main speaker",
+                                                );
+                                                (true, "Usuario".to_string())
+                                            }
+                                        }
                                     } else {
                                         (true, "Usuario".to_string())
                                     };
@@ -2171,6 +2310,13 @@ async fn async_main() -> Result<()> {
 
                                 if segment_text.trim().is_empty() {
                                     debug!(target: "pipeline", "Empty transcription — skipping");
+                                    // issue #220: the TUI was set to Transcribing above;
+                                    // this rejection branch must return it to Idle or the
+                                    // status bar stays stuck on TRANSCRIBING.
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
+                                    )).ok();
                                     continue;
                                 }
 
@@ -2202,6 +2348,13 @@ async fn async_main() -> Result<()> {
                                                 .push(speaker_label.clone(), segment_text.clone());
                                             debug!(target: "pipeline", "Ambient: main user without wake word — buffered");
                                         }
+                                        // issue #220: this `continue` leaves the LLM
+                                        // pipeline cold, so Transcribing is never
+                                        // resolved by llm_task — reset the TUI here.
+                                        #[cfg(feature = "tui")]
+                                        tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                            seneschal_tui::events::PipelineState::Idle,
+                                        )).ok();
                                         continue;
                                     }
                                 } else {
@@ -2209,6 +2362,12 @@ async fn async_main() -> Result<()> {
                                     if !is_main_speaker {
                                         // Non-main user in Active → discard (already buffered
                                         // above in the mode-change side effects section).
+                                        // issue #220: same as the Ambient no-wake-word branch
+                                        // — the turn dies here, so return the TUI to Idle.
+                                        #[cfg(feature = "tui")]
+                                        tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                            seneschal_tui::events::PipelineState::Idle,
+                                        )).ok();
                                         continue;
                                     }
                                     // Main user in Active → respond normally (fall through)
@@ -2231,6 +2390,13 @@ async fn async_main() -> Result<()> {
 
                                 if final_text.trim().is_empty() {
                                     debug!(target: "pipeline", "Empty after context injection — skipping");
+                                    // issue #220: last rejection branch before the LLM
+                                    // hand-off — return the TUI to Idle so the bar
+                                    // doesn't stay stuck on TRANSCRIBING.
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
+                                    )).ok();
                                     continue;
                                 }
 

@@ -77,3 +77,100 @@ pub enum TuiEvent {
 
 pub type TuiEventTx = mpsc::UnboundedSender<TuiEvent>;
 pub type TuiEventRx = mpsc::UnboundedReceiver<TuiEvent>;
+
+/// Decide whether the TUI status bar should be force-reset to `Idle`
+/// (issue #220, defense-in-depth watchdog).
+///
+/// A "stuck" state is one that outlived its whole processing window:
+/// `Transcribing` with no LLM turn starting behind it, or `Thinking` with
+/// no tokens/speech arriving. The watchdog cannot tell the difference
+/// between "LLM is working" and "pipeline died" — so it only resets after
+/// `timeout` with no activity, and only ONCE per stuck period:
+///
+/// - `state`: the state currently shown in the TUI status bar.
+/// - `elapsed_secs`: seconds since the state last changed.
+/// - `timeout_secs`: the patience threshold (30s for MVP).
+/// - `already_reset`: this stuck period already produced a reset; while the
+///   state stays the same, don't warn/reset again.
+///
+/// Returns `true` only when the caller must emit `StateChange(Idle)` and a
+/// warning. `Listening`, `Speaking` and `Idle` are never auto-reset here:
+/// listening is bounded by VAD silence timeouts, speaking by audio playback
+/// finishing on its own.
+pub fn should_reset_stuck_state(
+    state: &PipelineState,
+    elapsed_secs: u64,
+    timeout_secs: u64,
+    already_reset: bool,
+) -> bool {
+    if already_reset || elapsed_secs < timeout_secs {
+        return false;
+    }
+    matches!(state, PipelineState::Transcribing | PipelineState::Thinking)
+}
+
+#[cfg(test)]
+mod stuck_state_tests {
+    use super::*;
+
+    /// issue #220: Transcribing/Thinking past the timeout must be reset,
+    /// and only once per stuck period.
+    #[test]
+    fn resets_stuck_transcribing_once() {
+        assert!(should_reset_stuck_state(
+            &PipelineState::Transcribing,
+            31,
+            30,
+            false
+        ));
+        assert!(should_reset_stuck_state(
+            &PipelineState::Thinking,
+            30,
+            30,
+            false
+        ));
+        // Same stuck period, second tick — no repeat.
+        assert!(!should_reset_stuck_state(
+            &PipelineState::Transcribing,
+            45,
+            30,
+            true
+        ));
+    }
+
+    /// No false positives: under the threshold, or already-reset, or in a
+    /// state that self-resolves (Listening/Speaking/Idle).
+    #[test]
+    fn no_false_positives() {
+        assert!(!should_reset_stuck_state(
+            &PipelineState::Transcribing,
+            29,
+            30,
+            false
+        ));
+        assert!(!should_reset_stuck_state(
+            &PipelineState::Thinking,
+            5,
+            30,
+            false
+        ));
+        assert!(!should_reset_stuck_state(
+            &PipelineState::Listening,
+            600,
+            30,
+            false
+        ));
+        assert!(!should_reset_stuck_state(
+            &PipelineState::Speaking,
+            600,
+            30,
+            false
+        ));
+        assert!(!should_reset_stuck_state(
+            &PipelineState::Idle,
+            600,
+            30,
+            false
+        ));
+    }
+}
