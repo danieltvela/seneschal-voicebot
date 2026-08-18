@@ -1564,8 +1564,16 @@ async fn async_main() -> Result<()> {
                     // Inject pending agent results when AnnouncementWindow allows it.
                     let maybe_announcement = announcement_window.lock().unwrap().pop_announcement();
                     if let Some(announcement) = maybe_announcement {
+                        // issue #221: the announcement previously injected the FULL
+                        // rewritten task into the LLM history (a third copy — the
+                        // tool-call args and this one already carry it). Keep the
+                        // announcement to a short task label (≤80 chars) + the
+                        // result, which is enough for the model to announce it
+                        // naturally without dragging the whole task around.
+                        let task_short =
+                            seneschal_core::pipeline::truncate_chars(&announcement.task, 80);
                         let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
-                            .replace("{task}", &announcement.task)
+                            .replace("{task}", &task_short)
                             .replace("{result}", &announcement.result);
                         transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
                     }

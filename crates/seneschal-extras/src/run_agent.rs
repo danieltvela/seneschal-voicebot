@@ -21,6 +21,7 @@ use seneschal_common::permission::PermissionGate;
 use seneschal_common::tools::Tool;
 
 use seneschal_core::llm::{LlmProvider, Message};
+use seneschal_core::pipeline::truncate_chars;
 
 // Re-imported for test code (AcpWriter was extracted to common)
 use seneschal_common::acp_writer::{jsonrpc_notification, jsonrpc_request, parse_jsonrpc};
@@ -108,15 +109,36 @@ fn strip_hermes_cli_noise(raw: &str) -> String {
 
 // ── Result synthesis ─────────────────────────────────────────────────────────
 
+/// Mark a result as "unprocessed agent output" when synthesis is unavailable
+/// or failed (issue #221). Genuine errors (`Agent error:`, `ACP …`) are
+/// already self-explanatory and pass through untouched; only the ambiguous
+/// case — the raw coordinator output (orientation text, milestones,
+/// "usando unknown" lines) — is wrapped so the model can say "el agente
+/// devolvió algo que no parece un resultado" instead of self-blame.
+fn mark_unprocessed(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.starts_with("Agent error:") || trimmed.starts_with("ACP") {
+        return raw.to_string();
+    }
+    let short = truncate_chars(trimmed, 2000);
+    format!(
+        "[Salida del agente (no procesada): {short}]\n\
+         El agente devolvió esta salida cruda; no parece un resultado final útil. \
+         Comunícalo al usuario de forma breve y neutral, sin atribuirte la causa."
+    )
+}
+
 /// Ask the secondary LLM to summarize a raw agent result into a concise,
-/// voice-ready response. Falls back to `raw` if synthesis fails or is not
-/// configured.
+/// voice-ready response. Falls back to a marked, truncated copy of `raw` if
+/// synthesis fails or is not configured.
 async fn synthesize_agent_result(
     task: &str,
     raw: String,
     client: Option<&dyn LlmProvider>,
 ) -> String {
-    let Some(client) = client else { return raw };
+    let Some(client) = client else {
+        return mark_unprocessed(&raw);
+    };
     if raw.is_empty() || raw.starts_with("Agent error:") || raw.starts_with("ACP") {
         return raw;
     }
@@ -129,10 +151,10 @@ async fn synthesize_agent_result(
             info!(target: "agent", "synthesize_agent_result: {} chars → {} chars", raw.len(), summary.len());
             summary
         }
-        Ok(_) => raw,
+        Ok(_) => mark_unprocessed(&raw),
         Err(e) => {
             warn!(target: "agent", "synthesize_agent_result error: {}", e);
-            raw
+            mark_unprocessed(&raw)
         }
     }
 }

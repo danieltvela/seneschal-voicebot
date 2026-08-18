@@ -15,7 +15,7 @@ pub use consolidation::{
 pub use frames::PipelineFrame;
 #[allow(unused_imports)]
 pub use fsm::{PauseReason, PipelineState};
-pub use llm_task::llm_task;
+pub use llm_task::{llm_task, truncate_chars};
 pub use sen_task::sen_task;
 pub use state::PipelineEvents;
 pub use tts_task::{RemoteTtsTx, tts_task};

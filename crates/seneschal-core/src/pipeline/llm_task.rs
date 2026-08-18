@@ -35,6 +35,41 @@ pub fn should_emit_ack_token(llm_text: &str) -> bool {
     llm_text.trim().is_empty()
 }
 
+/// Abbreviate the arguments of a background tool call for persistence in the
+/// LLM session history (issue #221).
+///
+/// The subagent receives the full task as before (this only affects what gets
+/// stored in the conversation history). Storing the full rewritten task meant
+/// every subsequent prompt carried the text of every previous delegation,
+/// which the model read as evidence of what happened — producing self-blame
+/// ("la búsqueda falló, señor") and defensive re-delegations.
+///
+/// `run_hermes`-style args are a JSON object `{"task": "..."}`; we keep the
+/// schema but truncate the task to the first ~120 chars. Non-JSON or
+/// unrecognized args are truncated verbatim as a fallback.
+pub fn abbreviate_tool_args(args: &str, max_task_chars: usize) -> String {
+    let v: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
+    match v.get("task").and_then(|t| t.as_str()) {
+        Some(task) => {
+            let short = truncate_chars(task, max_task_chars);
+            serde_json::to_string(&serde_json::json!({ "task": short }))
+                .unwrap_or_else(|_| truncate_chars(args, max_task_chars * 2))
+        }
+        None => truncate_chars(args, max_task_chars * 2),
+    }
+}
+
+/// Truncate a string to at most `n` chars, appending "…" when cut.
+pub fn truncate_chars(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(n).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// LLM task: receives transcript frames, runs the LLM+tools pipeline, fires events.
 #[allow(clippy::too_many_arguments)]
 pub async fn llm_task(
@@ -386,7 +421,14 @@ pub async fn llm_task(
                             // Execute the tool directly: background tools spawn the real
                             // work internally and return a delegation placeholder
                             // immediately, so awaiting is cheap.
-                            let tc_id = format!("bg_{}_{}_{}", pipeline_id, iter, name);
+                            // Unique tool_call_id per delegation (issue #221): pipeline_id
+                            // is fixed per actor and iter resets per turn, so the old
+                            // `bg_{pipeline_id}_{iter}_{name}` reused the same id across
+                            // every delegation in a session — a dozen assistant/tool pairs
+                            // sharing one id in a single prompt violates the OpenAI tool-call
+                            // spec and confuses the model about which call a result belongs to.
+                            let tc_id =
+                                format!("bg_{}_{}", pipeline_id, uuid::Uuid::new_v4().simple());
                             let tool_arc = tools.lock().unwrap().get_tool_arc(&name);
                             let placeholder = match tool_arc {
                                 Some(tool) => tool.run(&args).await,
@@ -394,22 +436,30 @@ pub async fn llm_task(
                             };
                             info!(
                                 target: "pipeline",
-                                "Background tool `{}` finished ({} chars): {:?}",
-                                name, placeholder.len(), placeholder
+                                "Background tool `{}` finished ({} chars): {:?} [tc_id={}]",
+                                name, placeholder.len(), placeholder, tc_id
                             );
 
-                            // Persist the FULL exchange — assistant(tool_calls) followed
-                            // by tool(result). The conversation history must show the
-                            // correct tool-call pattern: if we save only the ack text,
-                            // the model learns to *narrate* delegations instead of
-                            // calling the tool on later turns.
+                            // Persist the exchange with the FULL tool-call pattern
+                            // (assistant(tool_calls) + tool(result)) so the model
+                            // keeps *calling* `run_hermes` instead of narrating
+                            // delegations. But the persisted `arguments` are
+                            // ABBREVIATED (issue #221): the full rewritten task
+                            // (300-600+ chars) was being carried into every
+                            // subsequent prompt, and the model read its own
+                            // previous rewrites as evidence — producing
+                            // "la búsqueda falló, señor" self-blame and defensive
+                            // re-delegations. A ~120-char description is enough
+                            // to preserve the call pattern without the
+                            // contamination.
+                            let persisted_args = abbreviate_tool_args(&args, 120);
                             let tool_call_msg = serde_json::json!({
                                 "role": "assistant",
                                 "content": ack_text,
                                 "tool_calls": [{
                                     "id": tc_id,
                                     "type": "function",
-                                    "function": {"name": &name, "arguments": &args}
+                                    "function": {"name": &name, "arguments": persisted_args}
                                 }]
                             });
                             let tool_result_msg = serde_json::json!({
@@ -657,5 +707,55 @@ mod tests {
         assert!(should_emit_ack_token(""));
         assert!(should_emit_ack_token("   "));
         assert!(should_emit_ack_token("\n\t"));
+    }
+
+    /// issue #221: `abbreviate_tool_args` must truncate the `task` field to
+    /// the limit while keeping the JSON schema, so the persisted tool-call
+    /// pattern is preserved without dragging the full rewritten task into
+    /// every subsequent prompt.
+    #[test]
+    fn abbreviate_tool_args_truncates_task_keeps_schema() {
+        let long_task = "Reescribe la búsqueda de los últimos modelos de Hugging Face".repeat(5);
+        let args = serde_json::to_string(&serde_json::json!({"task": long_task})).unwrap();
+        let out = abbreviate_tool_args(&args, 120);
+        // Still valid JSON with the `task` field.
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let task = v["task"].as_str().expect("task field must be a string");
+        // Truncated to ~120 chars + ellipsis.
+        assert!(
+            task.chars().count() <= 121,
+            "task too long: {}",
+            task.chars().count()
+        );
+        assert!(task.ends_with('…'), "should end with ellipsis");
+        // The full text must NOT be present.
+        assert!(!out.contains(&long_task));
+        // A short task is kept verbatim.
+        let short = abbreviate_tool_args(r#"{"task": "breve"}"#, 120);
+        let v2: serde_json::Value = serde_json::from_str(&short).unwrap();
+        assert_eq!(v2["task"].as_str(), Some("breve"));
+    }
+
+    /// issue #221: non-JSON or unrecognized args are truncated verbatim as a
+    /// fallback, never left at full length.
+    #[test]
+    fn abbreviate_tool_args_fallback_truncates_verbatim() {
+        let blob = "x".repeat(500);
+        let out = abbreviate_tool_args(&blob, 120);
+        assert!(out.chars().count() <= 241); // 120*2 + ellipsis
+        let out_no_task = abbreviate_tool_args(r#"{"other": "data"}"#, 120);
+        assert!(out_no_task.chars().count() <= 241);
+    }
+
+    /// issue #221: `truncate_chars` respects the limit and appends "…".
+    #[test]
+    fn truncate_chars_respects_limit() {
+        assert_eq!(truncate_chars("hola", 10), "hola");
+        assert_eq!(truncate_chars("hola mundo", 4), "hola…");
+        // Exactly-at-limit: no ellipsis.
+        assert_eq!(truncate_chars("áéí", 3), "áéí");
+        // One over: keep `n` chars + ellipsis (total n+1).
+        assert_eq!(truncate_chars("áéíó", 3), "áéí…");
+        assert_eq!(truncate_chars("áéíó", 3).chars().count(), 4);
     }
 }
