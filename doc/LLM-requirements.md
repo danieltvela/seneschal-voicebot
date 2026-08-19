@@ -127,7 +127,7 @@ data: [DONE]
 
 ### 3.5 Multimodal
 
-`complete_multimodal()` envia `image_url` + texto para `take_screenshot` y vision tools. Requiere `SECONDARY_LLM_URL` configurado.
+`complete_multimodal()` envia `image_url` + texto para `take_screenshot` y vision tools. Requiere un modelo LLM principal con soporte multimodal.
 
 **Referencia:** `src/llm/client.rs:452-497`.
 
@@ -249,7 +249,7 @@ Serializado a formato OpenAI function-calling via `ToolRegistry::tool_definition
 | 4 | `deep_research` | `src/tools/deep_research.rs` | Investigacion via agente | `query` | Si | Agente configurado | — |
 | 5 | `read_clipboard` | `src/tools/clipboard.rs` | Leer portapapeles macOS | — | No | Siempre | — |
 | 6 | `set_clipboard` | `src/tools/clipboard.rs` | Escribir portapapeles | `text` | No | Siempre | — |
-| 7 | `take_screenshot` | `src/tools/take_screenshot.rs` | Captura + descripcion vision | `prompt` | No | `SECONDARY_LLM_URL` | — |
+| 7 | `take_screenshot` | `src/tools/take_screenshot.rs` | Captura + descripcion vision | `prompt` | No | LLM multimodal | — |
 | 8 | `open_app` | `src/tools/open_app.rs` | Abrir app macOS por nombre | `name` | No | Siempre | "Abre...", "lanza...", "launch..." |
 | 9 | `run_shell` | `src/tools/run_shell.rs` | Ejecutar comando shell | `command` | Si | `SHELL_ENABLED=1` | — |
 | 10 | `apple_events` | `src/tools/apple_events.rs` | Calendar y Reminders | `operation` + fields | No | `APPLE_EVENTS_ENABLED` (default true) | — |
@@ -305,9 +305,9 @@ JSON-RPC 2.0 sobre stdio. Mensajes: `initialize`, `session/new`, `session/prompt
 
 Tool `run_<agent_name>` con param `task` (string). Comandos inline: `task="cancel"` cancela, `task="status"` consulta estado.
 
-### 6.4 Sintesis de resultados
+### 6.4 Resultados de agentes
 
-Si hay secondary LLM, el resultado raw del agente se resume en 2-3 frases para voz (`src/tools/run_agent.rs:197-221`).
+El resultado raw del agente se devuelve directamente al LLM principal, sin resumir.
 
 ### 6.5 Lo que el LLM debe hacer
 
@@ -361,7 +361,7 @@ Trigger: contexto > 80% de `LLM_CONTEXT_TOKENS`. Pasos:
 
 Daemon en background:
 - Exporta mensajes a JSONL (rotacion 10 MB / 10.000 lineas).
-- Extrae profile + memories + summary + corrections via secondary LLM.
+- Extrae profile + memories + summary + corrections via el LLM principal.
 - Compacta facts de baja confianza.
 - Triggers: schedule (3 AM), idle (600 s), interval (3600 s).
 
@@ -397,16 +397,7 @@ Daemon en background:
 | `llm_command` | `LLM_COMMAND` | — | Comando para lanzar servidor |
 | `llm_system_prompt` | `LLM_SYSTEM_PROMPT` | *(multilinea espanol)* | Override del base prompt |
 
-### 8.2 LLM secundario (vision + background)
-
-| Config | Env var | Default |
-|--------|---------|---------|
-| `secondary_llm_url` | `SECONDARY_LLM_URL` | — |
-| `secondary_llm_model` | `SECONDARY_LLM_MODEL` | `"local-model"` |
-| `secondary_llm_max_tokens` | `SECONDARY_LLM_MAX_TOKENS` | 1024 |
-| `secondary_llm_thinking` | `SECONDARY_LLM_THINKING` | false |
-
-### 8.3 Tools condicionales
+### 8.2 Tools condicionales
 
 | Env var | Tool que habilita |
 |---------|-------------------|
@@ -414,7 +405,6 @@ Daemon en background:
 | `TAVILY_API_KEY` / `EXA_API_KEY` | `quick_search` |
 | `SHELL_ENABLED=1` | `run_shell` |
 | `APPLE_EVENTS_ENABLED` (default true) | `apple_events` |
-| `SECONDARY_LLM_URL` | `take_screenshot` |
 | `MCP_COMMAND` / `MCPS` | tools MCP dinamicos |
 | `AGENTS` / `AGENT_COMMAND` | `run_<agent>` |
 

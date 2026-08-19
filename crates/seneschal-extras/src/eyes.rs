@@ -1,10 +1,10 @@
 /// EYES — periodic visual awareness loop.
 ///
 /// Every `interval_secs` (configured via `EYES_INTERVAL_SECS`) this module
-/// takes a silent screenshot, sends it to the secondary vision LLM, and asks
-/// it to decide whether anything on screen warrants notifying the user.
+/// takes a silent screenshot, sends it to the vision LLM, and asks it to
+/// decide whether anything on screen warrants notifying the user.
 ///
-/// The secondary LLM must respond with a structured two-field format:
+/// The vision LLM must respond with a structured two-field format:
 ///   warn_user: true|false
 ///   message: <optional natural-language sentence>
 ///

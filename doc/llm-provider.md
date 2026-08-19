@@ -125,13 +125,6 @@ When thinking mode is enabled (`llm_thinking = true`), the LLM may emit reasonin
 ### Post-processing:
 `strip_think_blocks(s: &str) -> String` strips all `<think>...</think>` blocks from a complete string. Used by `complete()`, `complete_short()`, and `complete_multimodal()`.
 
-## Secondary LLM Provider
-
-A separate `LlmProvider` instance (the "secondary" or "vision" LLM) is created from `SECONDARY_LLM_URL` and `SECONDARY_LLM_MODEL` env vars. It is used for:
-- Vision tasks (screenshot analysis via `TakeScreenshotTool`)
-- Summarization and profile extraction (S-DREAM)
-- Agent result synthesis (optional)
-
 ## OpenAIClient (Internal, client.rs)
 
 The `OpenAIClient` struct handles the low-level SSE HTTP protocol:

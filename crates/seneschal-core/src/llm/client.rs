@@ -86,7 +86,7 @@ impl ThinkFilter {
 
 /// Strip all `<think>…</think>` blocks from a complete (non-streaming) string.
 ///
-/// Used to post-process secondary LLM responses when thinking mode is enabled.
+/// Used to post-process LLM responses when thinking mode is enabled.
 /// The model reasons inside the tags; only the text after the closing tag is
 /// returned to callers.
 fn strip_think_blocks(s: &str) -> String {
@@ -137,7 +137,7 @@ pub struct OpenAIClient {
     api_key: String,
     /// When true, send `chat_template_kwargs: {"enable_thinking": true}` in
     /// non-streaming requests and strip `<think>…</think>` blocks from the
-    /// returned text. Intended for the secondary LLM only.
+    /// returned text.
     thinking: bool,
 }
 

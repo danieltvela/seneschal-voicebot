@@ -239,7 +239,7 @@ If `is_silent()` returns `true` (only `NoopTool`), the pipeline halts entirely â
 |---|---|
 | **File** | `web_search.rs` |
 | **Type** | **Background** |
-| **Description** | Searches the web via a SearXNG instance. Returns formatted results (title, content, URL). May optionally run a secondary LLM synthesis pass for voice-ready summaries. |
+| **Description** | Searches the web via a SearXNG instance. Returns formatted results (title, content, URL). |
 | **Parameters** | `{ "query": "...", "max_results": 5 }` |
 | **Preamble** | `"Buscando en internet."` |
 | **Force triggers** | `"busca "`, `"search for "`, `"google "`, and similar |
@@ -382,8 +382,7 @@ If `is_silent()` returns `true` (only `NoopTool`), the pipeline halts entirely â
 | **Description** | Captures the screen via `screencapture`, sends the PNG to a vision-capable LLM, and returns a text description of what is shown. |
 | **Parameters** | `{ "prompt": "optional focus for vision analysis" }` (optional) |
 | **Dependencies** | `LlmProvider` (vision model), `screen_capture` module |
-| **Config** | `SECONDARY_LLM_URL` |
-| **Registered** | Only when `SECONDARY_LLM_URL` is configured |
+| **Config** | Primary LLM provider |
 
 #### `recover_historical_context` â€” `src/tools/recover_historical_context.rs`
 
@@ -429,7 +428,7 @@ Tools are registered conditionally at startup based on configuration. The order 
 | 7 | `set_prompt_build` | Always |
 | 8 | `apple_events` | `APPLE_EVENTS_ENABLED` is set |
 | 9 | `run_shell` | `SHELL_ENABLED=1` |
-| 10 | `take_screenshot` | `SECONDARY_LLM_URL` is configured |
+| 10 | `take_screenshot` | Primary LLM provider (currently disabled) |
 | 11 | `web_search` | `SEARXNG_URL` is configured |
 | 12 | `quick_search` | `SearchProvider` is configured |
 | 13 | `deep_research` | Agent is configured |

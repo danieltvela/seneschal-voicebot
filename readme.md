@@ -185,7 +185,7 @@ Seneschal is built from the ground up for voice interaction:
 - Multi-speaker registry (auto-enrolls up to N speakers, ONNX-based embeddings)
 - Ambient context buffer - transcribes all ambient speech for contextual responses
 - Two conversation modes: **Active** (responds to everything) and **Ambient** (responds only after wake word, auto-switches on non-enrolled speaker detection)
-- EYES visual awareness - periodic screen captures analyzed by a vision-capable secondary LLM
+- EYES visual awareness - periodic screen captures analyzed by a vision-capable LLM
 - Inference daemon - proactive suggestions and background reasoning ("is there anything worth saying?")
 - MCP (Model Context Protocol) - dynamically registered tools from any MCP stdio server
 - **Plugin System** - self-contained plugin directories that bundle MCP servers, agents, prompts, and config overrides. LLM can switch active plugins at runtime via `switch_plugin` tool
@@ -481,16 +481,9 @@ Most configuration is done via environment variables (or `.env` file):
 | **Shell Tool** | | |
 | `SHELL_ENABLED` | `0` | Set to `1` to enable the `run_shell` tool (off by default for safety) |
 | `SHELL_TIMEOUT_SECS` | `30` | Hard timeout per shell command in seconds |
-| **Secondary LLM** | | |
-| `SECONDARY_LLM_URL` | - | Base URL of secondary LLM. Enables `take_screenshot` tool, EYES visual awareness, and routes summarization + profile extraction to this model. |
-| `SECONDARY_LLM_MODEL` | `local-model` | Model name for secondary LLM requests. |
-| `SECONDARY_LLM_MAX_TOKENS` | `1024` | Max tokens for secondary LLM responses (vision). |
-| `SECONDARY_LLM_API_KEY` | - | Bearer token for secondary LLM API. |
-| `SECONDARY_LLM_PROVIDER` | `mlx` | Backend for secondary LLM (mlx-lm or omlx). |
 | `LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the main LLM. Strips thinking tags from streamed output. |
-| `SECONDARY_LLM_THINKING` | `0` | Enable Qwen3 thinking mode on the secondary LLM. Strips thinking tags from output. |
 | **EYES (visual awareness)** | | |
-| `EYES_INTERVAL_SECS` | `0` (disabled) | Seconds between automatic screen captures. Set to e.g. `15` to enable. Requires `SECONDARY_LLM_URL` (vision model). Seneschal speaks when something important is detected on screen. |
+| `EYES_INTERVAL_SECS` | `0` (disabled) | Seconds between automatic screen captures. Set to e.g. `15` to enable. Seneschal speaks when something important is detected on screen. |
 | **Web Search (SearXNG)** | | |
 | `SEARXNG_URL` | - (disabled) | Base URL of your SearXNG instance (e.g. `http://localhost:8080`). Enables the `web_search` tool. |
 | `SEARXNG_SECRET` | (empty) | Bearer token for SearXNG API authentication. |

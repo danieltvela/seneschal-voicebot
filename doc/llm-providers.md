@@ -63,7 +63,7 @@ Seneschal is a single-user voice assistant with a streaming **STT → LLM → TT
 | Factor | Detail |
 |--------|--------|
 | `chat_template_kwargs` | For Qwen3 thinking control. The client already sends it (`client.rs:237`) but it's not critical: `ThinkFilter` strips `<think>` client-side regardless. |
-| Multimodal (`image_url`) | Required by `take_screenshot` and vision tools. Uses the secondary LLM if configured. |
+| Multimodal (`image_url`) | Required by `take_screenshot` and vision tools. Uses the primary LLM provider. |
 | `repetition_penalty` per request | The current mlx-lm requires it; the client always sends it. |
 | Optional Bearer auth | For remote servers. Not used locally. |
 

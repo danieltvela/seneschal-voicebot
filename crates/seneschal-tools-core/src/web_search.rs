@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -6,7 +5,6 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use super::Tool;
-use seneschal_core::llm::{LlmProvider, Message};
 
 /// Hard timeout for SearXNG HTTP requests.
 const SEARCH_TIMEOUT_SECS: u64 = 10;
@@ -46,9 +44,6 @@ pub struct WebSearchTool {
     base_url: String,
     secret: String,
     client: reqwest::Client,
-    /// When set, the secondary LLM synthesizes raw SearXNG results into a
-    /// concise voice-ready summary before returning to the primary LLM.
-    synthesis_client: Option<Arc<dyn LlmProvider>>,
 }
 
 impl WebSearchTool {
@@ -61,14 +56,7 @@ impl WebSearchTool {
             base_url,
             secret,
             client,
-            synthesis_client: None,
         }
-    }
-
-    /// Attach a secondary LLM client for result synthesis.
-    pub fn with_synthesis(mut self, client: Arc<dyn LlmProvider>) -> Self {
-        self.synthesis_client = Some(client);
-        self
     }
 }
 
@@ -174,28 +162,7 @@ impl Tool for WebSearchTool {
         }
 
         // Format raw results.
-        let raw = format_results(&body.results, max_results);
-
-        // If a synthesis client is configured, ask the secondary LLM to distill
-        // the raw results into a concise voice-ready summary.
-        if let Some(ref client) = self.synthesis_client {
-            let prompt = format!(
-                "El usuario preguntó: \"{query}\"\n\
-                 Resultados de búsqueda:\n{raw}\n\n\
-                 Resume en 2-3 frases concisas lo más relevante para responder al usuario. \
-                 Solo el resumen, sin intro ni explicación."
-            );
-            match client.complete_short(&[Message::user(&prompt)]).await {
-                Ok(summary) if !summary.is_empty() => {
-                    info!(target: "tools", "web_search: synthesized result ({} chars → {} chars)", raw.len(), summary.len());
-                    return summary;
-                }
-                Ok(_) => {}
-                Err(e) => warn!(target: "tools", "web_search synthesis error: {}", e),
-            }
-        }
-
-        raw
+        format_results(&body.results, max_results)
     }
 }
 

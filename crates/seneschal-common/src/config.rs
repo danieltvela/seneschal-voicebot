@@ -316,24 +316,8 @@ pub struct Config {
 
     // ── EYES (visual awareness) ───────────────────────────────────────────────
     /// Seconds between screen-capture checks for EYES (EYES_INTERVAL_SECS).
-    /// 0 = disabled (default). Requires SECONDARY_LLM_URL to be set.
+    /// 0 = disabled (default).
     pub eyes_interval_secs: u64,
-
-    // ── Secondary LLM (vision + background tasks) ────────────────────────────
-    /// Base URL of the secondary LLM provider (SECONDARY_LLM_URL). None = disabled.
-    /// When set, enables the vision tool and routes summarization + profile
-    /// extraction to this model instead of the primary.
-    pub secondary_llm_url: Option<String>,
-    /// Model name for secondary LLM requests (SECONDARY_LLM_MODEL).
-    pub secondary_llm_model: String,
-    /// Max tokens for secondary LLM responses (SECONDARY_LLM_MAX_TOKENS, default 512).
-    pub secondary_llm_max_tokens: u32,
-    /// Bearer token for secondary LLM API (SECONDARY_LLM_API_KEY, default empty).
-    pub secondary_llm_api_key: String,
-    /// Enable Qwen3 thinking mode on the secondary LLM (SECONDARY_LLM_THINKING, default false).
-    /// When true, `chat_template_kwargs: {"enable_thinking": true}` is sent in requests and
-    /// `<think>…</think>` blocks are stripped from the returned text.
-    pub secondary_llm_thinking: bool,
 
     // ── Shell tool ────────────────────────────────────────────────────────────
     /// Enable the `run_shell` tool (SHELL_ENABLED=1). Off by default.
@@ -824,24 +808,6 @@ impl Config {
             self.classifier_fallback_timeout_ms = v
                 .parse()
                 .context("Invalid CLASSIFIER_FALLBACK_TIMEOUT_MS")?;
-        }
-
-        // Secondary LLM
-        if let Ok(v) = env::var("SECONDARY_LLM_URL") {
-            self.secondary_llm_url = Some(v);
-        }
-        if let Ok(v) = env::var("SECONDARY_LLM_MODEL") {
-            self.secondary_llm_model = v;
-        }
-        if let Ok(v) = env::var("SECONDARY_LLM_MAX_TOKENS") {
-            self.secondary_llm_max_tokens =
-                v.parse().context("Invalid SECONDARY_LLM_MAX_TOKENS")?;
-        }
-        if let Ok(v) = env::var("SECONDARY_LLM_API_KEY") {
-            self.secondary_llm_api_key = v;
-        }
-        if let Ok(v) = env::var("SECONDARY_LLM_THINKING") {
-            self.secondary_llm_thinking = v == "1" || v.to_lowercase() == "true";
         }
 
         // Shell tool

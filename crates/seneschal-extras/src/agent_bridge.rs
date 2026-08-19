@@ -9,7 +9,6 @@ use crate::run_agent::{ActiveTask, RunAgentTool};
 use seneschal_agents::{AcpSessionManager, AgentConfig, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::{Tool, ToolRegistry};
-use seneschal_core::llm::LlmProvider;
 
 use seneschal_plugins::PluginAgentConfig;
 
@@ -47,17 +46,12 @@ pub fn register_plugin_agent_tools(
     tool_registry: &mut ToolRegistry,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     session_manager: Option<Arc<AcpSessionManager>>,
-    secondary_llm: Option<Arc<dyn LlmProvider>>,
 ) -> Vec<String> {
     let mut registered_names = Vec::new();
 
     for agent in agents {
         let task_map: Arc<DashMap<String, ActiveTask>> = Arc::new(DashMap::new());
         let mut run_agent_tool = RunAgentTool::new(agent.clone(), task_map, proactive_tx.clone());
-
-        if let Some(ref client) = secondary_llm {
-            run_agent_tool = run_agent_tool.with_synthesis(Arc::clone(client));
-        }
 
         if agent.mode == "remote" {
             if !agent.remote_url.is_empty() {

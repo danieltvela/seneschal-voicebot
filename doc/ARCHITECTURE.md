@@ -78,7 +78,7 @@ src/
 │   ├── read_file.rs
 │   ├── open_app.rs
 │   ├── run_shell.rs           # SHELL_ENABLED=1
-│   ├── take_screenshot.rs     # SECONDARY_LLM_URL for vision
+│   ├── take_screenshot.rs     # Vision via primary LLM
 │   ├── run_agent.rs           # Agent delegation (ACP/CLI)
 │   ├── web_search.rs          # SearXNG web search
 │   ├── conversation_mode.rs   # Active/Ambient mode switching
@@ -276,7 +276,7 @@ response, pushes a `ProactiveEvent::InferenceDaemon` through the proactive chann
 ### EyesDaemon (`src/eyes.rs`)
 
 Periodic visual awareness. Takes a screenshot every `interval_secs`, sends it to a
-secondary vision LLM (configured via `SECONDARY_LLM_URL`), and asks whether anything
+vision LLM (the primary LLM provider), and asks whether anything
 on screen warrants a user notification. Responses follow a structured format:
 
 ```

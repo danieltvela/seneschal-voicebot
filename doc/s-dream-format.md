@@ -1,6 +1,6 @@
 # S-DREAM — Format & Consolidation Reference
 
-**S**cheduled **DREAM** (S-DREAM) is the cold-path memory consolidation daemon (`src/dream/mod.rs`). It exports conversation history to JSONL archives and periodically distills conversation data into profile facts, memories, and summaries via a secondary LLM.
+**S**cheduled **DREAM** (S-DREAM) is the cold-path memory consolidation daemon (`src/dream/mod.rs`). It exports conversation history to JSONL archives and periodically distills conversation data into profile facts, memories, and summaries via the LLM provider.
 
 ## Scheduling
 
@@ -45,7 +45,7 @@ Each cycle runs sequentially:
 4. Update dream_last_processed
 ```
 
-### Stage 2 — Distillation (requires secondary LLM)
+### Stage 2 — Distillation (requires LLM client)
 
 ```
 1. Assemble conversation text: "role: content\n" for all new messages
@@ -213,7 +213,7 @@ The result is saved via `db.save_summary(session_id, summary, max_message_id)`.
 pub struct SDreamDaemon {
     pub config: SDreamConfig,
     pub db: Database,
-    pub secondary_client: Option<Arc<dyn LlmProvider>>,
+    pub client: Option<Arc<dyn LlmProvider>>,
     pub proactive_tx: mpsc::Sender<ProactiveEvent>,
     pub last_activity: Arc<AtomicU64>,
 }
@@ -227,4 +227,4 @@ impl SDreamDaemon {
 }
 ```
 
-When `secondary_client` is `None`, the JSONL export still runs but distillation (facts, memories, summary) is skipped.
+When `client` is `None`, the JSONL export still runs but distillation (facts, memories, summary) is skipped.

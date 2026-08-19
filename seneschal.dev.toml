@@ -125,12 +125,6 @@ daemon_interval_secs = 300
 # ── EYES ──────────────────────────────────────────────────────────────────────
 eyes_interval_secs = 0
 
-# ── Secondary LLM ─────────────────────────────────────────────────────────────
-secondary_llm_model = "local-model"
-secondary_llm_max_tokens = 1024
-secondary_llm_api_key = ""
-secondary_llm_thinking = false
-
 # ── Apple Calendar & Reminders ─────────────────────────────────────────────────
 apple_events_enabled = true
 

@@ -14,11 +14,10 @@ async_main()
   ├─ Load config (Config::from_env)
   ├─ Device/voice listing shortcuts (--list-devices, --list-voices)
   ├─ Create proactive event channel
-  ├─ Init secondary LLM client (OpenAIClient — optional, vision/summarization)
   ├─ Register tools (CurrentTime, ReadClipboard, SetClipboard, OpenApp,
   │   SetConversationMode, RunShell [conditional],
-  │   TakeScreenshot [requires secondary LLM],
-  │   WebSearch [conditional + optional secondary LLM synthesis],
+  │   TakeScreenshot [requires vision-capable LLM],
+  │   WebSearch [conditional],
   │   RunAgent [ACP mode or agent_command set],
   │   MCP tools [if mcp_command configured])
   ├─ ACP pre-warm (optional — spawns Hermes agent, runs session/new handshake)
@@ -30,7 +29,7 @@ async_main()
   ├─ Self-managed LLM process (optional — start + supervise if llm_self_managed)
   ├─ Init primary LLM client (OpenAIClient → /v1/chat/completions)
   ├─ InferenceDaemon (optional — background reasoning at fixed interval)
-  ├─ EyesDaemon (optional — screenshots → secondary LLM at fixed interval)
+  ├─ EyesDaemon (optional — screenshots → primary vision LLM at fixed interval)
   ├─ Init WhisperSTTVAD (unified STT + VAD via whisper-cpp-plus, Silero VAD)
   ├─ ContextLens + IdentityAnalyzer (speaker verification via sherpa_onnx)
   ├─ AmbientBuffer (ambient context storage)
@@ -282,7 +281,7 @@ After consolidation:
 | Daemon | Trigger | Purpose |
 |--------|---------|---------|
 | `InferenceDaemon` | fixed interval (`DAEMON_INTERVAL_SECS`) | proactive reasoning / background tasks |
-| `EyesDaemon` | fixed interval (`EYES_INTERVAL_SECS`) | screenshot → secondary LLM → proactive context |
+| `EyesDaemon` | fixed interval (`EYES_INTERVAL_SECS`) | screenshot → vision LLM → proactive context |
 
 Both daemons emit `ProactiveEvent` via `proactive_tx`. The main loop drains `proactive_rx` inside the `tokio::select!`:
 - `AgentResult` with `tool_call_id` injected as tool response
@@ -351,7 +350,7 @@ Registered tools (tool names as seen by the LLM):
 | `open_app` | `tools/open_app.rs` | always | Opens macOS application by name |
 | `set_conversation_mode` | `tools/conversation_mode.rs` | always | Switches Active/Ambient/AmbientLocked |
 | `run_shell` | `tools/run_shell.rs` | if `SHELL_ENABLED=true` | Runs shell command with timeout |
-| `take_screenshot` | `tools/take_screenshot.rs` | if `SECONDARY_LLM_URL` set | Screenshots + vision analysis via secondary LLM |
-| `web_search` | `tools/web_search.rs` | if `SEARXNG_URL` set | SearXNG-backed search (optional LLM synthesis) |
+| `take_screenshot` | `tools/take_screenshot.rs` | primary LLM provider | Screenshots + vision analysis via primary LLM |
+| `web_search` | `tools/web_search.rs` | if `SEARXNG_URL` set | SearXNG-backed search |
 | `run_agent` | `tools/run_agent.rs` | if `AGENT_MODE=acp` or `AGENT_COMMAND` set | ACP agent delegation via stdio JSON-RPC |
 | `mcp_tool` | `tools/mcp_tool.rs` | if `MCP_COMMAND` set | Dynamically registered from MCP server |

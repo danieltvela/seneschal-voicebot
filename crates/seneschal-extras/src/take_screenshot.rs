@@ -11,10 +11,6 @@ use seneschal_common::tools::Tool;
 
 /// Tool that takes a screenshot and describes it using a vision model.
 ///
-/// Enabled when `SECONDARY_LLM_URL` is set. Delegates HTTP to the shared
-/// secondary LLM provider so the vision call never evicts the main
-/// conversation KV-cache.
-///
 /// macOS only: uses `screencapture -x -t png` for a silent capture.
 pub struct TakeScreenshotTool {
     client: Arc<dyn LlmProvider>,

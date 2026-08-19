@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use dashmap::DashMap;
 use tokio::sync::{Mutex, mpsc};
+use tracing::warn;
 
 use super::config::AgentConfig;
 use seneschal_common::acp_writer::{AcpWriter, JsonRpcMessage};
@@ -94,6 +95,11 @@ struct BackoffState {
     last_failure: Option<Instant>,
 }
 
+/// Upper bound for draining a warm-up prompt's response before a real task.
+/// Cold model loads can take tens of seconds, so this is deliberately generous;
+/// the warm-up reply must be fully consumed or it will pollute the first task.
+pub const PREWARM_DRAIN_TIMEOUT_SECS: u64 = 180;
+
 // ── Channel types ─────────────────────────────────────────────────────────────
 
 /// Shared type aliases for the session-event channel.
@@ -129,6 +135,10 @@ pub struct SessionEntry {
     pub last_used: Instant,
     pub task_ids: HashSet<String>,
     pub status: SessionStatus,
+    /// Request id of an unconsumed warm-up prompt (if any). Its response must
+    /// be drained before the next prompt is sent so the warm-up reply never
+    /// leaks into a real task's result.
+    pub prewarm_request_id: Option<u64>,
 }
 
 impl std::fmt::Debug for SessionEntry {
@@ -238,6 +248,7 @@ impl AcpSessionManager {
             last_used: now,
             task_ids: HashSet::new(),
             status: SessionStatus::Idle,
+            prewarm_request_id: None,
         };
         self.sessions
             .insert(agent_config.name.clone(), entry.clone());
@@ -451,19 +462,97 @@ impl AcpSessionManager {
         let entry = self.get_or_create_session(config).await?;
         let timeout_secs = Config::from_env()?.agent_acp_warmup_timeout_secs;
 
-        let mut writer = entry.writer.lock().await;
-        if let Err(e) = writer
-            .warm_up(&entry.session_id, &config.prompt, timeout_secs)
-            .await
-        {
-            drop(writer);
-            self.close_session(&entry.session_id);
-            return Err(e);
-        }
-        drop(writer);
+        let warmup_id = {
+            let mut writer = entry.writer.lock().await;
+            match writer
+                .warm_up(&entry.session_id, &config.prompt, timeout_secs)
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    drop(writer);
+                    self.close_session(&entry.session_id);
+                    return Err(e);
+                }
+            }
+        };
+
+        // Record the warm-up request id so whoever consumes the session next
+        // can drain its response before sending a real prompt (see
+        // `drain_pending_prewarm`). Without this, the warm-up reply gets
+        // buffered and pollutes the first delegated task's result.
+        self.set_prewarm_id(&config.name, warmup_id);
+
+        // Best-effort drain: if the reply is already available, consume it now
+        // so the session is clean. If it hasn't arrived yet, the next task's
+        // drain (in `run_acp`) will wait for it.
+        let drain_timeout = Duration::from_secs(PREWARM_DRAIN_TIMEOUT_SECS);
+        self.drain_pending_prewarm(&config.name, drain_timeout)
+            .await;
 
         self.mark_session_idle(&config.name);
         Ok(entry.session_id)
+    }
+
+    /// Record the request id of a warm-up prompt whose response is pending.
+    pub fn set_prewarm_id(&self, agent_name: &str, request_id: u64) {
+        if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+            entry.prewarm_request_id = Some(request_id);
+        }
+    }
+
+    /// If a warm-up prompt response is still pending for `agent_name`, block
+    /// until it is consumed (streaming notifications are discarded), then clear
+    /// the pending marker. Stops early on channel close or after `timeout`.
+    ///
+    /// ACP `session/update` chunks carry no request id, so the only reliable way
+    /// to keep a warm-up reply out of the next task's result is to consume the
+    /// entire response before that task sends its prompt. The `inbound_rx`
+    /// mutex serializes this with `collect_acp_response`, which locks the same
+    /// receiver for the whole task.
+    pub async fn drain_pending_prewarm(&self, agent_name: &str, timeout: Duration) {
+        let prewarm_id = match self
+            .sessions
+            .get(agent_name)
+            .and_then(|e| e.prewarm_request_id)
+        {
+            Some(id) => id,
+            None => return,
+        };
+        let entry = match self.sessions.get(agent_name).map(|e| e.clone()) {
+            Some(e) => e,
+            None => return,
+        };
+
+        let consumed = {
+            let mut rx = entry.inbound_rx.lock().await;
+            let deadline = Instant::now() + timeout;
+            let mut consumed = false;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Some(JsonRpcMessage::Response { id, .. })) if id == prewarm_id => {
+                        consumed = true;
+                        break;
+                    }
+                    Ok(Some(_)) => continue,
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            consumed
+        };
+
+        if consumed {
+            if let Some(mut entry) = self.sessions.get_mut(agent_name) {
+                entry.prewarm_request_id = None;
+            }
+        } else {
+            warn!(
+                target: "agent",
+                "ACP pre-warm [{}]: warm-up response (id={}) not consumed within {timeout:?} — will drain before next task",
+                agent_name, prewarm_id
+            );
+        }
     }
 
     /// Remove all sessions idle longer than `timeout`.
@@ -500,6 +589,7 @@ mod tests {
             last_used: Instant::now(),
             task_ids: HashSet::new(),
             status: SessionStatus::Idle,
+            prewarm_request_id: None,
         }
     }
 
@@ -1162,6 +1252,115 @@ mod tests {
 
         let sid = mgr.prewarm_agent(&cfg).await.unwrap();
         assert_eq!(sid, "prewarm-sid");
+    }
+
+    #[tokio::test]
+    async fn drain_pending_prewarm_consumes_response_and_clears_flag() {
+        let (tx, rx) = mpsc::channel::<JsonRpcMessage>(16);
+        let mut entry = make_dummy_entry("drain-sid", "hermes");
+        entry.inbound_rx = Arc::new(Mutex::new(rx));
+        entry.prewarm_request_id = Some(2);
+
+        let mgr = AcpSessionManager::new();
+        mgr.sessions.insert("hermes".into(), entry);
+
+        // A stale warm-up stream: one chunk notification, then the matching response.
+        tx.send(JsonRpcMessage::Notification {
+            method: "session/update".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": "drain-sid",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "I understand. How shall we proceed?"}
+                }
+            })),
+        })
+        .await
+        .unwrap();
+        tx.send(JsonRpcMessage::Response {
+            id: 2,
+            result: Some(serde_json::json!({"stopReason": "end_turn"})),
+            error: None,
+        })
+        .await
+        .unwrap();
+
+        mgr.drain_pending_prewarm("hermes", Duration::from_secs(5))
+            .await;
+
+        let entry = mgr.sessions.get("hermes").unwrap().clone();
+        assert!(
+            entry.prewarm_request_id.is_none(),
+            "pending warm-up marker should be cleared once the response is consumed"
+        );
+        let mut rx = entry.inbound_rx.lock().await;
+        assert!(
+            rx.try_recv().is_err(),
+            "stale warm-up traffic (chunks + response) should be fully drained"
+        );
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn drain_pending_prewarm_timeout_keeps_flag_for_later_drain() {
+        let (tx, rx) = mpsc::channel::<JsonRpcMessage>(16);
+        let mut entry = make_dummy_entry("drain-timeout", "hermes");
+        entry.inbound_rx = Arc::new(Mutex::new(rx));
+        entry.prewarm_request_id = Some(2);
+
+        let mgr = AcpSessionManager::new();
+        mgr.sessions.insert("hermes".into(), entry);
+
+        // Response never arrives within the short timeout → the marker must
+        // survive so a later `run_acp` drain can still consume the reply.
+        mgr.drain_pending_prewarm("hermes", Duration::from_millis(50))
+            .await;
+        assert!(
+            mgr.sessions
+                .get("hermes")
+                .unwrap()
+                .prewarm_request_id
+                .is_some(),
+            "marker must survive a timed-out drain"
+        );
+
+        // Reply arrives late; a subsequent drain consumes it and clears the marker.
+        tx.send(JsonRpcMessage::Response {
+            id: 2,
+            result: Some(serde_json::json!({"stopReason": "end_turn"})),
+            error: None,
+        })
+        .await
+        .unwrap();
+        mgr.drain_pending_prewarm("hermes", Duration::from_secs(5))
+            .await;
+        assert!(
+            mgr.sessions
+                .get("hermes")
+                .unwrap()
+                .prewarm_request_id
+                .is_none(),
+            "late drain should consume the warm-up response"
+        );
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn drain_pending_prewarm_noop_when_no_pending() {
+        let mgr = AcpSessionManager::new();
+        mgr.sessions
+            .insert("hermes".into(), make_dummy_entry("noop-sid", "hermes"));
+
+        mgr.drain_pending_prewarm("hermes", Duration::from_secs(5))
+            .await;
+        assert!(
+            mgr.sessions
+                .get("hermes")
+                .unwrap()
+                .prewarm_request_id
+                .is_none(),
+            "no-op drain must not change session state"
+        );
     }
 
     #[test]

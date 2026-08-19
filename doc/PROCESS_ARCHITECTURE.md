@@ -202,7 +202,7 @@ Runs as a `tokio::spawn` background task.
 
 File: `src/eyes.rs`
 
-Every `EYES_INTERVAL_SECS` captures a screenshot, sends it to the secondary
+Every `EYES_INTERVAL_SECS` captures a screenshot, sends it to the primary
 vision LLM, and asks whether anything on screen warrants notifying the user.
 The vision LLM responds with `warn_user: true|false` and an optional message.
 Positive hits become `ProactiveEvent::AgentResult` events.

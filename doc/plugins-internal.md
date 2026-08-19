@@ -166,7 +166,6 @@ pub fn register_plugin_agent_tools(
     shared_history: Arc<RwLock<String>>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     session_manager: Option<Arc<AcpSessionManager>>,
-    secondary_llm: Option<Arc<dyn LlmProvider>>,
     hermes_viewer_mode: HermesSessionViewerMode,
 ) -> Vec<String>;
 ```

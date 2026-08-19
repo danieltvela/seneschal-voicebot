@@ -248,13 +248,8 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | `AMBIENT_CLEAR_SECS` | `300` | Seconds in Ambient mode with no speech before auto-returning to Active |
 | `DAEMON_ENABLED` | `0` | Set to `1` to enable the inference daemon (background "is there anything worth saying?" loop) |
 | `DAEMON_INTERVAL_SECS` | `300` | Seconds between inference daemon checks |
-| `EYES_INTERVAL_SECS` | `0` | Seconds between screen-capture checks for EYES (0 = disabled). Requires SECONDARY_LLM_URL. |
-| `SECONDARY_LLM_URL` | — | Base URL for secondary LLM (vision, summarization, profile extraction). Unset = disabled. |
-| `SECONDARY_LLM_MODEL` | — | Model name for secondary LLM requests |
-| `SECONDARY_LLM_MAX_TOKENS` | `1024` | Max tokens for secondary LLM responses |
-| `SECONDARY_LLM_API_KEY` | _(empty)_ | Bearer token for secondary LLM API |
+| `EYES_INTERVAL_SECS` | `0` | Seconds between screen-capture checks for EYES (0 = disabled). |
 | `LLM_THINKING` | `0` | Enable Qwen3 thinking mode on main LLM (auto-strips thinking tags from output) |
-| `SECONDARY_LLM_THINKING` | `0` | Enable Qwen3 thinking mode on secondary LLM (auto-strips thinking tags) |
 | `MCP_COMMAND` | — | Command to spawn MCP server subprocess (e.g. `bunx apple-mcp@latest`). Unset = MCP disabled. |
 | `MCP_TOOL_TIMEOUT_SECS` | `30` | Hard timeout in seconds per MCP tool call |
 | `CONTROL_PORT` | — | HTTP/SSE control API port (requires `--features control`). Unset = disabled. |
@@ -722,7 +717,7 @@ Useful when the agent's API expects specific input formats, or when responses ar
 Triggered automatically at the end of each pipeline turn, after the assistant response is saved.
 
 - **Detection:** `chars / 3.5 > context_tokens * threshold_pct` — rough token estimate; threshold configurable via `LLM_CONSOLIDATION_THRESHOLD_PCT` (default 90%). Also triggered by idle timer (`LLM_IDLE_CONSOLIDATION_SECS`, default 30 min) when context exceeds `LLM_IDLE_MIN_CONTEXT_PCT`.
-- **Summarization:** one-shot LLM call routed to the secondary LLM if available (for GPU overlap), asking to summarize the old turns in the same language as the conversation
+- **Summarization:** one-shot LLM call asking to summarize the old turns in the same language as the conversation
 - **Compaction:** `LlmSession::apply_summary()` rebuilds `accumulated_prompt` as:
   ```
   <|im_start|>system
@@ -1369,7 +1364,7 @@ WAKE_WORD                 keyword to respond in ambient mode (default: "jarvis")
 | Kokoro TTS | ✅ Done | ONNX, 24 kHz, `--features kokoro`, selectable via `TTS_PROVIDER` |
 | CoreML STT encoder | ✅ Done | Neural Engine inference; `WHISPER_COREML=1`; requires `.mlmodelc` |
 | Background inference overlap | ✅ Done | `maybe_summarize` + `extract_facts` start while last TTS plays |
-| EYES visual awareness | ✅ Done | Periodic screen capture + secondary vision LLM; `EYES_INTERVAL_SECS` |
+| EYES visual awareness | ✅ Done | Periodic screen capture + vision LLM; `EYES_INTERVAL_SECS` |
 | Inference daemon | ✅ Done | `DAEMON_ENABLED`; background proactive check every N min |
 | MCP integration | ✅ Done | JSON-RPC 2.0 stdio client; dynamic tool discovery + proxy |
 | Agent delegation (subprocess + ACP) | ✅ Done | `cli` (subprocess) + `acp` (persistent JSON-RPC stdio) modes |

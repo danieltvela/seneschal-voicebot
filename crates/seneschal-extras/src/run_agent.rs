@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use seneschal_agents::agent_session::VisibleSessionManager;
+use seneschal_agents::session_manager::PREWARM_DRAIN_TIMEOUT_SECS;
 use seneschal_agents::{
     AcpSessionManager, AgentConfig, HttpAgentTransport, OpenCodeHttpTransport, SessionEvent,
     SessionEventTx,
@@ -19,9 +20,6 @@ use seneschal_agents::{
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::permission::PermissionGate;
 use seneschal_common::tools::Tool;
-
-use seneschal_core::llm::{LlmProvider, Message};
-use seneschal_core::pipeline::truncate_chars;
 
 // Re-imported for test code (AcpWriter was extracted to common)
 use seneschal_common::acp_writer::{jsonrpc_notification, jsonrpc_request, parse_jsonrpc};
@@ -107,58 +105,6 @@ fn strip_hermes_cli_noise(raw: &str) -> String {
 
 // ── JSON-RPC 2.0 helpers (now in seneschal-common) ──────────────────────────
 
-// ── Result synthesis ─────────────────────────────────────────────────────────
-
-/// Mark a result as "unprocessed agent output" when synthesis is unavailable
-/// or failed (issue #221). Genuine errors (`Agent error:`, `ACP …`) are
-/// already self-explanatory and pass through untouched; only the ambiguous
-/// case — the raw coordinator output (orientation text, milestones,
-/// "usando unknown" lines) — is wrapped so the model can say "el agente
-/// devolvió algo que no parece un resultado" instead of self-blame.
-fn mark_unprocessed(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.starts_with("Agent error:") || trimmed.starts_with("ACP") {
-        return raw.to_string();
-    }
-    let short = truncate_chars(trimmed, 2000);
-    format!(
-        "[Salida del agente (no procesada): {short}]\n\
-         El agente devolvió esta salida cruda; no parece un resultado final útil. \
-         Comunícalo al usuario de forma breve y neutral, sin atribuirte la causa."
-    )
-}
-
-/// Ask the secondary LLM to summarize a raw agent result into a concise,
-/// voice-ready response. Falls back to a marked, truncated copy of `raw` if
-/// synthesis fails or is not configured.
-async fn synthesize_agent_result(
-    task: &str,
-    raw: String,
-    client: Option<&dyn LlmProvider>,
-) -> String {
-    let Some(client) = client else {
-        return mark_unprocessed(&raw);
-    };
-    if raw.is_empty() || raw.starts_with("Agent error:") || raw.starts_with("ACP") {
-        return raw;
-    }
-    let prompt = format!(
-        "Tarea completada por el agente externo:\nTarea: {task}\nResultado:\n{raw}\n\n\
-         Resume en 2-3 frases concisas lo esencial para comunicarlo por voz. Solo el resumen."
-    );
-    match client.complete_short(&[Message::user(&prompt)]).await {
-        Ok(summary) if !summary.is_empty() => {
-            info!(target: "agent", "synthesize_agent_result: {} chars → {} chars", raw.len(), summary.len());
-            summary
-        }
-        Ok(_) => mark_unprocessed(&raw),
-        Err(e) => {
-            warn!(target: "agent", "synthesize_agent_result error: {}", e);
-            mark_unprocessed(&raw)
-        }
-    }
-}
-
 // ── RunAgentTool ──────────────────────────────────────────────────────────────
 
 /// Unified agent delegation tool.
@@ -176,7 +122,6 @@ pub struct RunAgentTool {
     config: AgentConfig,
     task_map: Arc<DashMap<String, ActiveTask>>,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
-    synthesis_client: Option<Arc<dyn LlmProvider>>,
     session_manager: Option<Arc<AcpSessionManager>>,
     opencode_transport: Option<Arc<OpenCodeHttpTransport>>,
     /// Shared permission gate. When set, any pending permission slots for the
@@ -217,7 +162,6 @@ impl RunAgentTool {
             config,
             task_map,
             proactive_tx,
-            synthesis_client: None,
             session_manager: None,
             opencode_transport: None,
             permission_gate: None,
@@ -241,12 +185,6 @@ impl RunAgentTool {
     /// Attach an optional session manager for persistent ACP sessions.
     pub fn with_session_manager(mut self, mgr: Arc<AcpSessionManager>) -> Self {
         self.session_manager = Some(mgr);
-        self
-    }
-
-    /// Attach a secondary LLM client for result synthesis.
-    pub fn with_synthesis(mut self, client: Arc<dyn LlmProvider>) -> Self {
-        self.synthesis_client = Some(client);
         self
     }
 
@@ -327,7 +265,6 @@ impl RunAgentTool {
         // ── OpenCode mode ─────────────────────────────────────────────────
         let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
-        let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
 
         tokio::spawn(async move {
@@ -395,13 +332,10 @@ impl RunAgentTool {
 
             info!(target: "opencode", "RunAgentTool(remote): task complete ({} chars)", result.len());
 
-            let final_result =
-                synthesize_agent_result(&task, result, synthesis_client.as_deref()).await;
-
             if proactive_tx
                 .send(ProactiveEvent::AgentResult {
                     task,
-                    result: final_result,
+                    result,
                     tool_call_id: None,
                     correlation_id: String::new(),
                 })
@@ -422,7 +356,6 @@ impl RunAgentTool {
     async fn run_remote_hermes(&self, transport: Arc<HttpAgentTransport>, task: String) -> String {
         let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
-        let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
         tokio::spawn(async move {
             info!(target: "hermes", "RunAgentTool(hermes): task started: {:?}", task);
@@ -491,13 +424,10 @@ impl RunAgentTool {
 
             info!(target: "hermes", "RunAgentTool(hermes): task complete ({} chars)", result.len());
 
-            let final_result =
-                synthesize_agent_result(&task, result, synthesis_client.as_deref()).await;
-
             if proactive_tx
                 .send(ProactiveEvent::AgentResult {
                     task,
-                    result: final_result,
+                    result,
                     tool_call_id: None,
                     correlation_id: String::new(),
                 })
@@ -522,7 +452,6 @@ impl RunAgentTool {
         };
         let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
-        let synthesis_client = self.synthesis_client.clone();
         let visible_mgr = match &self.visible_manager {
             Some(m) => Arc::clone(m),
             None => return "Error: Visible session manager not configured.".to_string(),
@@ -610,16 +539,11 @@ impl RunAgentTool {
             };
 
             info!(target: "agent", "RunAgentTool(visible): task complete ({} chars)", result.len());
-            let final_result = handle.block_on(synthesize_agent_result(
-                &task,
-                result,
-                synthesis_client.as_deref(),
-            ));
 
             if handle
                 .block_on(proactive_tx.send(ProactiveEvent::AgentResult {
                     task,
-                    result: final_result,
+                    result,
                     tool_call_id: None,
                     correlation_id: String::new(),
                 }))
@@ -642,13 +566,11 @@ impl RunAgentTool {
         };
         let query = build_agent_query(&task, &self.config.prompt);
         let proactive_tx = self.proactive_tx.clone();
-        let synthesis_client = self.synthesis_client.clone();
 
         tokio::spawn(async move {
             info!("RunAgentTool(cli): task started: {:?}", task);
-            let raw = call_agent(command, query).await;
-            info!("RunAgentTool(cli): task complete ({} chars)", raw.len());
-            let result = synthesize_agent_result(&task, raw, synthesis_client.as_deref()).await;
+            let result = call_agent(command, query).await;
+            info!("RunAgentTool(cli): task complete ({} chars)", result.len());
             if proactive_tx
                 .send(ProactiveEvent::AgentResult {
                     task,
@@ -679,7 +601,6 @@ impl RunAgentTool {
         let task_map = Arc::clone(&self.task_map);
         let proactive_tx = self.proactive_tx.clone();
         let acp_command = self.config.acp_command.clone();
-        let synthesis_client = self.synthesis_client.clone();
         let agent_name = self.config.name.clone();
         let config = self.config.clone();
         let session_mgr = self.session_manager.clone();
@@ -754,6 +675,17 @@ impl RunAgentTool {
             };
 
             let latency_start = std::time::Instant::now();
+
+            // ── Drain any pending warm-up response before the real prompt ─────
+            // The startup warm-up prompt (`prewarm_agent`) does not block on its
+            // own reply; if it is still buffered when the first task runs, those
+            // `agent_message_chunk` notifications (which carry no request id)
+            // would be appended to this task's accumulated result. Wait for and
+            // discard that response first (bounded by PREWARM_DRAIN_TIMEOUT_SECS).
+            if let Some(ref mgr) = session_mgr {
+                let drain_timeout = std::time::Duration::from_secs(PREWARM_DRAIN_TIMEOUT_SECS);
+                mgr.drain_pending_prewarm(&agent_name, drain_timeout).await;
+            }
 
             // ── Send prompt ───────────────────────────────────────────────────
             let send_result = {
@@ -873,12 +805,10 @@ impl RunAgentTool {
             task_map.remove(&task_id);
 
             info!(target: "acp", "Agent task complete [{}] — sending result ({} chars)", task_id, result.len());
-            let final_result =
-                synthesize_agent_result(&task_c, result, synthesis_client.as_deref()).await;
             if proactive_tx
                 .send(ProactiveEvent::AgentResult {
                     task: task_c,
-                    result: final_result,
+                    result,
                     tool_call_id: None,
                     correlation_id: String::new(),
                 })

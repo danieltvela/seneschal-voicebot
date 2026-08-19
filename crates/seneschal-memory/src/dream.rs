@@ -33,7 +33,7 @@ pub struct SDreamConfig {
 pub struct SDreamDaemon {
     pub config: SDreamConfig,
     pub db: Database,
-    pub secondary_client: Option<Arc<dyn LlmProvider>>,
+    pub client: Option<Arc<dyn LlmProvider>>,
     pub proactive_tx: mpsc::Sender<ProactiveEvent>,
     pub last_activity: Arc<AtomicU64>,
 }
@@ -215,8 +215,8 @@ impl SDreamDaemon {
             "Conversation text assembled for distillation"
         );
 
-        if let Some(client) = &self.secondary_client {
-            info!(target: "dream", "Secondary client present — starting distillation");
+        if let Some(client) = &self.client {
+            info!(target: "dream", "LLM client present — starting distillation");
 
             let facts = extract_facts(client.as_ref(), "", &conversation_text).await;
             info!(target: "dream", count = facts.len(), "Profile facts extracted");
@@ -284,7 +284,7 @@ impl SDreamDaemon {
             self.db.save_summary(session_id, &summary, max_id).await?;
             info!(target: "dream", max_id, "Summary saved to database");
         } else {
-            info!(target: "dream", "No secondary client available — skipping distillation (profile facts, memories, summary)");
+            info!(target: "dream", "No LLM client available — skipping distillation (profile facts, memories, summary)");
         }
 
         info!(target: "dream", "Detecting corrections");
@@ -453,7 +453,7 @@ mod tests {
                 jsonl_dir: "data/archives".to_string(),
             },
             db,
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         };
@@ -483,7 +483,7 @@ mod tests {
                 jsonl_dir: jsonl_dir.to_str().unwrap().to_string(),
             },
             db,
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         }
@@ -629,7 +629,7 @@ mod tests {
                 jsonl_dir: "data/archives".to_string(),
             },
             db,
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         };
@@ -654,7 +654,7 @@ mod tests {
                 jsonl_dir: "data/archives".to_string(),
             },
             db,
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         };
@@ -685,7 +685,7 @@ mod tests {
                 jsonl_dir: "data/archives".to_string(),
             },
             db,
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         };
@@ -734,7 +734,7 @@ mod tests {
                 jsonl_dir: jsonl_dir.path().to_str().unwrap().to_string(),
             },
             db: db.clone(),
-            secondary_client: Some(Arc::new(client)),
+            client: Some(Arc::new(client)),
             proactive_tx: tx,
             last_activity,
         };
@@ -769,7 +769,7 @@ mod tests {
                 jsonl_dir: jsonl_dir.path().to_str().unwrap().to_string(),
             },
             db: db.clone(),
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         };
@@ -804,7 +804,7 @@ mod tests {
                 jsonl_dir: jsonl_dir.path().to_str().unwrap().to_string(),
             },
             db: db.clone(),
-            secondary_client: None,
+            client: None,
             proactive_tx: tx,
             last_activity,
         };

@@ -417,24 +417,29 @@ impl AcpWriter {
     /// Send a warm-up prompt to the ACP session.
     /// Uses the agent's configured prompt to establish context and force model load.
     /// Falls back to a minimal ping if prompt_text is empty.
+    ///
+    /// Returns the JSON-RPC request id assigned to the prompt. The caller is
+    /// responsible for consuming the matching response (streaming chunks +
+    /// final `Response`) before sending any subsequent prompt, otherwise the
+    /// warm-up reply leaks into the next task's collected result.
     pub async fn warm_up(
         &mut self,
         session_id: &str,
         prompt_text: &str,
         timeout_secs: u64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u64> {
         let text = if prompt_text.is_empty() {
             "Hello, you are ready. Acknowledge with 'ready'.".to_string()
         } else {
             prompt_text.to_string()
         };
-        let _id = tokio::time::timeout(
+        let id = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             self.send_prompt(session_id, &text),
         )
         .await
         .map_err(|_| anyhow::anyhow!("ACP warm-up timed out after {timeout_secs}s"))??;
-        Ok(())
+        Ok(id)
     }
 
     /// Kill the subprocess (async).

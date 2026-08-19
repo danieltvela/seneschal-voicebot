@@ -47,7 +47,7 @@ use seneschal_core::audio::audio_transform::resample_nearest;
 use seneschal_core::audio::buffer::AudioBuffer;
 use seneschal_core::audio::output::AudioOutput;
 use seneschal_core::audio::speaker::SpeakerVerifier;
-use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
+use seneschal_core::llm::LlmSession;
 use seneschal_core::pipeline::{
     PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,
     check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
@@ -216,12 +216,6 @@ async fn async_main() -> Result<()> {
 
     // ── Standalone S-DREAM launch mode ────────────────────────────────────────
     if std::env::args().any(|a| a == "--dream") {
-        info!(
-            target: "llm",
-            "Secondary LLM endpoint: {} (model={})",
-            config.secondary_llm_url.as_deref().unwrap_or(""),
-            config.secondary_llm_model,
-        );
         return run_dream_mode(&config).await;
     }
 
@@ -229,30 +223,6 @@ async fn async_main() -> Result<()> {
     let (proactive_tx, proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
     // Per-session flag: ensures L1Saturated is emitted at most once.
     let l1_saturation_notified: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-
-    // ── Secondary LLM client ─────────────────────────────────────────────────
-    let secondary_llm_client: Option<Arc<dyn LlmProvider>> =
-        config.secondary_llm_url.as_ref().map(|url| {
-            let client: Arc<dyn LlmProvider> = Arc::new(
-                OpenAiLlmProvider::new(
-                    url,
-                    &config.secondary_llm_model,
-                    config.secondary_llm_max_tokens,
-                    0.3,
-                )
-                .with_api_key(&config.secondary_llm_api_key)
-                .with_thinking(config.secondary_llm_thinking),
-            );
-            client
-        });
-    if secondary_llm_client.is_some() {
-        info!(
-            target: "llm",
-            "Secondary LLM endpoint: {} (model={})",
-            config.secondary_llm_url.as_deref().unwrap_or(""),
-            config.secondary_llm_model,
-        );
-    }
 
     // ── Tools ─────────────────────────────────────────────────────────────────
     let mut tool_registry = ToolRegistry::new();
@@ -293,24 +263,14 @@ async fn async_main() -> Result<()> {
     // }
 
     // DISABLED (temp)
-    // if let Some(ref sec_client) = secondary_llm_client {
-    //     info!(
-    //         target: "seneschal",
-    //         "Vision tool enabled via secondary LLM (model={})",
-    //         config.secondary_llm_model,
-    //     );
-    //     tool_registry.register(TakeScreenshotTool::new(sec_client.clone()));
-    // }
+    // tool_registry.register(TakeScreenshotTool::new(llm_client.clone()));
+    // info!(target: "seneschal", "Vision tool enabled via primary LLM");
 
     // DISABLED (temp)
     // if config.web_search_enabled
     //     && let Some(ref searxng_url) = config.searxng_url
     // {
-    //     let mut wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
-    //     if let Some(ref sec) = secondary_llm_client {
-    //         wst = wst.with_synthesis(sec.clone());
-    //         info!(target: "seneschal", "web_search synthesis via secondary LLM enabled");
-    //     }
+    //     let wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
     //     tool_registry.register(wst);
     //     info!(target: "seneschal", "web_search tool enabled (url={})", searxng_url);
     // }
@@ -342,10 +302,6 @@ async fn async_main() -> Result<()> {
         // Issue #167: pass the shared gate so the agent task cancels any
         // pending permissions for its scope at the end of every ACP prompt.
         run_agent_tool = run_agent_tool.with_permission_gate(Arc::clone(&permission_gate));
-        if let Some(ref sec) = secondary_llm_client {
-            run_agent_tool = run_agent_tool.with_synthesis(sec.clone());
-            info!(target: "seneschal", "run_{} result synthesis via secondary LLM enabled", agent.name);
-        }
         if agent.mode == "remote" {
             if !agent.remote_url.is_empty() {
                 let mut transport =
@@ -594,7 +550,6 @@ async fn async_main() -> Result<()> {
                         &mut tool_registry,
                         proactive_tx.clone(),
                         Some(Arc::clone(&session_manager)),
-                        secondary_llm_client.clone(),
                     );
                     info!(
                         target: "plugin",
@@ -744,9 +699,7 @@ async fn async_main() -> Result<()> {
     let llm_client = seneschal_core::llm::create_provider(&config)?;
     info!(target: "llm", "LLM endpoint: {}", config.llm_url);
 
-    let background_client = secondary_llm_client
-        .clone()
-        .unwrap_or_else(|| llm_client.clone());
+    let background_client = llm_client.clone();
 
     // ── Inference daemon ──────────────────────────────────────────────────────
     if config.daemon_enabled {
@@ -766,26 +719,17 @@ async fn async_main() -> Result<()> {
 
     // ── EYES (visual awareness) ───────────────────────────────────────────────
     if config.eyes_interval_secs > 0 {
-        if let Some(ref sec_client) = secondary_llm_client {
-            info!(
-                target: "eyes",
-                "EYES enabled (interval={}s, model={})",
-                config.eyes_interval_secs,
-                config.secondary_llm_model,
-            );
-            seneschal_extras::eyes::EyesDaemon {
-                interval_secs: config.eyes_interval_secs,
-                vision_client: sec_client.clone(),
-                proactive_tx: proactive_tx.clone(),
-            }
-            .spawn();
-        } else {
-            warn!(
-                target: "eyes",
-                "EYES_INTERVAL_SECS={} but SECONDARY_LLM_URL is not set — EYES disabled",
-                config.eyes_interval_secs
-            );
+        info!(
+            target: "eyes",
+            "EYES enabled (interval={}s)",
+            config.eyes_interval_secs
+        );
+        seneschal_extras::eyes::EyesDaemon {
+            interval_secs: config.eyes_interval_secs,
+            vision_client: llm_client.clone(),
+            proactive_tx: proactive_tx.clone(),
         }
+        .spawn();
     }
 
     // ── STT + VAD unified processor ────────────────────────────────────────────
@@ -2433,28 +2377,15 @@ async fn async_main() -> Result<()> {
 /// Runs a single S-DREAM consolidation cycle and exits.
 ///
 /// This is the implementation of `cargo run -- --dream`. It constructs the
-/// minimum dependencies needed by the daemon (database, optional secondary
-/// LLM, proactive channel, idle tracker), runs one cycle, and returns so the
-/// process can terminate.
+/// minimum dependencies needed by the daemon (database, LLM client, proactive
+/// channel, idle tracker), runs one cycle, and returns so the process can
+/// terminate.
 async fn run_dream_mode(config: &Config) -> Result<()> {
     info!(target: "seneschal", "S-DREAM standalone mode");
 
     let db = Database::new(&config.db_path).await?;
 
-    let secondary_llm_client: Option<Arc<dyn LlmProvider>> =
-        config.secondary_llm_url.as_ref().map(|url| {
-            let client: Arc<dyn LlmProvider> = Arc::new(
-                OpenAiLlmProvider::new(
-                    url,
-                    &config.secondary_llm_model,
-                    config.secondary_llm_max_tokens,
-                    0.3,
-                )
-                .with_api_key(&config.secondary_llm_api_key)
-                .with_thinking(config.secondary_llm_thinking),
-            );
-            client
-        });
+    let llm_client = seneschal_core::llm::create_provider(config)?;
 
     let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
     let last_activity = Arc::new(AtomicU64::new(0));
@@ -2471,7 +2402,7 @@ async fn run_dream_mode(config: &Config) -> Result<()> {
     SDreamDaemon {
         config: dream_config,
         db,
-        secondary_client: secondary_llm_client,
+        client: Some(llm_client),
         proactive_tx,
         last_activity,
     }
