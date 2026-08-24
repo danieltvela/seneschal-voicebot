@@ -112,6 +112,7 @@ Reads `config.llm_provider` (env: `LLM_PROVIDER`). Currently only `"openai"` is 
 - `llm_temperature` → temperature
 - `llm_api_key` → API key (blank = no auth header)
 - `llm_thinking` → thinking mode
+- `llm_top_p`, `llm_top_k`, `llm_min_p`, `llm_presence_penalty`, `llm_repetition_penalty` → sampling params (via `with_sampling`)
 
 ## ThinkFilter (Reasoning Tag Stripping)
 
@@ -132,12 +133,17 @@ The `OpenAIClient` struct handles the low-level SSE HTTP protocol:
 ```rust
 pub struct OpenAIClient {
     client: reqwest::Client,
-    base_url: String,
+    chat_url: String,
     model: String,
     max_tokens: u32,
     temperature: f32,
     api_key: String,
     thinking: bool,
+    top_p: f32,
+    top_k: i32,
+    min_p: f32,
+    presence_penalty: f32,
+    repetition_penalty: f32,
 }
 ```
 

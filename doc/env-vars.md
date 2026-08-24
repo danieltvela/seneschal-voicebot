@@ -24,7 +24,17 @@ Read from `.env` (dotenvy loads automatically):
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
+| `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. |
+| `LLM_MODEL` | `qwen3.8-27b` | Model name sent in the `model` field of API requests. |
 | `LLM_MAX_TOKENS` | `400` | Max tokens per response |
+| `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
+| `LLM_TOP_P` | `0.8` | Sampling top-p (nucleus sampling threshold) |
+| `LLM_TOP_K` | `20` | Sampling top-k (only the K most likely tokens are considered) |
+| `LLM_MIN_P` | `0` | Sampling min-p (reject tokens with probability < min_p × top-token probability) |
+| `LLM_PRESENCE_PENALTY` | `1.5` | Presence penalty (discourages repeating tokens already present in the output) |
+| `LLM_REPETITION_PENALTY` | `1.0` | Repetition penalty (1.0 = disabled; >1.0 penalizes repeated tokens) |
+| `LLM_THINKING` | `false` | Enable Qwen3 thinking mode (`true` sends `chat_template_kwargs: {"enable_thinking": true}` and strips `think` blocks) |
+| `LLM_SYSTEM_PROMPT` | — | System prompt text |
 | `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |

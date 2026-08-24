@@ -381,9 +381,14 @@ All config is loaded from environment variables (`.env` file supported via `dote
 | `SENECHAL_LANGUAGE` | `es` | `es` or `en` — Whisper language + TTS voice |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Path to GGML model |
 | `LLM_URL` | `http://localhost:8000` | OpenAI-compatible endpoint (mlx-lm: 8000; oMLX: 8001) |
-| `LLM_MODEL` | — | Model name sent in API requests |
+| `LLM_MODEL` | `qwen3.8-27b` | Model name sent in API requests |
 | `LLM_MAX_TOKENS` | `1024` | Max tokens per response |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
+| `LLM_TOP_P` | `0.8` | Sampling top-p |
+| `LLM_TOP_K` | `20` | Sampling top-k |
+| `LLM_MIN_P` | `0` | Sampling min-p |
+| `LLM_PRESENCE_PENALTY` | `1.5` | Presence penalty |
+| `LLM_REPETITION_PENALTY` | `1.0` | Repetition penalty |
 | `LLM_SYSTEM_PROMPT` | — | System prompt text |
 | `LLM_CONTEXT_TOKENS` | `4096` | Triggers consolidation above 75% |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Verbatim turns kept after consolidation |

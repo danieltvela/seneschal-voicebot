@@ -113,6 +113,20 @@ impl OpenAiLlmProvider {
         self.inner = self.inner.with_thinking(thinking);
         self
     }
+
+    pub fn with_sampling(
+        mut self,
+        top_p: f32,
+        top_k: i32,
+        min_p: f32,
+        presence_penalty: f32,
+        repetition_penalty: f32,
+    ) -> Self {
+        self.inner =
+            self.inner
+                .with_sampling(top_p, top_k, min_p, presence_penalty, repetition_penalty);
+        self
+    }
 }
 
 #[async_trait]
@@ -159,7 +173,14 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn LlmProvider>> {
                 config.llm_temperature,
             )
             .with_api_key(&config.llm_api_key)
-            .with_thinking(config.llm_thinking);
+            .with_thinking(config.llm_thinking)
+            .with_sampling(
+                config.llm_top_p,
+                config.llm_top_k,
+                config.llm_min_p,
+                config.llm_presence_penalty,
+                config.llm_repetition_penalty,
+            );
             Ok(Arc::new(provider))
         }
         other => bail!("Invalid LLM_PROVIDER '{other}'. Supported values: openai"),

@@ -139,6 +139,16 @@ pub struct OpenAIClient {
     /// non-streaming requests and strip `<think>…</think>` blocks from the
     /// returned text.
     thinking: bool,
+    /// Sampling top-p sent in the request payload.
+    top_p: f32,
+    /// Sampling top-k sent in the request payload.
+    top_k: i32,
+    /// Sampling min-p sent in the request payload.
+    min_p: f32,
+    /// Presence penalty sent in the request payload.
+    presence_penalty: f32,
+    /// Repetition penalty sent in the request payload.
+    repetition_penalty: f32,
 }
 
 impl OpenAIClient {
@@ -159,6 +169,11 @@ impl OpenAIClient {
             temperature,
             api_key: String::new(),
             thinking: false,
+            top_p: 0.8,
+            top_k: 20,
+            min_p: 0.0,
+            presence_penalty: 1.5,
+            repetition_penalty: 1.0,
         }
     }
 
@@ -189,6 +204,23 @@ impl OpenAIClient {
         self
     }
 
+    /// Set sampling parameters sent in the request payload.
+    pub fn with_sampling(
+        mut self,
+        top_p: f32,
+        top_k: i32,
+        min_p: f32,
+        presence_penalty: f32,
+        repetition_penalty: f32,
+    ) -> Self {
+        self.top_p = top_p;
+        self.top_k = top_k;
+        self.min_p = min_p;
+        self.presence_penalty = presence_penalty;
+        self.repetition_penalty = repetition_penalty;
+        self
+    }
+
     /// Stream completion tokens from an OpenAI-compatible endpoint.
     ///
     /// Returns a channel receiver that yields text tokens as they arrive.
@@ -204,10 +236,12 @@ impl OpenAIClient {
             "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": options.temperature.unwrap_or(self.temperature),
-            "top_p": 0.90,
+            "top_p": self.top_p,
             "stream": true,
-            "repetition_penalty": 1.1,
-            "top_k": 40,
+            "repetition_penalty": self.repetition_penalty,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
+            "presence_penalty": self.presence_penalty,
         });
         let tool_choice_override = options.tool_choice.unwrap_or(ToolChoice::Auto);
 
@@ -531,10 +565,12 @@ impl OpenAIClient {
             "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": options.temperature.unwrap_or(self.temperature),
-            "top_p": 0.90,
+            "top_p": self.top_p,
             "stream": true,
-            "repetition_penalty": 1.1,
-            "top_k": 40,
+            "repetition_penalty": self.repetition_penalty,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
+            "presence_penalty": self.presence_penalty,
         });
         let tool_choice_override = options.tool_choice.unwrap_or(ToolChoice::Auto);
 
@@ -967,5 +1003,36 @@ mod tests {
         assert_eq!(payload["tool_choice"], serde_json::json!("auto"));
         assert!(payload.get("tools").is_some());
         assert!(payload.get("chat_template_kwargs").is_none());
+    }
+
+    fn assert_close_json(actual: &serde_json::Value, expected: f64) {
+        let got = actual.as_f64().unwrap();
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "expected {expected}, got {got}"
+        );
+    }
+
+    #[test]
+    fn sampling_params_in_payload() {
+        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.7)
+            .with_sampling(0.8, 20, 0.0, 1.5, 1.0);
+        let payload = client.build_stream_payload(&[], &[], RequestOptions::new());
+        assert_close_json(&payload["top_p"], 0.8);
+        assert_eq!(payload["top_k"], serde_json::json!(20));
+        assert_close_json(&payload["min_p"], 0.0);
+        assert_close_json(&payload["presence_penalty"], 1.5);
+        assert_close_json(&payload["repetition_penalty"], 1.0);
+    }
+
+    #[test]
+    fn sampling_params_default_values() {
+        let client = OpenAIClient::new("http://127.0.0.1:0", "test", 512, 0.7);
+        let payload = client.build_stream_payload(&[], &[], RequestOptions::new());
+        assert_close_json(&payload["top_p"], 0.8);
+        assert_eq!(payload["top_k"], serde_json::json!(20));
+        assert_close_json(&payload["min_p"], 0.0);
+        assert_close_json(&payload["presence_penalty"], 1.5);
+        assert_close_json(&payload["repetition_penalty"], 1.0);
     }
 }

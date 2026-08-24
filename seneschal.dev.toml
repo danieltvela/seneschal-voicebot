@@ -45,7 +45,7 @@ stt_compression_threshold = 2.4
 llm_provider = "openai"
 llm_url = "http://127.0.0.1:8000"
 llm_api_key = ""
-llm_model = "local-model"
+llm_model = "qwen3.8-27b"
 llm_max_tokens = 400
 llm_system_prompt = """Eres el mayordomo digital de Daniel.
 
@@ -76,7 +76,12 @@ REGLAS
 - Si la petición es ambigua, da la interpretación más probable en una frase y detente.
 - Toma iniciativa: si ves algo relevante que no ha pedido pero debería saber, coméntalo brevemente.
 - Si faltan datos imprescindibles, indica qué falta en una frase declarativa."""
-llm_temperature = 0.5
+llm_temperature = 0.7
+llm_top_p = 0.8
+llm_top_k = 20
+llm_min_p = 0.0
+llm_presence_penalty = 1.5
+llm_repetition_penalty = 1.0
 llm_thinking = false
 llm_complex_keywords = []   # vacío = usar defaults del clasificador
 classifier_confidence_threshold = 0.6

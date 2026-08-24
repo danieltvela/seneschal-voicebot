@@ -1378,7 +1378,7 @@ create_env() {
     # LLM block depends on provider choice from configure_llm_provider()
     case "${_LLM_CHOICE:-own}" in
         "own")
-            _llm_config="llm_model = \"${_LLM_MODEL:-local-model}\"
+            _llm_config="llm_model = \"${_LLM_MODEL:-qwen3.8-27b}\"
 llm_url = \"${_LLM_URL:-http://127.0.0.1:8000}\""
             if [ -n "${_LLM_API_KEY:-}" ]; then
                 _llm_config="${_llm_config}

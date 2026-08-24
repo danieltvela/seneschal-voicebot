@@ -214,10 +214,15 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | `WHISPER_COREML` | `0` | Set to `1` to use CoreML encoder (Neural Engine); requires `.mlmodelc` alongside the `.bin` |
 | `LLM_URL` | `http://localhost:8000` | LLM server base URL. mlx-lm default: port 8000; oMLX default: port 8001 |
 | `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>` on all `/v1/chat/completions` calls. Leave unset for local servers that require no auth |
-| `LLM_MODEL` | `local-model` | Model name sent in API requests |
+| `LLM_MODEL` | `qwen3.8-27b` | Model name sent in API requests |
 | `LLM_SYSTEM_PROMPT` | — | System prompt for the LLM |
 | `LLM_MAX_TOKENS` | `1024` | Max generation tokens per response |
 | `LLM_TEMPERATURE` | `0.7` | LLM sampling temperature |
+| `LLM_TOP_P` | `0.8` | Sampling top-p (nucleus sampling threshold) |
+| `LLM_TOP_K` | `20` | Sampling top-k (only the K most likely tokens are considered) |
+| `LLM_MIN_P` | `0` | Sampling min-p (reject tokens with probability < min_p × top-token probability) |
+| `LLM_PRESENCE_PENALTY` | `1.5` | Presence penalty (discourages repeating tokens already present in the output) |
+| `LLM_REPETITION_PENALTY` | `1.0` | Repetition penalty (1.0 = disabled; >1.0 penalizes repeated tokens) |
 | `LLM_CONTEXT_TOKENS` | `4096` | Approximate context window size in tokens |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `90` | Percentage of context window that triggers consolidation (default 90%) |
 | `LLM_IDLE_CONSOLIDATION_SECS` | `1800` | Seconds of inactivity before silent consolidation runs (0 = disabled) |

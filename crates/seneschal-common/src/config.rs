@@ -190,6 +190,16 @@ pub struct Config {
     pub llm_max_tokens: u32,
     pub llm_system_prompt: String,
     pub llm_temperature: f32,
+    /// Sampling top-p (LLM_TOP_P, default 0.8)
+    pub llm_top_p: f32,
+    /// Sampling top-k (LLM_TOP_K, default 20)
+    pub llm_top_k: i32,
+    /// Sampling min-p (LLM_MIN_P, default 0.0)
+    pub llm_min_p: f32,
+    /// Presence penalty (LLM_PRESENCE_PENALTY, default 1.5)
+    pub llm_presence_penalty: f32,
+    /// Repetition penalty (LLM_REPETITION_PENALTY, default 1.0)
+    pub llm_repetition_penalty: f32,
     /// Enable Qwen3 thinking mode on the main LLM (LLM_THINKING, default false).
     /// When true, `chat_template_kwargs: {"enable_thinking": true}` is sent and
     /// `<think>…</think>` blocks are stripped from the output.
@@ -648,6 +658,21 @@ impl Config {
         if let Ok(v) = env::var("LLM_TEMPERATURE") {
             self.llm_temperature = v.parse().context("Invalid LLM_TEMPERATURE")?;
         }
+        if let Ok(v) = env::var("LLM_TOP_P") {
+            self.llm_top_p = v.parse().context("Invalid LLM_TOP_P")?;
+        }
+        if let Ok(v) = env::var("LLM_TOP_K") {
+            self.llm_top_k = v.parse().context("Invalid LLM_TOP_K")?;
+        }
+        if let Ok(v) = env::var("LLM_MIN_P") {
+            self.llm_min_p = v.parse().context("Invalid LLM_MIN_P")?;
+        }
+        if let Ok(v) = env::var("LLM_PRESENCE_PENALTY") {
+            self.llm_presence_penalty = v.parse().context("Invalid LLM_PRESENCE_PENALTY")?;
+        }
+        if let Ok(v) = env::var("LLM_REPETITION_PENALTY") {
+            self.llm_repetition_penalty = v.parse().context("Invalid LLM_REPETITION_PENALTY")?;
+        }
 
         // TTS
         if let Ok(v) = env::var("TTS_PROVIDER") {
@@ -1024,6 +1049,44 @@ mod tests {
         with_vars([("SPEAKER_ENABLED", Some("true"))], || {
             let config = Config::from_env().unwrap();
             assert!(config.speaker_enabled);
+        });
+    }
+
+    #[test]
+    fn llm_sampling_params_from_env() {
+        use temp_env::with_vars;
+        with_vars(
+            [
+                ("LLM_TOP_P", Some("0.95")),
+                ("LLM_TOP_K", Some("50")),
+                ("LLM_MIN_P", Some("0.05")),
+                ("LLM_PRESENCE_PENALTY", Some("0.5")),
+                ("LLM_REPETITION_PENALTY", Some("1.2")),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert!((config.llm_top_p - 0.95).abs() < 1e-6);
+                assert_eq!(config.llm_top_k, 50);
+                assert!((config.llm_min_p - 0.05).abs() < 1e-6);
+                assert!((config.llm_presence_penalty - 0.5).abs() < 1e-6);
+                assert!((config.llm_repetition_penalty - 1.2).abs() < 1e-6);
+            },
+        );
+    }
+
+    #[test]
+    fn llm_sampling_params_defaults() {
+        use temp_env::with_vars;
+        with_vars(&[] as &[(&str, Option<&str>); 0], || {
+            let config = Config::from_env().unwrap();
+            // Defaults from embedded seneschal.pro.toml
+            assert!((config.llm_top_p - 0.8).abs() < 1e-6);
+            assert_eq!(config.llm_top_k, 20);
+            assert!((config.llm_min_p - 0.0).abs() < 1e-6);
+            assert!((config.llm_presence_penalty - 1.5).abs() < 1e-6);
+            assert!((config.llm_repetition_penalty - 1.0).abs() < 1e-6);
+            assert_eq!(config.llm_model, "qwen3.8-27b");
+            assert!((config.llm_temperature - 0.7).abs() < 1e-6);
         });
     }
 }

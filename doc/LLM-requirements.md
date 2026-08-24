@@ -383,9 +383,14 @@ Daemon en background:
 |--------|---------|---------|-------------|
 | `llm_url` | `LLM_URL` | `http://127.0.0.1:8000` | URL del servidor |
 | `llm_api_key` | `LLM_API_KEY` | `""` | Bearer token |
-| `llm_model` | `LLM_MODEL` | `"local-model"` | Nombre del modelo |
+| `llm_model` | `LLM_MODEL` | `"qwen3.8-27b"` | Nombre del modelo |
 | `llm_max_tokens` | `LLM_MAX_TOKENS` | 400 | Max tokens por respuesta |
-| `llm_temperature` | `LLM_TEMPERATURE` | 0.3 | Sampling temp |
+| `llm_temperature` | `LLM_TEMPERATURE` | 0.7 | Sampling temp |
+| `llm_top_p` | `LLM_TOP_P` | 0.8 | Sampling top-p |
+| `llm_top_k` | `LLM_TOP_K` | 20 | Sampling top-k |
+| `llm_min_p` | `LLM_MIN_P` | 0.0 | Sampling min-p |
+| `llm_presence_penalty` | `LLM_PRESENCE_PENALTY` | 1.5 | Presence penalty |
+| `llm_repetition_penalty` | `LLM_REPETITION_PENALTY` | 1.0 | Repetition penalty |
 | `llm_thinking` | `LLM_THINKING` | false | Qwen3 thinking mode |
 | `llm_context_tokens` | `LLM_CONTEXT_TOKENS` | 8192 | Tamano de contexto |
 | `llm_summary_keep_turns` | `LLM_SUMMARY_KEEP_TURNS` | 6 | Turnos a conservar tras consolidacion |
