@@ -213,12 +213,13 @@ fn extract_correction_clause(original: &str, trigger: &str) -> String {
     if let Some(pos) = lower.find(trigger) {
         let after = &original[pos + trigger.len()..].trim();
         let clipped = if after.len() > 120 {
-            match after[..120].rfind(['.', '!', '?']) {
-                Some(end) => &after[..=end],
-                None => &after[..120],
+            let limit: String = after.chars().take(120).collect();
+            match limit.rfind(['.', '!', '?']) {
+                Some(end) => after[..=end].to_string(),
+                None => limit,
             }
         } else {
-            after
+            after.to_string()
         };
         clipped.trim().to_string()
     } else {

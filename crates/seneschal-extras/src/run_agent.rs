@@ -621,7 +621,7 @@ impl RunAgentTool {
                                 task: task_c,
                                 result: format!("ACP session error: {e}"),
                                 tool_call_id: None,
-                                correlation_id: String::new(),
+                                correlation_id: task_id.clone(),
                             })
                             .await;
                         return;
@@ -642,7 +642,7 @@ impl RunAgentTool {
                                 task: task_c,
                                 result: format!("ACP spawn error: {e}"),
                                 tool_call_id: None,
-                                correlation_id: String::new(),
+                                correlation_id: task_id.clone(),
                             })
                             .await;
                         return;
@@ -662,7 +662,7 @@ impl RunAgentTool {
                                 task: task_c,
                                 result: format!("ACP init error: {e}"),
                                 tool_call_id: None,
-                                correlation_id: String::new(),
+                                correlation_id: task_id.clone(),
                             })
                             .await;
                         return;
@@ -673,6 +673,16 @@ impl RunAgentTool {
                 session_id = sid;
                 true
             };
+
+            // ── Announce the task to the UI (task-level identity) ───────────
+            if let Some(tx) = &session_event_tx {
+                let _ = tx.try_send(SessionEvent::TaskStarted {
+                    agent_name: agent_name.clone(),
+                    session_id: session_id.clone(),
+                    task_id: task_id.clone(),
+                    task_text: task_c.clone(),
+                });
+            }
 
             let latency_start = std::time::Instant::now();
 
@@ -706,7 +716,7 @@ impl RunAgentTool {
                             task: task_c,
                             result: format!("ACP send error: {e}"),
                             tool_call_id: None,
-                            correlation_id: String::new(),
+                            correlation_id: task_id.clone(),
                         })
                         .await;
                     return;
@@ -810,7 +820,7 @@ impl RunAgentTool {
                     task: task_c,
                     result,
                     tool_call_id: None,
-                    correlation_id: String::new(),
+                    correlation_id: task_id.clone(),
                 })
                 .await
                 .is_err()
@@ -1125,11 +1135,7 @@ async fn collect_acp_response(
                 let tool_call = &params["toolCall"];
                 let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
                 let description = if let Some(input) = tool_call["input"].as_str() {
-                    let truncated = if input.len() > 200 {
-                        format!("{}...", &input[..200])
-                    } else {
-                        input.to_string()
-                    };
+                    let truncated = seneschal_core::pipeline::truncate_chars(input, 200);
                     format!("{tool_name}: {truncated}")
                 } else {
                     tool_name.to_string()
@@ -1655,18 +1661,35 @@ mod tests {
         let tool_call = &params["toolCall"];
         let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
         let description = if let Some(input) = tool_call["input"].as_str() {
-            let truncated = if input.len() > 200 {
-                format!("{}...", &input[..200])
-            } else {
-                input.to_string()
-            };
+            let truncated = seneschal_core::pipeline::truncate_chars(input, 200);
             format!("{tool_name}: {truncated}")
         } else {
             tool_name.to_string()
         };
         assert!(description.starts_with("bash: "));
-        assert!(description.ends_with("..."));
+        assert!(description.ends_with('…'));
         assert_eq!(description.len(), "bash: ".len() + 200 + 3);
+    }
+
+    #[test]
+    fn permission_description_truncates_non_ascii_without_panic() {
+        let long_arg = "héllo wörld ünïcode – 1234".repeat(20);
+        let params = serde_json::json!({
+            "toolCall": {
+                "name": "bash",
+                "input": long_arg
+            }
+        });
+        let tool_call = &params["toolCall"];
+        let tool_name = tool_call["name"].as_str().unwrap_or("acción desconocida");
+        let description = if let Some(input) = tool_call["input"].as_str() {
+            let truncated = seneschal_core::pipeline::truncate_chars(input, 200);
+            format!("{tool_name}: {truncated}")
+        } else {
+            tool_name.to_string()
+        };
+        assert!(description.starts_with("bash: "));
+        assert!(description.ends_with('…'));
     }
 
     // ── Permission options enrichment ─────────────────────────────────────────

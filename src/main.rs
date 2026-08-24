@@ -278,7 +278,14 @@ async fn async_main() -> Result<()> {
     // ── Agent delegation (multi-agent registry) ───────────────────────────────
     let agent_registry = AgentRegistry::from_config_and_env(config.agents.clone());
     let agent_section = agent_registry.system_prompt_section();
+    // Session event channel: the manager and run_acp emit lifecycle/interaction
+    // events here; the TUI/Control bridge below consumes the receiver. Must be
+    // set before wrapping in Arc (set_event_tx takes &mut self).
+    let (session_event_tx, session_event_rx) = seneschal_agents::create_session_event_channel();
+    #[cfg(not(any(feature = "tui", feature = "control")))]
+    let _ = session_event_rx;
     let mut session_manager_inner = AcpSessionManager::new();
+    session_manager_inner.set_event_tx(session_event_tx);
     let session_manager = Arc::new(session_manager_inner);
     let visible_session_manager = Arc::new(VisibleSessionManager::new());
 
@@ -1129,7 +1136,7 @@ async fn async_main() -> Result<()> {
     // ── Bridge ACP session events → TUI + Control agent task events ───────────
     #[cfg(any(feature = "tui", feature = "control"))]
     {
-        let mut session_rx = session_manager.create_event_listener();
+        let mut session_rx = session_event_rx;
         #[cfg(feature = "tui")]
         let tui_tx_bridge = tui_tx.clone();
         #[cfg(feature = "control")]
@@ -1138,13 +1145,25 @@ async fn async_main() -> Result<()> {
             use seneschal_agents::session_manager::{SessionEvent, SessionStatus};
             let mut buffers: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // session_id → task_id (per-task UUID) so follow-up prompts and
+            // session-level status events can be tied to the current task row.
+            let mut session_tasks: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             while let Some(event) = session_rx.recv().await {
                 // Map to a small internal enum so both surfaces stay in lockstep.
+                // task_id is the per-task UUID wherever available (TaskStarted,
+                // ToolCall, ToolResult, AgentMessage, UserMessage, Error carry
+                // correlation_id = task UUID); it falls back to the persistent
+                // session_id only for legacy/unknown emitters.
                 enum AgentUi {
                     Started {
                         task_id: String,
                         agent_name: String,
                         objective: String,
+                    },
+                    Prompt {
+                        task_id: String,
+                        text: String,
                     },
                     Running {
                         task_id: String,
@@ -1161,58 +1180,85 @@ async fn async_main() -> Result<()> {
                 }
 
                 let mapped = match &event {
-                    SessionEvent::Status {
+                    // Task-level identity: each delegation gets its own UUID,
+                    // so every task gets its own TUI row even on a persistent
+                    // session.
+                    SessionEvent::TaskStarted {
                         agent_name,
+                        session_id,
+                        task_id,
+                        task_text,
+                    } => {
+                        session_tasks.insert(session_id.clone(), task_id.clone());
+                        Some(AgentUi::Started {
+                            task_id: task_id.clone(),
+                            agent_name: agent_name.clone(),
+                            objective: seneschal_core::pipeline::truncate_chars(task_text, 120),
+                        })
+                    }
+                    SessionEvent::Status {
+                        agent_name: _,
                         session_id,
                         status,
                         ..
                     } => match status {
-                        SessionStatus::Started => Some(AgentUi::Started {
-                            task_id: session_id.clone(),
-                            agent_name: agent_name.clone(),
-                            objective: String::new(),
-                        }),
-                        SessionStatus::Busy => Some(AgentUi::Running {
-                            task_id: session_id.clone(),
-                            objective: String::new(),
-                        }),
-                        SessionStatus::Done => Some(AgentUi::Finalizing {
-                            task_id: session_id.clone(),
-                            objective: String::new(),
-                        }),
-                        SessionStatus::Error => Some(AgentUi::Failed {
-                            task_id: session_id.clone(),
-                            message: "Error de sesión ACP".to_string(),
-                        }),
+                        // Busy is announced by TaskStarted; Idle/Started/
+                        // NeedsInput/Closed are not displayed.
+                        SessionStatus::Busy => None,
+                        SessionStatus::Done => {
+                            session_tasks
+                                .get(session_id)
+                                .map(|task_id| AgentUi::Finalizing {
+                                    task_id: task_id.clone(),
+                                    objective: String::new(),
+                                })
+                        }
+                        SessionStatus::Error => {
+                            session_tasks
+                                .get(session_id)
+                                .map(|task_id| AgentUi::Failed {
+                                    task_id: task_id.clone(),
+                                    message: "Error de sesión ACP".to_string(),
+                                })
+                        }
                         _ => None,
                     },
                     SessionEvent::ToolCall {
                         agent_name: _,
                         session_id,
                         tool_name,
+                        correlation_id,
                         ..
                     } => Some(AgentUi::Running {
-                        task_id: session_id.clone(),
+                        task_id: if correlation_id.is_empty() {
+                            session_id.clone()
+                        } else {
+                            correlation_id.clone()
+                        },
                         objective: format!("llamando a {tool_name}..."),
                     }),
                     SessionEvent::ToolResult {
                         session_id,
                         tool_name,
                         result,
+                        correlation_id,
                         ..
                     } => {
-                        let summary = if result.len() > 80 {
-                            format!("{}...", &result[..80])
-                        } else {
-                            result.clone()
-                        };
+                        let summary = seneschal_core::pipeline::truncate_chars(&result, 80);
                         Some(AgentUi::Running {
-                            task_id: session_id.clone(),
+                            task_id: if correlation_id.is_empty() {
+                                session_id.clone()
+                            } else {
+                                correlation_id.clone()
+                            },
                             objective: format!("✅ {tool_name}: {summary}"),
                         })
                     }
                     SessionEvent::AgentMessage {
-                        session_id, text, ..
+                        session_id,
+                        text,
+                        correlation_id,
+                        ..
                     } => {
                         let buf = buffers.entry(session_id.clone()).or_default();
                         buf.push_str(text);
@@ -1226,22 +1272,49 @@ async fn async_main() -> Result<()> {
                             let msg = buf.clone();
                             buf.clear();
                             Some(AgentUi::Running {
-                                task_id: session_id.clone(),
+                                task_id: if correlation_id.is_empty() {
+                                    session_id.clone()
+                                } else {
+                                    correlation_id.clone()
+                                },
                                 objective: msg,
                             })
                         } else {
                             None
                         }
                     }
+                    // Prompt sent to the subagent (outbound user→agent message).
+                    SessionEvent::UserMessage {
+                        session_id,
+                        text,
+                        correlation_id,
+                        ..
+                    } => {
+                        let task_id = if !correlation_id.is_empty() {
+                            correlation_id.clone()
+                        } else if let Some(task_id) = session_tasks.get(session_id) {
+                            task_id.clone()
+                        } else {
+                            session_id.clone()
+                        };
+                        Some(AgentUi::Prompt {
+                            task_id,
+                            text: seneschal_core::pipeline::truncate_chars(text, 200),
+                        })
+                    }
                     SessionEvent::Error {
                         session_id,
                         message,
+                        correlation_id,
                         ..
                     } => Some(AgentUi::Failed {
-                        task_id: session_id.clone(),
+                        task_id: if correlation_id.is_empty() {
+                            session_id.clone()
+                        } else {
+                            correlation_id.clone()
+                        },
                         message: message.clone(),
                     }),
-                    _ => None,
                 };
 
                 if let Some(ui) = mapped {
@@ -1257,6 +1330,12 @@ async fn async_main() -> Result<()> {
                                 agent_name: agent_name.clone(),
                                 objective: objective.clone(),
                             },
+                            AgentUi::Prompt { task_id, text } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskPrompt {
+                                    task_id: task_id.clone(),
+                                    text: text.clone(),
+                                }
+                            }
                             AgentUi::Running { task_id, objective } => {
                                 seneschal_tui::events::TuiEvent::AgentTaskRunning {
                                     task_id: task_id.clone(),
@@ -1285,27 +1364,32 @@ async fn async_main() -> Result<()> {
                     #[cfg(feature = "control")]
                     {
                         use seneschal_control::control::broadcast::ControlEvent;
+                        // AgentTaskPrompt is TUI-only; the Control wire
+                        // protocol keeps the existing lifecycle event set.
                         let ctrl_ev = match ui {
                             AgentUi::Started {
                                 task_id,
                                 agent_name,
                                 objective,
-                            } => ControlEvent::AgentTaskStarted {
+                            } => Some(ControlEvent::AgentTaskStarted {
                                 task_id,
                                 agent_name,
                                 objective,
-                            },
+                            }),
                             AgentUi::Running { task_id, objective } => {
-                                ControlEvent::AgentTaskRunning { task_id, objective }
+                                Some(ControlEvent::AgentTaskRunning { task_id, objective })
                             }
                             AgentUi::Finalizing { task_id, objective } => {
-                                ControlEvent::AgentTaskFinalizing { task_id, objective }
+                                Some(ControlEvent::AgentTaskFinalizing { task_id, objective })
                             }
                             AgentUi::Failed { task_id, message } => {
-                                ControlEvent::AgentTaskFailed { task_id, message }
+                                Some(ControlEvent::AgentTaskFailed { task_id, message })
                             }
+                            AgentUi::Prompt { .. } => None,
                         };
-                        ctrl_bridge.send(ctrl_ev);
+                        if let Some(ctrl_ev) = ctrl_ev {
+                            ctrl_bridge.send(ctrl_ev);
+                        }
                     }
                 }
             }
@@ -1658,37 +1742,87 @@ async fn async_main() -> Result<()> {
                         },
                         Some(event) = proactive_rx.recv() => {
                             match event {
-    ProactiveEvent::AgentResult { task, result, tool_call_id, .. } => {
+    ProactiveEvent::AgentResult {
+                                    task,
+                                    result,
+                                    tool_call_id,
+                                    correlation_id,
+                                } => {
                                     // Stop background processing sound
                                     filler_controller.stop();
 
-                                    #[cfg(feature = "tui")]
-                                    {
-                                        let tui_task = task.clone();
-                                        let tui_result = result.clone();
-                                        tui_tx
-                                            .send(seneschal_tui::events::TuiEvent::AgentTaskCompleted {
-                                                task_id: tui_task.clone(),
-                                                objective: tui_task,
-                                                result: tui_result,
-                                            })
-                                            .ok();
-                                    }
-                                    #[cfg(feature = "control")]
-                                    {
-                                        const MAX_RESULT: usize = 32 * 1024;
-                                        let wire_result = if result.len() > MAX_RESULT {
-                                            format!("{}…[truncated]", &result[..MAX_RESULT])
+                                    // Only real results (no tool_call_id) are shown as agent-task
+                                    // completion/failed. The `bg_` placeholder from a background
+                                    // tool call arrives as its own event, and the gray Tool row
+                                    // already shows the delegation ack.
+                                    let is_real = tool_call_id.is_none();
+                                    if is_real {
+                                        let task_key = if correlation_id.is_empty() {
+                                            task.clone()
                                         } else {
-                                            result.clone()
+                                            correlation_id.clone()
                                         };
-                                        control_broadcast.send(
-                                            seneschal_control::control::broadcast::ControlEvent::AgentTaskCompleted {
-                                                task_id: task.clone(),
-                                                objective: task.clone(),
-                                                result: wire_result,
-                                            },
-                                        );
+                                        const ERROR_PREFIXES: &[&str] = &[
+                                            "ACP error:",
+                                            "ACP spawn error:",
+                                            "ACP init error:",
+                                            "ACP send error:",
+                                            "Agent error:",
+                                            "Hermes",
+                                            "Visible session error:",
+                                            "Visible agent send error:",
+                                            "OpenCode session error:",
+                                        ];
+                                        let is_error = ERROR_PREFIXES
+                                            .iter()
+                                            .any(|p| result.starts_with(p));
+                                        #[cfg(feature = "tui")]
+                                        {
+                                            if is_error {
+                                                tui_tx
+                                                    .send(seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                                                        task_id: task_key.clone(),
+                                                        message: result.clone(),
+                                                    })
+                                                    .ok();
+                                            } else {
+                                                tui_tx
+                                                    .send(
+                                                        seneschal_tui::events::TuiEvent::AgentTaskCompleted {
+                                                            task_id: task_key.clone(),
+                                                            objective: task.clone(),
+                                                            result: result.clone(),
+                                                        },
+                                                    )
+                                                    .ok();
+                                            }
+                                        }
+                                        #[cfg(feature = "control")]
+                                        {
+                                            use seneschal_control::control::broadcast::ControlEvent;
+                                            const MAX_RESULT: usize = 32 * 1024;
+                                            let wire_result = if result.len() > MAX_RESULT {
+                                                format!(
+                                                    "{}…[truncated]",
+                                                    &result[..MAX_RESULT]
+                                                )
+                                            } else {
+                                                result.clone()
+                                            };
+                                            let ctrl_ev = if is_error {
+                                                ControlEvent::AgentTaskFailed {
+                                                    task_id: task_key,
+                                                    message: wire_result,
+                                                }
+                                            } else {
+                                                ControlEvent::AgentTaskCompleted {
+                                                    task_id: task_key,
+                                                    objective: task.clone(),
+                                                    result: wire_result,
+                                                }
+                                            };
+                                            control_broadcast.send(ctrl_ev);
+                                        }
                                     }
 
                                     if let Some(id) = tool_call_id {

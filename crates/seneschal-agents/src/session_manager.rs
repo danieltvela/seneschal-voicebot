@@ -61,6 +61,14 @@ pub enum SessionEvent {
         message: String,
         correlation_id: String,
     },
+    /// A new task started on a session. Carries task-level identity (the task
+    /// UUID, distinct from the persistent session_id).
+    TaskStarted {
+        agent_name: String,
+        session_id: String,
+        task_id: String,
+        task_text: String,
+    },
 }
 
 /// Human-readable session status.
@@ -1211,6 +1219,39 @@ mod tests {
                 assert_eq!(agent_name, "hermes");
                 assert_eq!(session_id, "emit-sid");
                 assert_eq!(status, SessionStatus::Busy);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// Regression: run_acp sends TaskStarted/UserMessage directly through
+    /// `event_sender()` rather than `emit()`. Verify such events reach the
+    /// channel wired in main.rs via `set_event_tx`.
+    #[tokio::test]
+    async fn direct_event_sender_reaches_main_channel() {
+        let (tx, mut rx) = create_session_event_channel();
+        let mut mgr = AcpSessionManager::new();
+        mgr.set_event_tx(tx);
+        let mgr = std::sync::Arc::new(mgr);
+
+        // Same access pattern as run_acp:
+        let sender = mgr.event_sender().expect("event_tx must be set");
+        sender
+            .try_send(SessionEvent::TaskStarted {
+                agent_name: "hermes".into(),
+                session_id: "sid-1".into(),
+                task_id: "task-uuid-1".into(),
+                task_text: "fix the bug".into(),
+            })
+            .expect("channel has capacity");
+
+        let ev = rx.recv().await.expect("event must reach the main channel");
+        match ev {
+            SessionEvent::TaskStarted {
+                task_id, task_text, ..
+            } => {
+                assert_eq!(task_id, "task-uuid-1");
+                assert_eq!(task_text, "fix the bug");
             }
             other => panic!("unexpected event: {other:?}"),
         }

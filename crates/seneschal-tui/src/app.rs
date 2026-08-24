@@ -47,6 +47,9 @@ pub struct AgentTaskInfo {
     pub agent_name: String,
     pub status: AgentTaskStatus,
     pub options: Vec<String>,
+    /// Chronological interaction log for this task (prompt, tool calls, agent
+    /// messages, result). `content` always mirrors the last entry.
+    pub entries: Vec<String>,
 }
 
 /// A clickable segment of the status bar.
@@ -251,11 +254,7 @@ impl App {
                 self.messages.push(ChatMessage::new(Role::System, text));
             }
             TuiEvent::ToolCall { name, result } => {
-                let short = if result.len() > 120 {
-                    format!("{}...", &result[..120])
-                } else {
-                    result
-                };
+                let short = seneschal_core::pipeline::truncate_chars(&result, 120);
                 self.messages
                     .push(ChatMessage::new(Role::Tool, format!("{name} -> {short}")));
             }
@@ -299,19 +298,22 @@ impl App {
                 self.messages.push(ChatMessage::agent_task(
                     AgentTaskInfo {
                         task_id,
-                        agent_name: agent_name.clone(),
+                        agent_name,
                         status: AgentTaskStatus::Started,
                         options: vec![],
+                        entries: vec![objective.clone()],
                     },
-                    format!("[{agent_name}] {objective}"),
+                    objective,
                 ));
             }
-            TuiEvent::AgentTaskRunning { task_id, objective } => {
+            TuiEvent::AgentTaskPrompt { task_id, text } => {
+                let line = format!("» {text}");
                 if let Some(msg) = self.find_agent_task_mut(&task_id) {
-                    if let Some(ref mut info) = msg.agent_task {
+                    if let Some(info) = &mut msg.agent_task {
                         info.status = AgentTaskStatus::Running;
+                        info.entries.push(line.clone());
                     }
-                    msg.content = objective;
+                    msg.content = line;
                 } else {
                     self.messages.push(ChatMessage::agent_task(
                         AgentTaskInfo {
@@ -319,18 +321,46 @@ impl App {
                             agent_name: String::new(),
                             status: AgentTaskStatus::Running,
                             options: vec![],
+                            entries: vec![line.clone()],
+                        },
+                        line,
+                    ));
+                }
+            }
+            TuiEvent::AgentTaskRunning { task_id, objective } => {
+                if let Some(msg) = self.find_agent_task_mut(&task_id) {
+                    if let Some(info) = &mut msg.agent_task {
+                        info.status = AgentTaskStatus::Running;
+                    }
+                    if !objective.trim().is_empty() {
+                        msg.agent_task
+                            .as_mut()
+                            .unwrap()
+                            .entries
+                            .push(objective.clone());
+                        msg.content = objective;
+                    }
+                } else {
+                    self.messages.push(ChatMessage::agent_task(
+                        AgentTaskInfo {
+                            task_id,
+                            agent_name: String::new(),
+                            status: AgentTaskStatus::Running,
+                            options: vec![],
+                            entries: vec![objective.clone()],
                         },
                         objective,
                     ));
                 }
             }
             TuiEvent::AgentTaskDelegated { task_id, objective } => {
-                let content = format!("[Proyecto en ejecución] {objective}");
+                let line = format!("[Proyecto en ejecución] {objective}");
                 if let Some(msg) = self.find_agent_task_mut(&task_id) {
-                    if let Some(ref mut info) = msg.agent_task {
+                    if let Some(info) = &mut msg.agent_task {
                         info.status = AgentTaskStatus::Delegated;
+                        info.entries.push(line.clone());
                     }
-                    msg.content = content;
+                    msg.content = line;
                 } else {
                     self.messages.push(ChatMessage::agent_task(
                         AgentTaskInfo {
@@ -338,17 +368,17 @@ impl App {
                             agent_name: String::new(),
                             status: AgentTaskStatus::Delegated,
                             options: vec![],
+                            entries: vec![line.clone()],
                         },
-                        content,
+                        line,
                     ));
                 }
             }
-            TuiEvent::AgentTaskFinalizing { task_id, objective } => {
+            TuiEvent::AgentTaskFinalizing { task_id, .. } => {
                 if let Some(msg) = self.find_agent_task_mut(&task_id) {
-                    if let Some(ref mut info) = msg.agent_task {
+                    if let Some(info) = &mut msg.agent_task {
                         info.status = AgentTaskStatus::Finalizing;
                     }
-                    msg.content = objective;
                 } else {
                     self.messages.push(ChatMessage::agent_task(
                         AgentTaskInfo {
@@ -356,8 +386,9 @@ impl App {
                             agent_name: String::new(),
                             status: AgentTaskStatus::Finalizing,
                             options: vec![],
+                            entries: vec![],
                         },
-                        objective,
+                        String::new(),
                     ));
                 }
             }
@@ -367,8 +398,9 @@ impl App {
                 result,
             } => {
                 if let Some(msg) = self.find_agent_task_mut(&task_id) {
-                    if let Some(ref mut info) = msg.agent_task {
+                    if let Some(info) = &mut msg.agent_task {
                         info.status = AgentTaskStatus::Completed;
+                        info.entries.push(result.clone());
                     }
                     msg.content = result;
                 } else {
@@ -378,6 +410,7 @@ impl App {
                             agent_name: String::new(),
                             status: AgentTaskStatus::Completed,
                             options: vec![],
+                            entries: vec![result.clone()],
                         },
                         result,
                     ));
@@ -395,14 +428,16 @@ impl App {
                         agent_name: agent_name.clone(),
                         status: AgentTaskStatus::PermissionRequested,
                         options: options.clone(),
+                        entries: vec![description.clone()],
                     },
                     description,
                 ));
             }
             TuiEvent::AgentTaskFailed { task_id, message } => {
                 if let Some(msg) = self.find_agent_task_mut(&task_id) {
-                    if let Some(ref mut info) = msg.agent_task {
+                    if let Some(info) = &mut msg.agent_task {
                         info.status = AgentTaskStatus::Failed;
+                        info.entries.push(message.clone());
                     }
                     msg.content = message;
                 } else {
@@ -412,6 +447,7 @@ impl App {
                             agent_name: String::new(),
                             status: AgentTaskStatus::Failed,
                             options: vec![],
+                            entries: vec![message.clone()],
                         },
                         message,
                     ));
@@ -752,6 +788,158 @@ mod tests {
             app.messages.last().unwrap().content,
             format!("msg {}", App::UI_HISTORY_HARD_CAP + 24)
         );
+    }
+
+    // agent task lifecycle — entries must accumulate, not overwrite
+
+    #[test]
+    fn agent_task_full_lifecycle_accumulates_entries() {
+        let mut app = test_app();
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t1".into(),
+            agent_name: "coder".into(),
+            objective: "fix the bug".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskPrompt {
+            task_id: "t1".into(),
+            text: "fix the bug in src/main.rs".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskRunning {
+            task_id: "t1".into(),
+            objective: "Llamando a read_file...".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskRunning {
+            task_id: "t1".into(),
+            objective: "Analisando el codigo".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskFinalizing {
+            task_id: "t1".into(),
+            objective: "Finalizando".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskCompleted {
+            task_id: "t1".into(),
+            objective: "fix the bug".into(),
+            result: "Done: fixed main.rs".into(),
+        });
+
+        assert_eq!(app.messages.len(), 1);
+        let msg = &app.messages[0];
+        let info = msg.agent_task.as_ref().unwrap();
+        assert_eq!(info.status, AgentTaskStatus::Completed);
+        // Every interaction is preserved in order.
+        assert_eq!(
+            info.entries,
+            vec![
+                "fix the bug",
+                "» fix the bug in src/main.rs",
+                "Llamando a read_file...",
+                "Analisando el codigo",
+                "Done: fixed main.rs",
+            ]
+        );
+        // content mirrors the last entry (result).
+        assert_eq!(msg.content, "Done: fixed main.rs");
+    }
+
+    #[test]
+    fn agent_task_running_empty_objective_does_not_append() {
+        let mut app = test_app();
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t1".into(),
+            agent_name: "coder".into(),
+            objective: "task".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskRunning {
+            task_id: "t1".into(),
+            objective: "   ".into(),
+        });
+        let info = &app.messages[0].agent_task.as_ref().unwrap();
+        assert_eq!(info.entries.len(), 1);
+        assert_eq!(info.status, AgentTaskStatus::Running);
+    }
+
+    #[test]
+    fn agent_task_duplicate_started_is_deduped() {
+        let mut app = test_app();
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t1".into(),
+            agent_name: "coder".into(),
+            objective: "task".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t1".into(),
+            agent_name: "coder".into(),
+            objective: "task".into(),
+        });
+        assert_eq!(app.messages.len(), 1);
+        assert_eq!(
+            app.messages[0].agent_task.as_ref().unwrap().entries.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn agent_task_second_task_creates_separate_row() {
+        let mut app = test_app();
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t1".into(),
+            agent_name: "coder".into(),
+            objective: "task one".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskCompleted {
+            task_id: "t1".into(),
+            objective: "task one".into(),
+            result: "result one".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t2".into(),
+            agent_name: "researcher".into(),
+            objective: "task two".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskCompleted {
+            task_id: "t2".into(),
+            objective: "task two".into(),
+            result: "result two".into(),
+        });
+        assert_eq!(app.messages.len(), 2);
+        assert_eq!(
+            app.messages[0]
+                .agent_task
+                .as_ref()
+                .unwrap()
+                .entries
+                .last()
+                .unwrap(),
+            "result one"
+        );
+        assert_eq!(
+            app.messages[1]
+                .agent_task
+                .as_ref()
+                .unwrap()
+                .entries
+                .last()
+                .unwrap(),
+            "result two"
+        );
+    }
+
+    #[test]
+    fn agent_task_failed_appends_error_message() {
+        let mut app = test_app();
+        app.handle_tui_event(TuiEvent::AgentTaskStarted {
+            task_id: "t1".into(),
+            agent_name: "coder".into(),
+            objective: "task".into(),
+        });
+        app.handle_tui_event(TuiEvent::AgentTaskFailed {
+            task_id: "t1".into(),
+            message: "ACP error: boom".into(),
+        });
+        let info = app.messages[0].agent_task.as_ref().unwrap();
+        assert_eq!(info.status, AgentTaskStatus::Failed);
+        assert_eq!(info.entries, vec!["task", "ACP error: boom"]);
+        assert_eq!(app.messages[0].content, "ACP error: boom");
     }
 
     // scroll helpers — issue #219

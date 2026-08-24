@@ -280,7 +280,9 @@ fn collapsed_summary_line(msg: &ChatMessage, width: u16) -> Line<'static> {
 fn truncate_str(s: &str, max_len: usize) -> String {
     let single_line = s.lines().next().unwrap_or("");
     if single_line.len() > max_len.saturating_sub(3) {
-        format!("{}...", &single_line[..max_len.saturating_sub(6).max(0)])
+        let cut = max_len.saturating_sub(6);
+        let truncated: String = single_line.chars().take(cut).collect();
+        format!("{truncated}...")
     } else {
         single_line.to_string()
     }
@@ -533,7 +535,11 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
                 AgentTaskStatus::PermissionRequested => ("[Necesita confirmación]", Color::Yellow),
                 AgentTaskStatus::Failed => ("[Error]", Color::Red),
             };
-            let header = format!("{label} {}", info.agent_name);
+            let header = if info.agent_name.is_empty() {
+                label.to_string()
+            } else {
+                format!("{label} {}", info.agent_name)
+            };
 
             lines.push(Line::from(vec![
                 Span::raw("┌ "),
@@ -555,13 +561,18 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
             } else {
                 Color::Rgb(200, 160, 200)
             };
-            for content_line in msg.content.lines() {
-                let wrapped = word_wrap_plain(content_line, w.saturating_sub(2));
-                for line in wrapped {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("│ {line}"),
-                        Style::default().fg(content_color),
-                    )]));
+            for entry in &info.entries {
+                if entry.trim().is_empty() {
+                    continue;
+                }
+                for content_line in entry.lines() {
+                    let wrapped = word_wrap_plain(content_line, w.saturating_sub(2));
+                    for line in wrapped {
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("│ {line}"),
+                            Style::default().fg(content_color),
+                        )]));
+                    }
                 }
             }
 
@@ -578,8 +589,8 @@ fn message_lines(msg: &ChatMessage, width: u16) -> Vec<Line<'static>> {
                 }
             }
 
-            let content_lines = msg.content.lines().count();
-            if content_lines > 0 {
+            let has_content = info.entries.iter().any(|e| !e.trim().is_empty());
+            if has_content {
                 lines.push(Line::from(vec![
                     Span::raw("└"),
                     Span::raw("─".repeat(w.saturating_sub(2))),

@@ -52,6 +52,8 @@ pub enum TuiEvent {
         agent_name: String,
         objective: String,
     },
+    /// A prompt was sent to a subagent session (outbound user→agent message).
+    AgentTaskPrompt { task_id: String, text: String },
     /// The agent is actively processing the task.
     AgentTaskRunning { task_id: String, objective: String },
     /// The agent spawned a sub-delegation (complex multi-step project).
