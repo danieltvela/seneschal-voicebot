@@ -12,6 +12,8 @@
 #   SENESCHAL_HOME    — where models/data/config live (default: ~/.seneschal)
 #   BIN_DIR           — where to place the `seneschal` launcher (default: ~/.local/bin)
 #   SENESCHAL_VERSION — pin a release tag, e.g. v1.2.0 (default: latest)
+#   STT_PROVIDER        — parakeet | whisper (default: parakeet)
+#   PARAKEET_MODEL_BASE — base URL for Parakeet model files (default: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main)
 #
 set -e
 
@@ -227,6 +229,7 @@ _apply_defaults() {
     KOKORO_MODEL_URL="${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}"
     KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
     VAD_MODEL_URL="${VAD_MODEL_URL:-https://huggingface.co/ggml-org/silero-v5.1.2/resolve/main/ggml-silero-v5.1.2.bin}"
+    PARAKEET_MODEL_BASE="${PARAKEET_MODEL_BASE:-https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main}"
 
     SENESCHAL_BIN_DIR="$SENESCHAL_HOME/bin"
     SENESCHAL_MODELS_DIR="$SENESCHAL_HOME/models"
@@ -468,6 +471,33 @@ _pick_whisper_model() {
     printf "%s" "$_chosen_id"
 }
 
+# ── Step 3.5: STT provider selection (issue #223 — parakeet default) ───
+# Sets _STT_CHOICE to "parakeet" or "whisper". Parakeet is the default:
+# fastest STT for real-time interaction (25 languages incl. ES/EN).
+configure_stt_provider() {
+    step "Configuring STT (speech-to-text)"
+    _stt_env=$(printf "%s" "${STT_PROVIDER:-}" | tr '[:upper:]' '[:lower:]')
+    case "$_stt_env" in
+        parakeet|whisper)
+            _STT_CHOICE="$_stt_env"
+            info "  STT provider from STT_PROVIDER env: $_STT_CHOICE"
+            return
+            ;;
+        "") : ;;
+        *)
+            warn "  Unknown STT_PROVIDER '$_stt_env' (expected: parakeet | whisper)."
+            ;;
+    esac
+    _choice=$(pick_from_list "Speech-to-text (STT) engine" 1 \
+        "Parakeet (recommended — fastest, 25 languages incl. ES/EN)" \
+        "Whisper (99 languages, auto-detect)")
+    case "$_choice" in
+        "Whisper"*) _STT_CHOICE="whisper" ;;
+        *)          _STT_CHOICE="parakeet" ;;
+    esac
+    info "  Selected STT: $_STT_CHOICE"
+}
+
 install_whisper_model() {
     step "Installing Whisper STT model"
     # If WHISPER_MODEL_URL is set (env override or test fixture), use it
@@ -534,6 +564,35 @@ install_vad_model() {
     warn "  Downloading Silero VAD model (~10 MB)..."
     download "$VAD_MODEL_URL" "$_dest" "Silero VAD"
     info "  VAD model installed."
+}
+
+# ── Step 4.2: Download Parakeet STT model ─────────────────────────────────
+# parakeet-rs 0.3.5 requires, inside PARAKEET_MODEL_DIR:
+#   encoder-model.onnx (+ external data: encoder-model.onnx.data)
+#   decoder_joint-model.onnx
+#   vocab.txt
+PARAKEET_MODEL_SUBDIR="parakeet-tdt-0.6b-v3-onnx"
+
+install_parakeet_model() {
+    step "Installing Parakeet STT model (parakeet-tdt-0.6b-v3-onnx)"
+    _dir="$SENESCHAL_MODELS_DIR/$PARAKEET_MODEL_SUBDIR"
+    mkdir -p "$_dir"
+    for _f in encoder-model.onnx encoder-model.onnx.data decoder_joint-model.onnx vocab.txt; do
+        _dest="$_dir/$_f"
+        if [ -f "$_dest" ]; then
+            info "  Already present ($_f) — skipping (delete to re-download)."
+            continue
+        fi
+        case "$_f" in
+            encoder-model.onnx)      _size="~40 MB"  ;;
+            encoder-model.onnx.data) _size="~2.3 GB" ;;
+            decoder_joint-model.onnx) _size="~69 MB" ;;
+            *)                       _size="~0.1 MB" ;;
+        esac
+        warn "  Downloading $_f ($_size)..."
+        download "$PARAKEET_MODEL_BASE/$_f" "$_dest" "Parakeet $_f"
+    done
+    info "  Parakeet model installed: $_dir"
 }
 
 # ── LLM model discovery ──────────────────────────────────────────────────────
@@ -1480,11 +1539,23 @@ kokoro_voices = \"${SENESCHAL_MODELS_DIR}/voices-v1.0.bin\""
     fi
     info "  Bot name set to: $_WAKE_WORD"
 
-    # Default STT provider: whisper everywhere (issue #217 — large-v3-turbo
-    # handles ES/EN code-switching better than SFSpeechRecognizer).
-    _STT_PROVIDER="whisper"
-    # Ensure WHISPER_MODEL_FILE is set
+    # STT provider chosen in configure_stt_provider() (issue #223: parakeet
+    # default; STT_PROVIDER env or the interactive picker override it).
+    _STT_PROVIDER="${_STT_CHOICE:-parakeet}"
+    # Ensure WHISPER_MODEL_FILE is set (the whisper_model line is always
+    # written; only the selected provider's model is downloaded).
     WHISPER_MODEL_FILE="${WHISPER_MODEL_FILE:-ggml-large-v3-turbo.bin}"
+
+    if [ "$_STT_PROVIDER" = "parakeet" ]; then
+        _stt_config="stt_provider = \"parakeet\"
+parakeet_model_dir = \"${SENESCHAL_MODELS_DIR}/${PARAKEET_MODEL_SUBDIR}\"
+whisper_model = \"${SENESCHAL_MODELS_DIR}/${WHISPER_MODEL_FILE}\"
+vad_model = \"${SENESCHAL_MODELS_DIR}/ggml-silero-vad.bin\""
+    else
+        _stt_config="stt_provider = \"whisper\"
+whisper_model = \"${SENESCHAL_MODELS_DIR}/${WHISPER_MODEL_FILE}\"
+vad_model = \"${SENESCHAL_MODELS_DIR}/ggml-silero-vad.bin\""
+    fi
 
     cat > "$_config_file" << CONFIGEOF
 # Seneschal configuration — generated by install.sh
@@ -1495,9 +1566,7 @@ language = "${_LANGUAGE}"
 wake_word = "${_WAKE_WORD}"
 
 # STT
-stt_provider = "${_STT_PROVIDER}"
-whisper_model = "${SENESCHAL_MODELS_DIR}/${WHISPER_MODEL_FILE}"
-vad_model = "${SENESCHAL_MODELS_DIR}/ggml-silero-vad.bin"
+$_stt_config
 
 # Device monitor — polls for the configured input device and greets when it connects
 device_monitor_enabled = true
@@ -1709,8 +1778,11 @@ main() {
     prompt_calendar_reminders
     setup_directories
     install_binary
-    if [ "$OS" != "Darwin" ]; then
+    configure_stt_provider
+    if [ "$_STT_CHOICE" = "whisper" ]; then
         install_whisper_model
+    else
+        install_parakeet_model
     fi
     install_vad_model
 

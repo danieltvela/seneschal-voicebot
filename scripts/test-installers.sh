@@ -40,6 +40,10 @@ echo "STUB_WHISPER"        > "$FIXTURE_DIR/ggml-large-v3-turbo.bin"
 echo "STUB_VAD"            > "$FIXTURE_DIR/silero_vad.onnx"
 echo "STUB_KOKORO"         > "$FIXTURE_DIR/kokoro-v1.0.onnx"
 echo "STUB_VOICES"         > "$FIXTURE_DIR/voices-v1.0.bin"
+echo "STUB_PKE_ENCODER"      > "$FIXTURE_DIR/encoder-model.onnx"
+echo "STUB_PKE_ENCODER_DATA" > "$FIXTURE_DIR/encoder-model.onnx.data"
+echo "STUB_PKE_DECODER"      > "$FIXTURE_DIR/decoder_joint-model.onnx"
+echo "STUB_PKE_VOCAB"        > "$FIXTURE_DIR/vocab.txt"
 
 # ── Mock curl ───────────────────────────────────────────────────────────────
 # Intercepts every call and serves fixture files. Also handles:
@@ -124,6 +128,14 @@ case "$URL" in
         cp "$MOCK_FIXTURE_DIR/kokoro-v1.0.onnx" "$OUT_FILE" ;;
     *voices-v1.0.bin*)
         cp "$MOCK_FIXTURE_DIR/voices-v1.0.bin" "$OUT_FILE" ;;
+    *parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data*)
+        cp "$MOCK_FIXTURE_DIR/encoder-model.onnx.data" "$OUT_FILE" ;;
+    *parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx*)
+        cp "$MOCK_FIXTURE_DIR/encoder-model.onnx" "$OUT_FILE" ;;
+    *parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx*)
+        cp "$MOCK_FIXTURE_DIR/decoder_joint-model.onnx" "$OUT_FILE" ;;
+    *parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt*)
+        cp "$MOCK_FIXTURE_DIR/vocab.txt" "$OUT_FILE" ;;
     *)
         echo "Mock curl: unknown download URL: $URL" >&2
         exit 1
@@ -243,20 +255,24 @@ echo ""
 echo "--- Verifying install.sh ---"
 ERR=0
 check_file "$INSTALL_DIR/bin/seneschal"                        "Binary installed"        || ERR=1
-check_file "$INSTALL_DIR/models/ggml-large-v3-turbo.bin"        "Whisper model (default size)" || ERR=1
+check_file "$INSTALL_DIR/models/parakeet-tdt-0.6b-v3-onnx/encoder-model.onnx"      "Parakeet encoder"   || ERR=1
+check_file "$INSTALL_DIR/models/parakeet-tdt-0.6b-v3-onnx/encoder-model.onnx.data" "Parakeet encoder data" || ERR=1
+check_file "$INSTALL_DIR/models/parakeet-tdt-0.6b-v3-onnx/decoder_joint-model.onnx" "Parakeet decoder"   || ERR=1
+check_file "$INSTALL_DIR/models/parakeet-tdt-0.6b-v3-onnx/vocab.txt"              "Parakeet vocab"     || ERR=1
 check_file "$INSTALL_DIR/models/ggml-silero-vad.bin"            "VAD model"               || ERR=1
-check_file "$INSTALL_DIR/.env"                                  "Default config"          || ERR=1
+check_file "$INSTALL_DIR/seneschal.pro.toml"                    "Default config (seneschal.pro.toml)" || ERR=1
 check_file "$INSTALL_DIR/launcher/seneschal"                   "Launcher script"         || ERR=1
 check_grep "$INSTALL_DIR/launcher/seneschal" "seneschal"        "Launcher references binary"            || ERR=1
+check_grep "$INSTALL_DIR/seneschal.pro.toml" '^stt_provider = "parakeet"'     "TOML has parakeet default" || ERR=1
+check_grep "$INSTALL_DIR/seneschal.pro.toml" '^parakeet_model_dir = ".*parakeet-tdt-0.6b-v3-onnx"' "TOML has parakeet_model_dir" || ERR=1
 
 if [ "$(uname -s)" = "Linux" ]; then
-    check_file "$INSTALL_DIR/models/kokoro-v1.0.onnx"  "Kokoro model (Linux)"   || ERR=1
-    check_file "$INSTALL_DIR/models/voices-v1.0.bin"   "Kokoro voices (Linux)"  || ERR=1
-    check_grep "$INSTALL_DIR/.env" "^KOKORO_VOICE="   ".env has KOKORO_VOICE (Linux path)"  || ERR=1
-    check_grep "$INSTALL_DIR/.env" "^TTS_PROVIDER=kokoro" ".env has TTS_PROVIDER=kokoro (Linux path)" || ERR=1
+    check_file "$INSTALL_DIR/models/kokoro-v1.0.onnx" "Kokoro model (Linux)" || ERR=1
+    check_file "$INSTALL_DIR/models/voices-v1.0.bin"  "Kokoro voices (Linux)" || ERR=1
+    check_grep "$INSTALL_DIR/seneschal.pro.toml" '^tts_provider = "kokoro"' "TOML has kokoro (Linux path)" || ERR=1
 else
-    check_grep "$INSTALL_DIR/.env" "^AVSPEECH_VOICE="  ".env has AVSPEECH_VOICE (macOS path)" || ERR=1
-    check_grep "$INSTALL_DIR/.env" "^TTS_PROVIDER=avspeech" ".env has TTS_PROVIDER=avspeech"    || ERR=1
+    check_grep "$INSTALL_DIR/seneschal.pro.toml" '^tts_provider = "avspeech"' "TOML has avspeech (macOS path)" || ERR=1
+    check_grep "$INSTALL_DIR/seneschal.pro.toml" '^avspeech_voice = "' "TOML has avspeech_voice (macOS path)" || ERR=1
 fi
 
 if [ "$ERR" = "1" ]; then
@@ -266,6 +282,44 @@ if [ "$ERR" = "1" ]; then
 fi
 echo ""
 echo "  [+] install.sh test passed"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 2 — STT_PROVIDER=whisper env override
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "═══════════════════════════════════════════════"
+echo "  Test 2: STT_PROVIDER=whisper env override"
+echo "═══════════════════════════════════════════════"
+echo ""
+
+WHISPER_DIR="$TEST_DIR/install-whisper-test"
+run_installer_noninteractive "$PROJECT_ROOT/install.sh" \
+    "SENESCHAL_HOME=$WHISPER_DIR" \
+    "BIN_DIR=$WHISPER_DIR/launcher" \
+    "GITHUB_REPO=localhost:9876" \
+    "STT_PROVIDER=whisper" \
+    "WHISPER_MODEL_URL=http://localhost:9876/ggml-large-v3-turbo.bin" \
+    "VAD_MODEL_URL=http://localhost:9876/silero_vad.onnx" \
+    "KOKORO_MODEL_URL=http://localhost:9876/kokoro-v1.0.onnx" \
+    "KOKORO_VOICES_URL=http://localhost:9876/voices-v1.0.bin"
+
+echo ""
+echo "--- Verifying whisper-provider install ---"
+ERR=0
+check_file "$WHISPER_DIR/models/ggml-large-v3-turbo.bin" "Whisper model via STT_PROVIDER=whisper" || ERR=1
+check_grep "$WHISPER_DIR/seneschal.pro.toml" '^stt_provider = "whisper"' "TOML has whisper provider" || ERR=1
+if [ -d "$WHISPER_DIR/models/parakeet-tdt-0.6b-v3-onnx" ]; then
+    echo "  [!!] Parakeet dir must not exist when STT_PROVIDER=whisper"
+    ERR=1
+fi
+
+if [ "$ERR" = "1" ]; then
+    echo ""
+    echo "FAILED: whisper-provider test"
+    exit 1
+fi
+echo ""
+echo "  [+] whisper-provider test passed"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 3 — custom Whisper model (tiny) via env override
@@ -282,6 +336,7 @@ run_installer_noninteractive "$PROJECT_ROOT/install.sh" \
     "SENESCHAL_HOME=$TINY_DIR" \
     "BIN_DIR=$TINY_DIR/launcher" \
     "GITHUB_REPO=localhost:9876" \
+    "STT_PROVIDER=whisper" \
     "WHISPER_MODEL_URL=http://localhost:9876/ggml-tiny.bin" \
     "VAD_MODEL_URL=http://localhost:9876/silero_vad.onnx" \
     "KOKORO_MODEL_URL=http://localhost:9876/kokoro-v1.0.onnx" \
