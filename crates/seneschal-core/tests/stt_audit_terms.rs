@@ -85,9 +85,7 @@ async fn stt_audit_terms_auto() {
         TERM_TOKENS.len(),
         TERM_TOKENS.len()
     );
-    println!(
-        "[terms_auto] ES: {text_es}\n[terms_auto] EN: {text_en}"
-    );
+    println!("[terms_auto] ES: {text_es}\n[terms_auto] EN: {text_en}");
 }
 
 /// Direct whisper-cpp-plus probe: does `initial_prompt` (LLM-domain context)
@@ -132,10 +130,7 @@ async fn stt_audit_terms_initial_prompt() {
                    Qwen, Qwen3.8, Qwen3.8-27B, Whisper, Silero, SGLang, vLLM, DFlash2. \
                    GPUs: RTX PRO 6000.";
     let (t1, m1) = probe("es", Some(prompt));
-    println!(
-        "\n[prompt_probe] ES no-prompt ({}ms): {t0:?}",
-        m0
-    );
+    println!("\n[prompt_probe] ES no-prompt ({}ms): {t0:?}", m0);
     println!("[prompt_probe] ES with-prompt ({}ms): {t1:?}", m1);
     let h0 = check_tokens("prompt_probe_es_noprompt", &t0, TERM_TOKENS);
     let h1 = check_tokens("prompt_probe_es_prompt", &t1, TERM_TOKENS);
@@ -171,15 +166,31 @@ async fn stt_audit_qwen_repeated() {
         if !p.exists() {
             let raw = dir.join(format!("qwr_{i}.raw.wav"));
             std::process::Command::new("espeak-ng")
-                .args(["-v", "es", "-s", "150", "-w", raw.to_str().unwrap(), phrases[i]])
+                .args([
+                    "-v",
+                    "es",
+                    "-s",
+                    "150",
+                    "-w",
+                    raw.to_str().unwrap(),
+                    phrases[i],
+                ])
                 .status()
                 .expect("espeak-ng");
             std::process::Command::new("ffmpeg")
                 .args([
                     "-y",
-                    "-loglevel", "error",
-                    "-i", raw.to_str().unwrap(),
-                    "-ar", "16000", "-ac", "1", "-sample_fmt", "s16", p.to_str().unwrap(),
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    raw.to_str().unwrap(),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-sample_fmt",
+                    "s16",
+                    p.to_str().unwrap(),
                 ])
                 .status()
                 .expect("ffmpeg");
@@ -192,23 +203,30 @@ async fn stt_audit_qwen_repeated() {
         concat_for_qwen(&parts, &out).expect("concat");
     }
     let audio = load_wav_f32(&out).unwrap();
-    println!("[qwen_repeated] expected: {texts:?} | audio {}s", audio.len() as f32 / SR as f32);
+    println!(
+        "[qwen_repeated] expected: {texts:?} | audio {}s",
+        audio.len() as f32 / SR as f32
+    );
 
     for lang in ["es", "auto"] {
         let stt = new_provider(lang);
         let (q, ms) = run_transcribe_complete(&stt, &audio);
-        println!(
-            "[qwen_repeated_{lang}] ({}ms): {:?}",
-            ms, q.text
+        println!("[qwen_repeated_{lang}] ({}ms): {:?}", ms, q.text);
+        let h = check_tokens(
+            &format!("qwen_repeated_{lang}"),
+            &q.text,
+            &["qwen", "3.8", "27"],
         );
-        let h = check_tokens(&format!("qwen_repeated_{lang}"), &q.text, &["qwen", "3.8", "27"]);
         println!("[qwen_repeated_{lang}] qwen/3.8/27 recall: {h}/3");
     }
     // Informational only — exact spelling of "Qwen" is the known failure mode.
 }
 
 fn concat_for_qwen(parts: &[std::path::PathBuf], out: &std::path::Path) -> anyhow::Result<()> {
-    let data: Vec<Vec<i16>> = parts.iter().map(|p| read_wav_pcm16(p)).collect::<anyhow::Result<_>>()?;
+    let data: Vec<Vec<i16>> = parts
+        .iter()
+        .map(|p| read_wav_pcm16(p))
+        .collect::<anyhow::Result<_>>()?;
     let mut v: Vec<i16> = Vec::new();
     for (i, d) in data.iter().enumerate() {
         if i > 0 {

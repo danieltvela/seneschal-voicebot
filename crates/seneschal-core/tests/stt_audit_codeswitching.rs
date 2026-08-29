@@ -55,8 +55,10 @@ async fn stt_audit_codeswitch_auto() {
         || has_token(&text, "cwen")
         || has_token(&text, "kwen")
         || has_token(&text, "quien");
-    let es_hit = has_token(&text, "hoy") || has_token(&text, "probar") || has_token(&text, "opinión");
-    let en_hit = has_token(&text, "model") || has_token(&text, "really") || has_token(&text, "well");
+    let es_hit =
+        has_token(&text, "hoy") || has_token(&text, "probar") || has_token(&text, "opinión");
+    let en_hit =
+        has_token(&text, "model") || has_token(&text, "really") || has_token(&text, "well");
     println!(
         "[codesw_mix_auto] qwen_variant={} es_hit={} en_hit={} | full: {:?}",
         qwen_variant, es_hit, en_hit, text

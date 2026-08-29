@@ -13,9 +13,9 @@
 
 #![allow(dead_code)]
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use seneschal_core::stt::{
-    SpeechEvent, TranscriptionQuality, WhisperSttProvider, WhisperSTTVADConfig,
+    SpeechEvent, TranscriptionQuality, WhisperSTTVADConfig, WhisperSttProvider,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -104,8 +104,7 @@ pub fn default_config(language: &str) -> WhisperSTTVADConfig {
 /// cross-test interference when cargo runs tests in parallel within a binary.
 /// Model load cost (~2-5 s each) is acceptable for a manually-run audit suite.
 pub fn new_provider(language: &str) -> WhisperSttProvider {
-    WhisperSttProvider::new(default_config(language))
-        .expect("failed to load Whisper/VAD models")
+    WhisperSttProvider::new(default_config(language)).expect("failed to load Whisper/VAD models")
 }
 
 // -- Fixture generation ------------------------------------------------------
@@ -135,7 +134,15 @@ fn synth(text: &str, voice: &str, rate: u32, out: &Path) -> Result<()> {
     let tmp_raw = out.with_extension("raw.wav");
     run(
         "espeak-ng",
-        &["-v", voice, "-s", &rate.to_string(), "-w", tmp_raw.to_str().unwrap(), text],
+        &[
+            "-v",
+            voice,
+            "-s",
+            &rate.to_string(),
+            "-w",
+            tmp_raw.to_str().unwrap(),
+            text,
+        ],
         &tmp_raw,
     )?;
     run(
@@ -194,8 +201,8 @@ pub fn fixture(name: &str, make: impl FnOnce() -> Result<()>) -> Result<PathBuf>
 // -- WAV I/O -----------------------------------------------------------------
 
 pub fn read_wav_pcm16(path: &Path) -> Result<Vec<i16>> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("cannot read WAV {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("cannot read WAV {}", path.display()))?;
     if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         bail!("not a RIFF/WAV file: {}", path.display());
     }
@@ -253,8 +260,7 @@ pub fn speech_onset(samples: &[f32], threshold: f32) -> f32 {
     let win = SR / 100;
     let mut i = 0;
     while i + win <= samples.len() {
-        let rms =
-            (samples[i..i + win].iter().map(|s| s * s).sum::<f32>() / win as f32).sqrt();
+        let rms = (samples[i..i + win].iter().map(|s| s * s).sum::<f32>() / win as f32).sqrt();
         if rms > threshold {
             return i as f32 / SR as f32;
         }
@@ -268,8 +274,7 @@ pub fn speech_offset(samples: &[f32], threshold: f32) -> f32 {
     let win = SR / 100;
     let mut i = samples.len().saturating_sub(win);
     while i > 0 {
-        let rms =
-            (samples[i..i + win].iter().map(|s| s * s).sum::<f32>() / win as f32).sqrt();
+        let rms = (samples[i..i + win].iter().map(|s| s * s).sum::<f32>() / win as f32).sqrt();
         if rms > threshold {
             return (i + win) as f32 / SR as f32;
         }
@@ -309,12 +314,7 @@ impl RunReport {
             };
             println!(
                 "[{label}] seg{}: start@{:.3}s close@{:.3}s dur={:.2}s infer={}ms RTF={:.3}",
-                i,
-                seg.t_start_stream,
-                seg.t_close_stream,
-                seg_dur,
-                seg.infer_wall_ms,
-                rtf
+                i, seg.t_start_stream, seg.t_close_stream, seg_dur, seg.infer_wall_ms, rtf
             );
             println!("[{label}] seg{} transcript: {:?}", i, seg.quality.text);
             println!(
@@ -410,7 +410,9 @@ pub fn run_transcribe_complete(
     audio: &[f32],
 ) -> (TranscriptionQuality, u128) {
     let t = Instant::now();
-    let q = stt.transcribe_complete(audio).expect("transcribe_complete failed");
+    let q = stt
+        .transcribe_complete(audio)
+        .expect("transcribe_complete failed");
     (q, t.elapsed().as_millis())
 }
 
@@ -439,7 +441,10 @@ pub fn check_tokens(label: &str, text: &str, tokens: &[&str]) -> usize {
         if ok {
             hits += 1;
         }
-        println!("[{label}] token {tok:?}: {}", if ok { "HIT" } else { "MISS" });
+        println!(
+            "[{label}] token {tok:?}: {}",
+            if ok { "HIT" } else { "MISS" }
+        );
     }
     println!("[{label}] tokens: {hits}/{} hit", tokens.len());
     hits
@@ -490,16 +495,25 @@ pub const TERM_TOKENS: &[&str] = &[
 ];
 
 pub fn ensure_fixture_cont_es() -> Result<PathBuf> {
-    fixture("cont_es.wav", || synth(CONT_ES, "es", 165, &fixture_dir().join("cont_es.wav")))
+    fixture("cont_es.wav", || {
+        synth(CONT_ES, "es", 165, &fixture_dir().join("cont_es.wav"))
+    })
 }
 
 pub fn ensure_fixture_cont_en() -> Result<PathBuf> {
-    fixture("cont_en.wav", || synth(CONT_EN, "en-us", 175, &fixture_dir().join("cont_en.wav")))
+    fixture("cont_en.wav", || {
+        synth(CONT_EN, "en-us", 175, &fixture_dir().join("cont_en.wav"))
+    })
 }
 
 pub fn ensure_fixture_codeswitch_mix() -> Result<PathBuf> {
     fixture("codeswitch_mix.wav", || {
-        synth(CODESWITCH_MIX, "es", 160, &fixture_dir().join("codeswitch_mix.wav"))
+        synth(
+            CODESWITCH_MIX,
+            "es",
+            160,
+            &fixture_dir().join("codeswitch_mix.wav"),
+        )
     })
 }
 
@@ -509,7 +523,11 @@ pub fn ensure_fixture_codeswitch_boundary() -> Result<PathBuf> {
         let en = fixture_dir().join("csb_en.wav");
         synth(BOUNDARY_ES, "es", 160, &es)?;
         synth(BOUNDARY_EN, "en-us", 175, &en)?;
-        concat_wavs(&[es.clone(), en], 400, &fixture_dir().join("codeswitch_boundary.wav"))?;
+        concat_wavs(
+            &[es.clone(), en],
+            400,
+            &fixture_dir().join("codeswitch_boundary.wav"),
+        )?;
         Ok(())
     })
 }

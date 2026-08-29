@@ -175,7 +175,10 @@ async fn stt_audit_latency_baseline() {
         msw2 as f32 * 1e-3 / dure
     );
 
-    assert!(!q2.text.trim().is_empty(), "es short utterance not transcribed");
+    assert!(
+        !q2.text.trim().is_empty(),
+        "es short utterance not transcribed"
+    );
     assert!(
         has_token(&q2.text, "hola") || has_token(&q2.text, "sistema"),
         "es short transcript not recognizable: {:?}",
@@ -211,7 +214,9 @@ async fn stt_audit_noise_rejected() {
     let mut rng: u64 = 0x1234_5678_9abc_def0;
     let mut noise: Vec<f32> = (0..SR * 15 / 10)
         .map(|_| {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (((rng >> 40) as f32) / (1u64 << 24) as f32 - 0.5) * 0.5
         })
         .collect();
