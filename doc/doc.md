@@ -249,7 +249,7 @@ This is a fire-and-read pattern — no JSON protocol, no shared state, no persis
 | `SPEAKER_ENROLLMENT_PATH` | `data/speaker.emb` | Path where the enrolled speaker embedding is persisted. Delete to re-enroll. |
 | `SPEAKER_SIMILARITY_MIN` | `0.45` | Cosine similarity threshold [0–1]. Higher = stricter. 0.45 permissive, 0.55 strict. |
 | `LLM_HISTORY_LOAD_LIMIT` | `0` | Max messages loaded from DB on startup (0 = unlimited). Recommended: 40–60 to prevent restart compaction. |
-| `WAKE_WORD` | `jarvis` | Case-insensitive substring match to trigger response in Ambient mode |
+| `WAKE_WORD` | `seneschal` | Comma-separated list of wake words; case-insensitive substring match to trigger response in Ambient mode (e.g. `seneschal,jardis`) |
 | `AMBIENT_CLEAR_SECS` | `300` | Seconds in Ambient mode with no speech before auto-returning to Active |
 | `DAEMON_ENABLED` | `0` | Set to `1` to enable the inference daemon (background "is there anything worth saying?" loop) |
 | `DAEMON_INTERVAL_SECS` | `300` | Seconds between inference daemon checks |
@@ -1347,7 +1347,7 @@ SPEAKER_ENROLLMENT_PATH   path to stored embedding (default: data/speaker.emb)
 SPEAKER_SIMILARITY_MIN    cosine similarity threshold (default: 0.75)
 SPEAKER_AMBIENT_TRIGGER   consecutive non-user clips to enter ambient (default: 3)
 AMBIENT_CLEAR_SECS        seconds of clean environment to return to active (default: 300)
-WAKE_WORD                 keyword to respond in ambient mode (default: "jarvis")
+WAKE_WORD                 wake word(s), comma-separated, to respond in ambient mode (default: "seneschal")
 ```
 
 ---

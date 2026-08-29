@@ -30,6 +30,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::config::Config;
 use crate::db::Database;
+use seneschal_common::config::parse_wake_words;
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ConversationMode;
 use seneschal_common::tools::ToolRegistry;
@@ -151,10 +152,11 @@ impl E2eHarness {
         self.run_with_opts(transcript, "seneschal").await
     }
 
-    /// Run the pipeline in ambient mode.
-    async fn run_ambient(&self, transcript: &str, wake_word: &str) {
+    /// Run the pipeline in ambient mode. `wake_words` may hold a
+    /// comma-separated list (issue #228).
+    async fn run_ambient(&self, transcript: &str, wake_words: &str) {
         *self.conv_mode.lock().unwrap() = ConversationMode::Ambient;
-        self.run_with_opts(transcript, wake_word).await
+        self.run_with_opts(transcript, wake_words).await
     }
 
     /// Reset shared fields before starting a new pipeline run.
@@ -308,19 +310,21 @@ impl E2eHarness {
         .await;
     }
 
-    async fn run_with_opts(&self, transcript: &str, wake_word: &str) {
+    async fn run_with_opts(&self, transcript: &str, wake_words: &str) {
         let mode = self.conv_mode.lock().unwrap().clone();
         let is_ambient = matches!(
             mode,
             ConversationMode::Ambient | ConversationMode::AmbientLocked
         );
 
-        // Ambient mode: only transcripts with wake word pass through.
-        if is_ambient
-            && !transcript
-                .to_lowercase()
-                .contains(&wake_word.to_lowercase())
-        {
+        // issue #228: wake_words may hold a comma-separated list; any entry
+        // matching the transcript lets it through.
+        let has_wake = parse_wake_words(wake_words)
+            .iter()
+            .any(|w| transcript.to_lowercase().contains(&w.to_lowercase()));
+
+        // Ambient mode: only transcripts with a wake word pass through.
+        if is_ambient && !has_wake {
             // No wake word → discard (mimics audio loop buffering behavior).
             return;
         }
@@ -328,11 +332,7 @@ impl E2eHarness {
         // Main user + wake word in Ambient (not AmbientLocked) → switch to Active.
         // In AmbientLocked mode, wake word responds but mode stays locked
         // (mimicking secondary-voice behavior at the harness level).
-        if mode == ConversationMode::Ambient
-            && transcript
-                .to_lowercase()
-                .contains(&wake_word.to_lowercase())
-        {
+        if mode == ConversationMode::Ambient && has_wake {
             *self.conv_mode.lock().unwrap() = ConversationMode::Active;
         }
 
@@ -613,6 +613,47 @@ async fn ambient_mode_responds_when_wake_word_present() {
     assert!(
         full.contains("once"),
         "expected LLM response in TTS, got: {full:?}"
+    );
+}
+
+/// Ambient mode — multiple wake words (issue #228): any configured word
+/// triggers a response.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_responds_to_any_of_multiple_wake_words() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+    h.run_ambient("jardis, ¿qué hora es?", "seneschal,jardis")
+        .await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected response when any configured wake word is present"
+    );
+    let full = sentences.join(" ");
+    assert!(
+        full.contains("once"),
+        "expected LLM response in TTS, got: {full:?}"
+    );
+}
+
+/// Ambient mode — multiple wake words (issue #228): a transcript matching
+/// none of the configured words is discarded.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_discards_utterance_matching_no_wake_word() {
+    let h = E2eHarness::new().await;
+    h.run_ambient("Cuéntame algo interesante, por favor.", "seneschal,jardis")
+        .await;
+    assert!(
+        h.tts_sentences().is_empty(),
+        "expected bot to stay silent when no configured wake word matches, got: {:?}",
+        h.tts_sentences()
+    );
+    assert!(
+        h.db_messages().await.is_empty(),
+        "expected no DB writes when no configured wake word matches"
     );
 }
 

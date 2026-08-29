@@ -498,7 +498,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `SPEAKER_AMBIENT_TRIGGER` | `3` | Consecutive non-main-user segments before auto-switching to Ambient mode. |
 | `SPEAKER_MAX_PROFILES` | `5` | Maximum number of speaker profiles to auto-enroll. The first speaker (id=0) is always the main user. |
 | **Conversation Modes** | | |
-| `WAKE_WORD` | `seneschal` | Case-insensitive substring match triggering a response in Ambient mode. |
+| `WAKE_WORD` | `seneschal` | Comma-separated list of wake words (case-insensitive substring match) triggering a response in Ambient mode. First entry is the bot's name. |
 | `AMBIENT_CLEAR_SECS` | `300` | Seconds of silence before auto-switching from Active to Ambient mode. |
 | **Ambient Context Buffer** | | |
 | `AMBIENT_BUFFER_MINUTES` | `3` | Rolling window duration for the ambient context buffer. |

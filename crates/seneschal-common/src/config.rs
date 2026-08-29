@@ -374,8 +374,11 @@ pub struct Config {
     pub speaker_similarity_min: f32,
 
     // ── Conversation mode (ambient state machine) ─────────────────────────────
-    /// Wake word that triggers a response in Ambient mode (WAKE_WORD, default "seneschal").
-    /// Case-insensitive substring match against the STT transcript.
+    /// Wake word(s) that trigger a response in Ambient mode (WAKE_WORD,
+    /// default "seneschal"). May hold a comma-separated list (issue #228),
+    /// e.g. "seneschal,jardis". Every entry is matched as a case-insensitive
+    /// substring against the STT transcript; the first entry is the bot's
+    /// primary name, used in the LLM system prompt.
     pub wake_word: String,
     /// Seconds in Ambient mode with no speech before auto-returning to Active
     /// (AMBIENT_CLEAR_SECS, default 300).
@@ -468,6 +471,28 @@ fn default_speaker_enabled() -> bool {
 /// code can be pinned via STT_LANGUAGE to keep fixed-language transcription.
 fn default_stt_language() -> String {
     "auto".to_string()
+}
+
+/// Split a raw WAKE_WORD value into its individual wake words (issue #228).
+///
+/// Entries are separated by commas, trimmed, and empty entries are dropped.
+/// Case-insensitive duplicates are removed, keeping the first spelling —
+/// matching is case-insensitive anyway.
+pub fn parse_wake_words(raw: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for w in raw.split(',') {
+        let w = w.trim();
+        if w.is_empty() {
+            continue;
+        }
+        if !words
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(w))
+        {
+            words.push(w.to_string());
+        }
+    }
+    words
 }
 
 impl Config {
@@ -889,7 +914,7 @@ impl Config {
             self.speaker_similarity_min = v.parse().context("Invalid SPEAKER_SIMILARITY_MIN")?;
         }
 
-        // Conversation mode
+        // Conversation mode (WAKE_WORD accepts a comma-separated list)
         if let Ok(v) = env::var("WAKE_WORD") {
             self.wake_word = v;
         }
@@ -1001,6 +1026,37 @@ impl Config {
     pub fn samples_per_chunk(&self) -> usize {
         (self.sample_rate as usize * self.chunk_ms as usize) / 1000
     }
+
+    /// All configured wake words (issue #228). Never empty: a blank
+    /// `wake_word` falls back to the "seneschal" default.
+    pub fn wake_words(&self) -> Vec<String> {
+        let words = parse_wake_words(&self.wake_word);
+        if words.is_empty() {
+            vec!["seneschal".to_string()]
+        } else {
+            words
+        }
+    }
+
+    /// Primary wake word — the first configured one — used as the bot's name
+    /// in the LLM system prompt.
+    pub fn primary_wake_word(&self) -> &str {
+        self.wake_word
+            .split(',')
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("seneschal")
+    }
+
+    /// True when `text` contains any configured wake word (case-insensitive
+    /// substring match).
+    pub fn has_wake_word(&self, text: &str) -> bool {
+        let text = text.to_lowercase();
+        self.wake_words()
+            .into_iter()
+            .any(|w| text.contains(&w.to_lowercase()))
+    }
 }
 
 #[cfg(test)]
@@ -1087,6 +1143,79 @@ mod tests {
             assert!((config.llm_repetition_penalty - 1.0).abs() < 1e-6);
             assert_eq!(config.llm_model, "qwen3.8-27b");
             assert!((config.llm_temperature - 0.7).abs() < 1e-6);
+        });
+    }
+
+    #[test]
+    fn parse_wake_words_single() {
+        assert_eq!(parse_wake_words("seneschal"), vec!["seneschal"]);
+    }
+
+    #[test]
+    fn parse_wake_words_splits_and_trims() {
+        assert_eq!(
+            parse_wake_words("Jarvis, Yardis"),
+            vec!["Jarvis".to_string(), "Yardis".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_wake_words_drops_empty_entries() {
+        assert_eq!(
+            parse_wake_words("seneschal,, ,jardis,"),
+            vec!["seneschal".to_string(), "jardis".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_wake_words_dedupes_case_insensitively() {
+        assert_eq!(
+            parse_wake_words("seneschal, Seneschal, SENESCHAL"),
+            vec!["seneschal".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_wake_words_blank_is_empty() {
+        assert!(parse_wake_words("   ").is_empty());
+    }
+
+    #[test]
+    fn wake_word_multiple_via_env() {
+        use temp_env::with_vars;
+        with_vars([("WAKE_WORD", Some("seneschal,jardis"))], || {
+            let config = Config::from_env().unwrap();
+            assert_eq!(
+                config.wake_words(),
+                vec!["seneschal".to_string(), "jardis".to_string()]
+            );
+            assert_eq!(config.primary_wake_word(), "seneschal");
+            assert!(config.has_wake_word("JARDIS, dime la hora"));
+            assert!(config.has_wake_word("Seneschal, ¿qué hora es?"));
+            assert!(!config.has_wake_word("hola, ¿cómo estás?"));
+        });
+    }
+
+    #[test]
+    fn wake_word_single_via_env_still_works() {
+        use temp_env::with_vars;
+        with_vars([("WAKE_WORD", Some("jarvis"))], || {
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.wake_words(), vec!["jarvis".to_string()]);
+            assert_eq!(config.primary_wake_word(), "jarvis");
+            assert!(config.has_wake_word("Hey JARVIS"));
+            assert!(!config.has_wake_word("good morning"));
+        });
+    }
+
+    #[test]
+    fn wake_word_empty_defaults_to_seneschal() {
+        use temp_env::with_vars;
+        with_vars([("WAKE_WORD", Some(""))], || {
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.wake_word, "seneschal");
+            assert_eq!(config.primary_wake_word(), "seneschal");
+            assert!(config.has_wake_word("seneschal"));
         });
     }
 }

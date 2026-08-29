@@ -1531,7 +1531,7 @@ kokoro_voices = \"${SENESCHAL_MODELS_DIR}/voices-v1.0.bin\""
         echo ""
         step "Choose your seneschal's name"
         echo "  Examples: Jarvis, Alfred, Butler, Narya, Ada, Iris"
-        printf '  Enter a name (or press Enter for "seneschal"): '
+        printf '  Enter one or more names, comma-separated (or press Enter for "seneschal"): '
         read -r _WAKE_WORD || _WAKE_WORD=""
         # Strip quotes and backslashes to avoid breaking TOML
         _WAKE_WORD=$(echo "$_WAKE_WORD" | tr -d '"\\')

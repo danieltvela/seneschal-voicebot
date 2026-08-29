@@ -40,6 +40,8 @@ cargo test e2e::stt_ -- --ignored --nocapture
 | `empty_transcript_is_discarded` | Empty STT output → no LLM call, no DB write |
 | `ambient_mode_discards_utterance_without_wake_word` | Ambient mode silences the bot when wake word is absent |
 | `ambient_mode_responds_when_wake_word_present` | Ambient mode lets through utterances containing the wake word |
+| `ambient_mode_responds_to_any_of_multiple_wake_words` | Multiple wake words (issue #228): any configured word lets the utterance through |
+| `ambient_mode_discards_utterance_matching_no_wake_word` | Multiple wake words (issue #228): transcript matching none is discarded |
 | `multi_sentence_response_splits_into_sentences` | SentenceSplitter emits ≥ 2 TTS chunks for a multi-sentence reply |
 | `db_persists_multiple_turns` | DB accumulates 2 assistant messages across 2 pipeline calls |
 

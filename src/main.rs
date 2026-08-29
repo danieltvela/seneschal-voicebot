@@ -660,7 +660,7 @@ async fn async_main() -> Result<()> {
     let tool_section = tools.lock().unwrap().system_prompt_section();
     let system_prompt = build_system_prompt(
         &config.llm_system_prompt,
-        &config.wake_word,
+        config.primary_wake_word(),
         &profile_facts,
         &memories,
         &agent_section,
@@ -1517,7 +1517,7 @@ async fn async_main() -> Result<()> {
         let idle_secs = config.llm_idle_consolidation_secs;
         let idle_min_pct = config.llm_idle_min_context_pct;
         let base_prompt = config.llm_system_prompt.clone();
-        let wake_word_c = config.wake_word.clone();
+        let wake_word_c = config.primary_wake_word().to_string();
         let agent_section_c = agent_section.clone();
         let tool_section_c = tool_section.clone();
         let language_c = config.language.clone();
@@ -1649,7 +1649,7 @@ async fn async_main() -> Result<()> {
                 &prompt_build_state,
                 config.llm_summary_keep_turns,
                 &config.llm_system_prompt,
-                &config.wake_word,
+                config.primary_wake_word(),
                 &agent_section,
                 &tool_section,
                 &proactive_tx,
@@ -2155,7 +2155,7 @@ async fn async_main() -> Result<()> {
                                     let tool_sec = tools.lock().unwrap().system_prompt_section();
                                     let new_sys_prompt = build_system_prompt(
                                         &config.llm_system_prompt,
-                                        &config.wake_word,
+                                        config.primary_wake_word(),
                                         &profile_facts,
                                         &memories,
                                         &agent_section,
@@ -2188,7 +2188,7 @@ async fn async_main() -> Result<()> {
                                     let tool_sec = tools.lock().unwrap().system_prompt_section();
                                     let new_sys_prompt = build_system_prompt(
                                         &config.llm_system_prompt,
-                                        &config.wake_word,
+                                        config.primary_wake_word(),
                                         &profile_facts,
                                         &memories,
                                         &agent_section,
@@ -2404,9 +2404,9 @@ async fn async_main() -> Result<()> {
                                     mode_snapshot,
                                     ConversationMode::Ambient | ConversationMode::AmbientLocked
                                 );
-                                let has_wake_word = segment_text
-                                    .to_lowercase()
-                                    .contains(&config.wake_word.to_lowercase());
+                                // issue #228: WAKE_WORD may hold a comma-separated
+                                // list; any entry triggers a response.
+                                let has_wake_word = config.has_wake_word(&segment_text);
 
                                 if is_ambient {
                                     if has_wake_word && is_main_speaker {

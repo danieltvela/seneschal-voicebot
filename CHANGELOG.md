@@ -4,6 +4,11 @@ All notable changes to Seneschal will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+### Features
+- **[#228](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/228)**: `WAKE_WORD` accepts a comma-separated list of wake words (e.g. `WAKE_WORD=seneschal,jardis`); any entry triggers a response in Ambient mode, first entry stays the bot's name
+
 ## v0.1.0-alpha.8 (2026-08-03)
 
 ### Features

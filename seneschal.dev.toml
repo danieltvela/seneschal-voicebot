@@ -154,7 +154,7 @@ speaker_enrollment_path = "data/dev/speaker.emb"
 speaker_similarity_min = 0.45
 
 # ── Conversation mode ─────────────────────────────────────────────────────────
-wake_word = "seneschal"
+wake_word = "seneschal"             # Comma-separated list of wake words (e.g. "seneschal,jardis"); first entry is the bot's name
 ambient_clear_secs = 300
 speaker_ambient_trigger = 3
 
