@@ -5,12 +5,6 @@
 - Small, focused commits are preferred.
 - Example: `feat: add speaker verification module` or `fix: silence VAD false positives`
 
-## Feature Merge Process
-1. Complete the feature in the feature branch.
-2. Interactive rebase to squash related commits: `git rebase -i main`
-3. Merge into main: `git checkout main && git merge --squash feature/<name>`
-4. Delete the feature branch.
-
 ## Code Review
 - **Local**: Review all code manually before committing (you).
 - **CI/remote only**: When explicitly requested, allow the agent to commit, push, check CI logs, fix, and re-commit autonomously.
@@ -70,7 +64,7 @@ Labels exist but no issue templates — the agent handles formatting naturally.
 
 ## Git Worktrees (Isolated Binary Model)
 To avoid context switching for the human and resource collisions, use an isolated binary model:
-- **Human Zone:** `/Users/danielvela/projects/ai/seneschal` (Main stable context). Validates and merges PRs.
+- **Human Zone:** `/Users/danielvela/projects/ai/seneschal` (Main stable context). Validates and merges work.
 - **AI Zone:** `/Users/danielvela/projects/ai/seneschal-ai` (Autonomous cycle zone).
   - Agents MUST perform all work here.
-  - When a task is completed and a PR is opened, the worktree is cleared or moved to the next task.
+  - When a task is completed, the worktree is cleared or moved to the next task.
