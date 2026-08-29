@@ -15,8 +15,7 @@ Each release contains:
 
 | File | Description |
 |------|-------------|
-| `voicebot-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon (M1/M2/M3) |
-| `voicebot-x86_64-apple-darwin.tar.gz` | macOS Intel |
+| `voicebot-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon (M1/M2/M3/M4) |
 | `voicebot-x86_64-unknown-linux-gnu.tar.gz` | Linux x86\_64 |
 | `voicebot-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
 | `*.sha256` | SHA-256 checksums for each tarball |
@@ -28,8 +27,12 @@ Each tarball contains a single stripped executable named `seneschal`.
 
 | Platform | Feature flags | TTS backend |
 |----------|--------------|-------------|
-| macOS | `--features avspeech` | AVSpeechSynthesizer (system, no models needed) |
-| Linux | `--features kokoro` | Kokoro via ONNX (models downloaded by installer) |
+| macOS Apple Silicon | `--features speech,avspeech,tui,parakeet` | AVSpeechSynthesizer (system, no models needed) |
+
+macOS Intel is **not released**: ONNX Runtime (>= 1.24) and `ort-sys` no
+longer publish binaries for Intel macOS, so the `parakeet` STT feature
+cannot build for `x86_64-apple-darwin`. Intel Macs can build from source
+without `parakeet`/`kokoro` (see "Manual builds" below).
 
 LLM models and the LLM server (`mlx_lm.server` or `omlx`) are **never
 bundled**. Users are expected to have them installed separately.
@@ -39,8 +42,8 @@ bundled**. Users are expected to have them installed separately.
 ## GitHub Releases (Canonical / Public)
 
 This is the primary release path.  The workflow at `.github/workflows/release.yml`
-runs automatically whenever you push a version tag.  It builds all four targets in
-parallel using native GitHub runners (no cross-compilation, no Docker).
+runs automatically whenever you push a version tag.  It builds the macOS
+Apple Silicon target on a native GitHub arm64 runner.
 
 ### Step-by-step
 
@@ -74,7 +77,7 @@ parallel using native GitHub runners (no cross-compilation, no Docker).
    ```
 
 5. Open the **Actions** tab in your GitHub repository to watch the build
-   progress.  Four jobs run in parallel (~10–15 min on GitHub's free runners).
+progress.  One job runs (~10–15 min on GitHub's free runners).
 
 6. Once all jobs succeed, a GitHub Release is created automatically at
    `https://github.com/danieltvela/seneschal-voicebot/releases/tag/v1.2.0`.
@@ -101,20 +104,20 @@ GitHub Actions.
 
 ```sh
 # Requires: Xcode Command Line Tools (xcode-select --install)
-cargo build --release --bin seneschal --features avspeech
+cargo build --release --bin seneschal --features speech,avspeech,tui,parakeet
 strip target/release/seneschal
 tar -czf voicebot-aarch64-apple-darwin.tar.gz -C target/release seneschal
 ```
 
-### macOS — Intel
+### macOS — Intel (source builds only)
 
-Same as above, but run on an Intel Mac (or use Rosetta only for local testing —
-do **not** publish a Rosetta binary as the ARM64 release):
+No Intel release tarball is published.  You can still build manually on an
+Intel Mac, but you must **not** enable the `parakeet` or `kokoro` features —
+`ort-sys` has no prebuilt ONNX Runtime for `x86_64-apple-darwin`:
 
 ```sh
 cargo build --release --bin seneschal --features avspeech
 strip target/release/seneschal
-tar -czf voicebot-x86_64-apple-darwin.tar.gz -C target/release seneschal
 ```
 
 ### Linux x86\_64

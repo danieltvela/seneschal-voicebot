@@ -14,7 +14,10 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ── macOS — one Apple Silicon runner builds both macOS targets ────────────
+  # ── macOS — Apple Silicon ─────────────────────────────────────────────────
+  # x86_64-apple-darwin is not built: ONNX Runtime (>= 1.24) and ort-sys no
+  # longer publish binaries for Intel macOS, so the `parakeet` feature cannot
+  # build for that target.
   build-macos:
     name: Build · ${{ matrix.target }}
     runs-on: macos-latest      # GitHub's arm64 (M-series) runner
@@ -23,7 +26,6 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin   # native
-          - target: x86_64-apple-darwin    # cross-compiled via Apple universal SDK
 
     steps:
       - uses: actions/checkout@v4

@@ -250,6 +250,9 @@ _detect_platform() {
         arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
         *)               error "Unsupported architecture: $ARCH. Only x86_64 and arm64/aarch64 are supported." ;;
     esac
+    if [ "$OS" = "Darwin" ] && [ "$ARCH_TRIPLE" = "x86_64" ]; then
+        error "macOS releases are Apple Silicon (aarch64) only. ONNX Runtime no longer ships Intel macOS binaries, so the default Parakeet STT cannot build for Intel. To build from source on an Intel Mac, use features that avoid ONNX Runtime, e.g.: cargo build --release --bin seneschal --features avspeech (do NOT enable 'parakeet' or 'kokoro')."
+    fi
     case "$OS" in
         Darwin) PLATFORM="apple-darwin" ;;
         Linux)  PLATFORM="unknown-linux-gnu" ;;
