@@ -6,8 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+## v0.1.0-alpha.9 (2026-08-29)
+
 ### Features
+- **[#213](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/213)**: Scenario-based dynamic benchmarking — multi-turn scenario runner in `bench-models.py` with mocked tool results and trace evaluation (`scripts/scenarios.json`)
+- **[#223](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/223)**: Parakeet (`parakeet-tdt-0.6b-v3-onnx`) as default STT provider in the installer, with model auto-download
+- **[#224](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/224)**: LLM sampling parameters configurable (temperature, top_p, top_k, min_p, presence/repetition penalties)
 - **[#228](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/228)**: `WAKE_WORD` accepts a comma-separated list of wake words (e.g. `WAKE_WORD=seneschal,jardis`); any entry triggers a response in Ambient mode, first entry stays the bot's name
+- **[#229](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/229)**: Click the ACTIVE | AMBIENT status-bar segment in the TUI to toggle conversation mode
+
+### Bug Fixes
+- **[#204](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/204)**: Eliminated the NOOP tool and its references in `.env` and system prompts
+- **[#205](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/205)**: TUI expandable controls (tool calls, subagent runs) now expand correctly when the scroll is pinned to the bottom
+- **[#206](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/206)**: TUI scroll follows new content to the bottom while pinned, and preserves the reading position otherwise
+- **[#217](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/217)**: STT code-switching ES/EN — Whisper with `language="auto"` instead of a fixed `es-ES` locale ("Hugging Face" no longer transcribed as "Joy fase")
+- **[#218](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/218)**: Double TTS — pre-tool narration already streamed is no longer re-emitted when delegating to a background subagent
+- **[#219](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/219)**: Stable TUI scroll — unconditional auto-follow, correct re-pin, `G` key to jump to bottom, `↓ N nuevos` indicator
+- **[#220](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/220)**: TUI stuck in TRANSCRIBING — state reset on rejected turns; speaker-verification task failure no longer panics the audio loop
+- **[#221](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/221)**: Subagent delegation history contamination — truncated task text in persisted history, unique tool-call ids, raw agent output truncated and marked when synthesis is unavailable
+
+### Removed
+- **[#208](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/208)**: Intent classifier (SIMPLE/COMPLEX pre-analysis) and all features using it
+- **[#222](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/222)**: Secondary LLM fallback and its `SECONDARY_LLM_*` configuration
 
 ## v0.1.0-alpha.8 (2026-08-03)
 
