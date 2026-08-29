@@ -149,6 +149,14 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
+      - name: Clean up any existing release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A leftover release (e.g. an empty one from an earlier failed
+          # run) makes action-gh-release fail with "already_exists".
+          gh release delete "${{ github.ref_name }}" --yes || true
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
