@@ -136,7 +136,10 @@ stage_test_stt() {
         stage_skip "test-stt" "WHISPER_MODEL not set and models/ggml-large-v3-turbo.bin not found"
         return 0
     fi
-    if (cd "$PROJECT_ROOT" && $CARGO test --quiet -- --ignored stt 2>&1 | tail -n 50); then
+    # --workspace: STT tests live in crates/seneschal-core/tests/ (audit
+    # harness) plus the root-package e2e STT tests; plain `cargo test` at the
+    # root only tests the root package and would silently skip the crates.
+    if (cd "$PROJECT_ROOT" && $CARGO test --workspace --quiet -- --ignored stt 2>&1 | tail -n 80); then
         stage_ok "test-stt"
     else
         stage_fail "test-stt" "STT integration tests failed"
@@ -207,7 +210,9 @@ run_stage() {
         stage_skip "$1" "skipped via QA_SKIP"
         return 0
     fi
-    "stage_$1" || true
+    # MODE names use hyphens (test-stt); stage functions use underscores.
+    local fn="stage_$(printf '%s' "$1" | tr '-' '_')"
+    "$fn" || true
 }
 
 run_fast() {
