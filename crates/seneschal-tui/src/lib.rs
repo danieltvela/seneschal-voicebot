@@ -54,7 +54,7 @@ pub async fn run(
         },
     )?;
 
-    let mut app = App::new(conv_mode, prompt_build_state);
+    let mut app = App::new(conv_mode.clone(), prompt_build_state);
     let mut keys = KeyReader::new();
     let tick = tokio::time::Duration::from_millis(TICK_MS);
 
@@ -100,6 +100,15 @@ pub async fn run(
                                     let was_muted = tts_muted.load(Ordering::SeqCst);
                                     tts_muted.store(!was_muted, Ordering::SeqCst);
                                     app.tts_enabled = was_muted;
+                                }
+                                Action::ToggleConversationMode => {
+                                    let from = conv_mode.lock().unwrap().clone();
+                                    app.toggle_conversation_mode();
+                                    tracing::info!(
+                                        target: "tui",
+                                        from = ?from,
+                                        "Conversation mode toggled by status bar click"
+                                    );
                                 }
                                 Action::ScrollToBottom => {
                                     app.auto_scroll_to_bottom = true;

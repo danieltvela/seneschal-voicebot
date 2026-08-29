@@ -250,20 +250,20 @@ fn collapsed_summary_line(msg: &ChatMessage, width: u16) -> Line<'static> {
         Role::Error => "error",
         Role::System => "system",
         Role::AgentTask => {
-            if let Some(info) = &msg.agent_task {
-                if !info.agent_name.is_empty() {
-                    return Line::from(vec![Span::styled(
-                        format!(
-                            "▶ {} ({}) ",
-                            truncate_str(
-                                &msg.content,
-                                (width as usize).saturating_sub(info.agent_name.len() + 10)
-                            ),
-                            info.agent_name
+            if let Some(info) = &msg.agent_task
+                && !info.agent_name.is_empty()
+            {
+                return Line::from(vec![Span::styled(
+                    format!(
+                        "▶ {} ({}) ",
+                        truncate_str(
+                            &msg.content,
+                            (width as usize).saturating_sub(info.agent_name.len() + 10)
                         ),
-                        Style::default().fg(color),
-                    )]);
-                }
+                        info.agent_name
+                    ),
+                    Style::default().fg(color),
+                )]);
             }
             "agent"
         }
@@ -835,6 +835,7 @@ fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(tts_color),
     );
     push(&mut spans, &mut cursor_x, " │ ", Style::default());
+    let conv_x = cursor_x;
     push(
         &mut spans,
         &mut cursor_x,
@@ -871,6 +872,11 @@ fn render_status(frame: &mut Frame, app: &mut App, area: Rect) {
         tts_label.to_string(),
         super::app::StatusBarAction::ToggleTts,
         Rect::new(tts_x, area.y, tts_label.chars().count() as u16, 1),
+    ));
+    segments.push((
+        conv_label.to_string(),
+        super::app::StatusBarAction::ToggleConversationMode,
+        Rect::new(conv_x, area.y, conv_label.chars().count() as u16, 1),
     ));
     if let (Some(label), Some(x)) = (new_label.as_ref(), new_x) {
         segments.push((

@@ -14,6 +14,8 @@ pub enum Action {
     ToggleTts,
     /// Re-pin the chat view to the bottom and re-enable auto-follow.
     ScrollToBottom,
+    /// Toggle the shared conversation mode (Active ↔ Ambient) from a status bar click.
+    ToggleConversationMode,
 }
 
 /// Role label for conversation messages.
@@ -66,6 +68,7 @@ pub struct StatusBarSegment {
 pub enum StatusBarAction {
     ToggleTts,
     ScrollToBottom,
+    ToggleConversationMode,
 }
 
 /// A single message in the conversation view.
@@ -466,6 +469,18 @@ impl App {
         }
     }
 
+    /// Toggle the shared conversation mode: `Active` → `Ambient`, and
+    /// `Ambient`/`AmbientLocked` → `Active`. An operator click overrides the
+    /// tool-set lock (`AmbientLocked`).
+    pub fn toggle_conversation_mode(&mut self) {
+        let mut mode = self.conv_mode.lock().unwrap();
+        *mode = if matches!(*mode, ConversationMode::Active) {
+            ConversationMode::Ambient
+        } else {
+            ConversationMode::Active
+        };
+    }
+
     fn take_submit_action(&mut self) -> Option<Action> {
         let text = self.input.trim().to_string();
         if text.is_empty() {
@@ -540,6 +555,9 @@ impl App {
                         return match segment.action {
                             StatusBarAction::ToggleTts => Some(Action::ToggleTts),
                             StatusBarAction::ScrollToBottom => Some(Action::ScrollToBottom),
+                            StatusBarAction::ToggleConversationMode => {
+                                Some(Action::ToggleConversationMode)
+                            }
                         };
                     }
                 }
@@ -690,7 +708,10 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
+        MouseEvent,
+    };
 
     fn test_app() -> App {
         App::new(
@@ -1014,5 +1035,53 @@ mod tests {
         );
         assert_eq!(app.input, "holag");
         assert_eq!(app.cursor, 5);
+    }
+
+    // status bar mode toggle — issue #229
+
+    fn mouse_left_down(col: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn mouse_click_on_mode_segment_returns_toggle_action() {
+        // Un click izquierdo sobre el segmento de modo (ACTIVE) en la barra
+        // de estado debe devolver Action::ToggleConversationMode.
+        let mut app = test_app();
+        app.status_bar_segments = vec![StatusBarSegment {
+            label: "ACTIVE".into(),
+            action: StatusBarAction::ToggleConversationMode,
+            region: Rect::new(30, 24, 6, 1),
+        }];
+        let action = app.handle_event(mouse_left_down(33, 24), Rect::default());
+        match action {
+            Some(Action::ToggleConversationMode) => {}
+            other => panic!("expected ToggleConversationMode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_conversation_mode_flips_active_ambient_active() {
+        // test_app() arranca en Active. Dos clicks deben devolver al modo.
+        let mut app = test_app();
+        assert_eq!(*app.conv_mode.lock().unwrap(), ConversationMode::Active);
+        app.toggle_conversation_mode();
+        assert_eq!(*app.conv_mode.lock().unwrap(), ConversationMode::Ambient);
+        app.toggle_conversation_mode();
+        assert_eq!(*app.conv_mode.lock().unwrap(), ConversationMode::Active);
+    }
+
+    #[test]
+    fn toggle_conversation_mode_unlocks_ambient_locked() {
+        // Un click del operador anula el lock seteado por la tool LLM.
+        let mut app = test_app();
+        *app.conv_mode.lock().unwrap() = ConversationMode::AmbientLocked;
+        app.toggle_conversation_mode();
+        assert_eq!(*app.conv_mode.lock().unwrap(), ConversationMode::Active);
     }
 }
