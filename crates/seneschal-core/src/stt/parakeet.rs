@@ -154,7 +154,7 @@ impl ParakeetSttProvider {
         self.streamer.maybe_spawn(
             seq,
             self.segmenter.in_speech(),
-            self.segmenter.closing_silence_started(),
+            self.segmenter.take_closing_trigger(),
             self.segmenter.speech_buf(),
             ParakeetDecoder {
                 model: Arc::clone(&self.model),

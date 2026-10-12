@@ -37,10 +37,11 @@ use whisper_cpp_plus::WhisperVadProcessor;
 /// Pipeline sample rate (16 kHz mono f32).
 pub const SAMPLE_RATE: usize = 16_000;
 
-/// Default VAD probe window. Silero prefers 20–200 ms windows; 100 ms keeps
-/// the start-of-speech commit budget low (P1: ~2 probes ≈ 200 ms) without
-/// hurting accuracy. Configurable via `VAD_PROBE_MS`.
-pub const DEFAULT_PROBE_MS: usize = 100;
+/// Default VAD probe window. Silero-via-whisper.cpp probabilities are stable
+/// on 200 ms windows; 100 ms windows oscillate strongly (calibration audit
+/// `vad_probe_calibration`), breaking the confirmation chain on natural
+/// inter-word gaps. Configurable via `VAD_PROBE_MS`.
+pub const DEFAULT_PROBE_MS: usize = 200;
 
 /// Default real-audio pre-roll prepended to a confirmed speech segment
 /// (`VAD_PREROLL_MS`). Probes whose speech probability never crossed the start
@@ -56,6 +57,10 @@ pub const PRE_SILENCE_MS: usize = 200;
 /// Hard cap on a single speech segment before forcing a cut.
 const MAX_SEGMENT_MS: usize = 20_000;
 pub(crate) const MAX_SEGMENT_SAMPLES: usize = SAMPLE_RATE * MAX_SEGMENT_MS / 1000;
+
+/// Size of the sliding decision window used to confirm a speech start:
+/// `vad_confirm_probes` speech decisions within the last 3 probes.
+const CONFIRM_WINDOW: usize = 3;
 
 /// Time budget for the accumulation window: audio from probes that never reach
 /// the confirmation threshold is discarded after this long (very short
@@ -192,11 +197,21 @@ pub struct VadSegmenter<D: SpeechDetector> {
     /// while accumulating / in speech; consumed at commit.
     pre_roll: Vec<f32>,
 
-    // Confirmation window: require N consecutive speech probes before committing.
-    consecutive_speech_probes: usize,
+    // Confirmation window: require `vad_confirm_probes` speech decisions
+    // within a sliding window of (N+1) probes — natural inter-word gaps
+    // (espeak pauses measure 100–200 ms, Silero dips below threshold on
+    // them) must not break the confirmation chain, but an isolated burst
+    // (cough/click) still fails to confirm.
+    decision_window: [bool; CONFIRM_WINDOW],
+    decision_ring_fill: usize,
     accumulating: bool,
     accum_buf: Vec<f32>,
     accum_samples_total: usize,
+
+    /// One-shot flag: the silence timeout opened the post-roll grace (the
+    /// utterance is probably over). The provider consumes it to fire the
+    /// last-chance live decode that covers all speech before the close.
+    closing_trigger: bool,
 
     // Leftover samples that didn't fill a probe window.
     probe_carry: Vec<f32>,
@@ -248,18 +263,21 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             silence_samples: 0,
             post_roll_remaining: 0,
             pre_roll: Vec::with_capacity(SAMPLE_RATE * config.preroll_ms / 1000),
-            consecutive_speech_probes: 0,
             accumulating: false,
             accum_buf: Vec::new(),
             accum_samples_total: 0,
+            decision_window: [false; CONFIRM_WINDOW],
+            decision_ring_fill: 0,
+            closing_trigger: false,
             probe_carry: Vec::with_capacity(probe_samples),
         })
     }
 
-    /// Stream-time budget of the start commit: probes needed to confirm, in
-    /// ms. Locked by the P1 test.
+    /// Stream-time budget of the start commit: the confirmation window can
+    /// take up to CONFIRM_WINDOW probes (2-of-3 with one gap), in ms. Locked
+    /// by the P1 audit.
     pub fn commit_budget_ms(&self) -> usize {
-        self.probe_samples * self.vad_confirm_probes.max(1) * 1000 / SAMPLE_RATE
+        self.probe_samples * CONFIRM_WINDOW * 1000 / SAMPLE_RATE
     }
 
     /// True while a confirmed segment is open.
@@ -276,7 +294,13 @@ impl<D: SpeechDetector> VadSegmenter<D> {
     /// Live transcription uses this to trigger the last decode that covers all
     /// speech before the segment closes.
     pub fn closing_silence_started(&self) -> bool {
-        self.in_speech && !self.in_post_roll && self.silence_samples > 0
+        self.in_post_roll
+    }
+
+    /// One-shot: consume the closing trigger (post-roll opened). The provider
+    /// fires its last-chance live decode when this returns true.
+    pub fn take_closing_trigger(&mut self) -> bool {
+        std::mem::take(&mut self.closing_trigger)
     }
 
     /// Snapshot of the open segment's audio (empty when idle).
@@ -353,6 +377,7 @@ impl<D: SpeechDetector> VadSegmenter<D> {
                     } else {
                         self.in_post_roll = true;
                         self.post_roll_remaining = self.post_roll_samples;
+                        self.closing_trigger = true;
                     }
                 }
             }
@@ -372,7 +397,7 @@ impl<D: SpeechDetector> VadSegmenter<D> {
                     self.accum_samples_total as f32 / SAMPLE_RATE as f32
                 );
                 self.accumulating = false;
-                self.consecutive_speech_probes = 0;
+                self.decision_ring_fill = 0;
                 self.accum_samples_total = 0;
                 self.accum_buf.clear();
             }
@@ -380,9 +405,9 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             let is_speech = avg_prob >= self.vad_start_threshold;
 
             if is_speech {
-                self.consecutive_speech_probes += 1;
+                self.push_decision(true);
 
-                if self.consecutive_speech_probes >= self.vad_confirm_probes {
+                if self.confirm_reached() {
                     // CONFIRMED: transition to speech state. The real-audio
                     // pre-roll (probes that never crossed the start threshold)
                     // is prepended so the utterance onset is never lost (P4);
@@ -413,18 +438,15 @@ impl<D: SpeechDetector> VadSegmenter<D> {
                     );
                 }
             } else {
-                // Silence during accumulation — reset consecutive counter but
-                // keep accumulating audio (it's part of the continuous stream).
-                if self.consecutive_speech_probes > 0 {
-                    tracing::debug!(
-                        target: "sttvad",
-                        "Accumulation probe reset: {} consecutive, needed {} (avg_prob={:.3})",
-                        self.consecutive_speech_probes,
-                        self.vad_confirm_probes,
-                        avg_prob
-                    );
-                }
-                self.consecutive_speech_probes = 0;
+                // Silence during accumulation — keep accumulating audio (it's
+                // part of the continuous stream); the sliding decision window
+                // tolerates one inter-word gap.
+                self.push_decision(false);
+                tracing::debug!(
+                    target: "sttvad",
+                    "Accumulation probe below threshold (avg_prob={:.3})",
+                    avg_prob
+                );
             }
         } else {
             // ── Silence: keep the real-audio pre-roll ring up to date, then
@@ -435,7 +457,9 @@ impl<D: SpeechDetector> VadSegmenter<D> {
 
             if is_speech {
                 self.accumulating = true;
-                self.consecutive_speech_probes = 1;
+                self.decision_window = [false; CONFIRM_WINDOW];
+                self.decision_ring_fill = 1;
+                self.decision_window[CONFIRM_WINDOW - 1] = true;
                 self.accum_samples_total = chunk.len();
                 self.accum_buf.clear();
                 self.accum_buf.extend_from_slice(chunk);
@@ -450,6 +474,21 @@ impl<D: SpeechDetector> VadSegmenter<D> {
                 self.push_pre_roll(chunk);
             }
         }
+    }
+
+    /// Push a decision bit into the sliding confirmation window.
+    fn push_decision(&mut self, is_speech: bool) {
+        self.decision_window.rotate_left(1);
+        self.decision_window[CONFIRM_WINDOW - 1] = is_speech;
+        self.decision_ring_fill = (self.decision_ring_fill + 1).min(CONFIRM_WINDOW);
+    }
+
+    /// True when the window holds `vad_confirm_probes` speech decisions
+    /// (`vad_confirm_probes` of the last CONFIRM_WINDOW probes). With N=1 the
+    /// first speech probe confirms immediately.
+    fn confirm_reached(&self) -> bool {
+        let count = self.decision_window.iter().filter(|&&b| b).count();
+        count >= self.vad_confirm_probes.max(1)
     }
 
     /// Append a non-speech probe to the pre-roll ring, dropping the oldest
@@ -472,6 +511,7 @@ impl<D: SpeechDetector> VadSegmenter<D> {
         self.in_post_roll = false;
         self.silence_samples = 0;
         self.post_roll_remaining = 0;
+        self.closing_trigger = false;
         let seq = self.current_segment_seq;
 
         let segment = if self.trim {
@@ -739,23 +779,42 @@ mod tests {
     }
 
     /// P1 (contract): SpeechStart must fire within the commit budget of the
-    /// first above-threshold probe — `vad_confirm_probes` probes at most.
-    /// With 100 ms probes and confirm=2 the commit lands ~200 ms after onset
-    /// (the old 200 ms probes pushed this to 400–600 ms).
+    /// first above-threshold probe — the confirmation window (2-of-3) takes
+    /// at most CONFIRM_WINDOW probes.
     #[test]
     fn speech_start_within_commit_budget() {
         let mut seg = build(0, false);
-        // 5 silent probes, then the onset.
+        // 5 silent probes, then the onset: speech, gap, speech → confirm on
+        // the third probe after onset (the gap is tolerated).
         let mut probs = vec![0.0; 5];
-        probs.extend_from_slice(&[0.9, 0.9, 0.0, 0.0, 0.0]);
+        probs.extend_from_slice(&[0.9, 0.3, 0.9, 0.0, 0.0, 0.0]);
         let events = run(&mut seg, &probs);
         assert_eq!(starts(&events), 1, "got {events:?}");
-        let budget_probes = seg.vad_confirm_probes.max(1);
         assert_eq!(
             seg.commit_budget_ms(),
-            budget_probes * 100,
-            "budget = confirm probes × probe ms"
+            3 * seg.probe_samples() * 1000 / SAMPLE_RATE,
+            "budget = confirm window × probe ms"
         );
+    }
+
+    /// A single isolated burst (cough/click) must fail to confirm even with
+    /// the gap-tolerant window.
+    #[test]
+    fn isolated_burst_does_not_confirm() {
+        let mut seg = build(0, false);
+        let events = run(&mut seg, &[0.9, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(starts(&events), 0, "got {events:?}");
+        assert!(segments(&events).is_empty());
+    }
+
+    /// A short inter-word gap (natural speech) must break through the confirm
+    /// window: speech, gap, speech → confirmed at the 3rd probe.
+    #[test]
+    fn inter_word_gap_tolerated_by_confirm_window() {
+        let mut seg = build(0, false);
+        let events = run(&mut seg, &[0.9, 0.2, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(starts(&events), 1, "got {events:?}");
+        assert_eq!(segments(&events).len(), 1, "got {events:?}");
     }
 
     /// P5 (contract): the finalized segment extends at least `silence_ms`

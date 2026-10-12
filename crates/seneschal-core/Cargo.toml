@@ -93,6 +93,7 @@ remote = []
 wiremock = "0.6"
 tempfile = "3.27.0"
 temp-env = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 cc = "1"

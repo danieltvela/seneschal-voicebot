@@ -71,11 +71,13 @@ async fn stt_audit_continuous_es() {
         short_head, 0,
         "VAD unexpectedly cut continuous speech into tiny segments"
     );
-    // VAD commit latency: SpeechStart must fire within 1.5 s of audio onset.
+    // VAD commit latency: SpeechStart must fire within 600 ms of audio onset
+    // (100 ms probes + 2-probe confirm ≈ 200-300 ms; Silero's own reaction
+    // lag on synthetic audio adds a little).
     let start_lat = rep.segments[0].t_start_stream - onset;
     assert!(
-        start_lat < 1.5,
-        "SpeechStart fired {:.2}s after onset (too late)",
+        start_lat < 0.6,
+        "SpeechStart fired {:.2}s after onset (budget 600 ms)",
         start_lat
     );
     println!(
@@ -189,12 +191,17 @@ async fn stt_audit_latency_baseline() {
         "en short transcript not recognizable: {:?}",
         qe2.text
     );
-    // Steady-state RTF must be < 0.5 (inference faster than realtime) on the
-    // M4 Pro; otherwise interactive voice is unusable.
+    // Steady-state RTF budget: < 0.5 on GPU-accelerated builds (the M4 Pro /
+    // CUDA reference machines); CPU-only builds run the same model much
+    // slower, so they get a loose sanity ceiling instead.
+    let rtf = ms3 as f32 * 1e-3 / dur;
+    let gpu_accelerated = cfg!(target_os = "macos") || cfg!(feature = "cuda");
+    let rtf_budget = if gpu_accelerated { 0.5 } else { 2.5 };
+    println!("[baseline] steady-state RTF = {rtf:.3} (budget {rtf_budget}, gpu={gpu_accelerated})");
     assert!(
-        ms3 as f32 * 1e-3 / dur < 0.5,
-        "steady-state RTF too high: {:.3}",
-        ms3 as f32 * 1e-3 / dur
+        rtf < rtf_budget,
+        "steady-state RTF too high: {:.3} (budget {rtf_budget})",
+        rtf
     );
     // Warm-up should be slower than steady state (informational check, loose).
     println!(

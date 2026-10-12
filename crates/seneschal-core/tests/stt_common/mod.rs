@@ -80,6 +80,11 @@ pub fn models_available() -> bool {
 }
 
 pub fn skip_if_no_models() {
+    // Diagnostics: RUST_LOG=stt=debug,sttvad=debug cargo test ... -- --nocapture
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(true)
+        .try_init();
     if !models_available() {
         let (wm, vm) = model_paths();
         eprintln!(
@@ -322,7 +327,7 @@ pub fn read_wav_pcm16(path: &Path) -> Result<Vec<i16>> {
         .collect())
 }
 
-fn write_wav_pcm16(path: &Path, data: &[i16]) -> Result<()> {
+pub fn write_wav_pcm16(path: &Path, data: &[i16]) -> Result<()> {
     let n = data.len() as u32;
     let mut v = Vec::with_capacity(44 + data.len() * 2);
     v.extend_from_slice(b"RIFF");
@@ -350,6 +355,36 @@ pub fn load_wav_f32(path: &Path) -> Result<Vec<f32>> {
         .iter()
         .map(|s| *s as f32 / 32768.0)
         .collect())
+}
+
+/// Linear amplitude ramp 0.3 → 1.0 over the first `ms` of the audio:
+/// simulates a user starting to speak quietly (the regression "the first
+/// word is lost"). Harsher ramps fall below what any fixed pre-roll can
+/// recover; 0.3 keeps the case within the default pre-roll reach.
+pub fn ramp_onset(samples: &mut [f32], ms: usize) {
+    let n = (SR / 1000 * ms).min(samples.len());
+    for (i, s) in samples[..n].iter_mut().enumerate() {
+        *s *= 0.3 + 0.7 * (i as f32 / n.max(1) as f32);
+    }
+}
+
+/// Linear amplitude ramp 1.0 → 0.12 over the last `ms` of the audio:
+/// simulates a fading utterance tail (the regression "the last word is lost").
+pub fn ramp_tail(samples: &mut [f32], ms: usize) {
+    let n = (SR / 1000 * ms).min(samples.len());
+    let start = samples.len() - n;
+    for (i, s) in samples[start..].iter_mut().enumerate() {
+        *s *= 1.0 - 0.88 * (i as f32 / n.max(1) as f32);
+    }
+}
+
+/// Write f32 samples back as a 16 kHz mono s16le WAV (fixture post-processing).
+pub fn write_wav_f32(path: &Path, samples: &[f32]) -> Result<()> {
+    let data: Vec<i16> = samples
+        .iter()
+        .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
+    write_wav_pcm16(path, &data)
 }
 
 /// First stream second where 10 ms RMS exceeds threshold.
@@ -395,6 +430,8 @@ pub struct SegmentTiming {
 
 pub struct RunReport {
     pub segments: Vec<SegmentTiming>,
+    /// Live partials: (stream time when they arrived, text). Contract P3.
+    pub partials: Vec<(f32, String)>,
     pub stream_duration_s: f32,
 }
 
@@ -425,6 +462,10 @@ impl RunReport {
         if self.segments.is_empty() {
             println!("[{label}] NO segments produced");
         }
+        for (t, p) in &self.partials {
+            println!("[{label}] partial @{t:.3}s: {p}");
+        }
+        println!("[{label}] partials: {}", self.partials.len());
     }
 }
 
@@ -437,6 +478,7 @@ fn record_event(
     ev: SpeechEvent,
     starts: &mut VecDeque<f32>,
     segments: &mut Vec<SegmentTiming>,
+    partials: &mut Vec<(f32, String)>,
     stream_now: f32,
     infer_wall_ms: u128,
 ) {
@@ -454,6 +496,7 @@ fn record_event(
         }
         SpeechEvent::Speech(p) => {
             println!("[partial] {p}");
+            partials.push((stream_now, p));
         }
     }
 }
@@ -465,12 +508,13 @@ async fn settle(
     rx: &mut mpsc::Receiver<SpeechEvent>,
     starts: &mut VecDeque<f32>,
     segments: &mut Vec<SegmentTiming>,
+    partials: &mut Vec<(f32, String)>,
     stream_now: f32,
 ) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while stt.inflight_transcriptions() > 0 && Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
-            Ok(Some(ev)) => record_event(ev, starts, segments, stream_now, 0),
+            Ok(Some(ev)) => record_event(ev, starts, segments, partials, stream_now, 0),
             Ok(None) => break,
             Err(_) => {}
         }
@@ -488,6 +532,7 @@ pub async fn run_stream(stt: &mut Box<dyn SttProvider>, audio: &[f32]) -> RunRep
     let (tx, mut rx) = mpsc::channel(256);
     let mut segments: Vec<SegmentTiming> = Vec::new();
     let mut starts: VecDeque<f32> = VecDeque::new();
+    let mut partials: Vec<(f32, String)> = Vec::new();
     let mut fed = 0usize;
 
     'feed: loop {
@@ -505,11 +550,20 @@ pub async fn run_stream(stt: &mut Box<dyn SttProvider>, audio: &[f32]) -> RunRep
                 ev,
                 &mut starts,
                 &mut segments,
+                &mut partials,
                 stream_now,
                 t_call.elapsed().as_millis(),
             );
         }
-        settle(stt, &mut rx, &mut starts, &mut segments, stream_now).await;
+        settle(
+            stt,
+            &mut rx,
+            &mut starts,
+            &mut segments,
+            &mut partials,
+            stream_now,
+        )
+        .await;
     }
 
     // Flush: 4 s of silence guarantees the final segment closes
@@ -525,17 +579,43 @@ pub async fn run_stream(stt: &mut Box<dyn SttProvider>, audio: &[f32]) -> RunRep
                 ev,
                 &mut starts,
                 &mut segments,
+                &mut partials,
                 stream_now,
                 t_call.elapsed().as_millis(),
             );
         }
-        settle(stt, &mut rx, &mut starts, &mut segments, stream_now).await;
+        settle(
+            stt,
+            &mut rx,
+            &mut starts,
+            &mut segments,
+            &mut partials,
+            stream_now,
+        )
+        .await;
     }
 
-    // Safety net for any straggler result.
-    if stt.inflight_transcriptions() > 0 {
-        let stream_now = fed as f32 / SR as f32;
-        settle(stt, &mut rx, &mut starts, &mut segments, stream_now).await;
+    // Grace drain: the final decode runs in a detached task; its in-flight
+    // counter may lag the spawn (the task itself schedules a beat later, and
+    // on a current-thread test runtime it only runs when we yield). Wait
+    // until the channel goes quiet AND nothing is in flight.
+    let mut quiet_rounds = 0u32;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            Ok(Some(ev)) => {
+                let stream_now = fed as f32 / SR as f32;
+                record_event(ev, &mut starts, &mut segments, &mut partials, stream_now, 0);
+                quiet_rounds = 0;
+            }
+            Ok(None) => break,
+            Err(_) => {
+                quiet_rounds += 1;
+                if quiet_rounds >= 3 && stt.inflight_transcriptions() == 0 {
+                    break;
+                }
+            }
+        }
     }
 
     // Remote results may arrive out of order; order segments by their
@@ -544,6 +624,7 @@ pub async fn run_stream(stt: &mut Box<dyn SttProvider>, audio: &[f32]) -> RunRep
 
     RunReport {
         segments,
+        partials,
         stream_duration_s: (audio.len() / SR) as f32,
     }
 }
@@ -698,5 +779,43 @@ pub fn ensure_fixture_short_es() -> Result<PathBuf> {
 pub fn ensure_fixture_short_en() -> Result<PathBuf> {
     fixture("short_en.wav", || {
         synth(SHORT_EN, "en-us", 175, &fixture_dir().join("short_en.wav"))
+    })
+}
+
+/// Soft-onset contract fixture (doc/stt-contract.md P1/P4): the first word
+/// ramps up slowly, as a user starting to speak quietly.
+pub const ONSET_ES: &str = "Buenas tardes, esta frase empieza despacio para comprobar que la primera palabra se transcribe";
+
+pub fn ensure_fixture_onset_es() -> Result<PathBuf> {
+    fixture("onset_es.wav", || {
+        let path = fixture_dir().join("onset_es.wav");
+        synth(ONSET_ES, "es", 160, &path)?;
+        let mut samples = load_wav_f32(&path)?;
+        ramp_onset(&mut samples, 300);
+        write_wav_f32(&path, &samples)
+    })
+}
+
+/// Fading-tail contract fixture (P5/P4): the last word ramps down slowly.
+pub const TAIL_ES: &str =
+    "Esta frase termina desvaneciéndose poco a poco hasta la última palabra final";
+
+pub fn ensure_fixture_tail_es() -> Result<PathBuf> {
+    fixture("tail_es.wav", || {
+        let path = fixture_dir().join("tail_es.wav");
+        synth(TAIL_ES, "es", 160, &path)?;
+        let mut samples = load_wav_f32(&path)?;
+        ramp_tail(&mut samples, 700);
+        write_wav_f32(&path, &samples)
+    })
+}
+
+/// Live-transcription contract fixture (P3): a few seconds of continuous
+/// speech, long enough for several live partial decodes.
+pub const LIVE_ES: &str = "Hola, esto es una prueba de transcripción en vivo y voy a hablar durante unos segundos sin parar para generar parciales";
+
+pub fn ensure_fixture_live_es() -> Result<PathBuf> {
+    fixture("live_es.wav", || {
+        synth(LIVE_ES, "es", 160, &fixture_dir().join("live_es.wav"))
     })
 }

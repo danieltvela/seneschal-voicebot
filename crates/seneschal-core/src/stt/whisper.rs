@@ -99,7 +99,7 @@ impl LiveDecoder for WhisperDecoder {
 /// Whisper itself is not device-pinned: upstream `whisper-cpp-plus` always
 /// uses whisper.cpp's default device (GPU 0 of the visible devices when built
 /// with the `cuda` feature). Use `CUDA_VISIBLE_DEVICES` to reorder devices.
-pub(crate) fn load_vad(model_path: &str, gpu: Option<i32>) -> Result<WhisperVadProcessor> {
+pub fn load_vad(model_path: &str, gpu: Option<i32>) -> Result<WhisperVadProcessor> {
     let params = VadContextParams {
         use_gpu: gpu.is_some(),
         gpu_device: gpu.unwrap_or(0),
@@ -195,12 +195,13 @@ impl WhisperSttProvider {
         }
 
         // Live cadence while the segment stays open (decodes run detached on
-        // the blocking pool).
+        // the blocking pool). The one-shot closing trigger fires the
+        // last-chance decode when the post-roll grace opens.
         let seq = self.segmenter.current_segment_seq();
         self.streamer.maybe_spawn(
             seq,
             self.segmenter.in_speech(),
-            self.segmenter.closing_silence_started(),
+            self.segmenter.take_closing_trigger(),
             self.segmenter.speech_buf(),
             WhisperDecoder {
                 ctx: Arc::clone(&self.ctx),

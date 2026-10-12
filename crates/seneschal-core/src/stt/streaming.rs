@@ -227,6 +227,12 @@ impl LiveStreamer {
         self.decoded_upto = audio.len();
         let inflight_counter = Arc::clone(&self.inflight);
         tokio::spawn(async move {
+            // The guard spans the whole task, INCLUDING the result send: the
+            // in-flight counter must not reach 0 before SpeechEnd is on the
+            // channel, or waiters (audit harness settle, tests) stop too
+            // early and miss the final result.
+            let _finish_guard = InflightGuard(Arc::clone(&inflight_counter));
+            inflight_counter.fetch_add(1, Ordering::SeqCst);
             let result: Result<TranscriptionQuality> = async {
                 if let Some(f) = flight {
                     match f.handle.await {
@@ -249,13 +255,7 @@ impl LiveStreamer {
                     }
                 }
                 // Authoritative final decode over the complete utterance.
-                let guard = InflightGuard(Arc::clone(&inflight_counter));
-                inflight_counter.fetch_add(1, Ordering::SeqCst);
-                tokio::task::spawn_blocking(move || {
-                    let _guard = guard;
-                    decode.decode(audio)
-                })
-                .await?
+                tokio::task::spawn_blocking(move || decode.decode(audio)).await?
             }
             .await;
             match result {
