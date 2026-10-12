@@ -425,10 +425,10 @@ fn record_event(
     infer_wall_ms: u128,
 ) {
     match ev {
-        SpeechEvent::SpeechStart => {
+        SpeechEvent::SpeechStart { .. } => {
             starts.push_back(stream_now);
         }
-        SpeechEvent::SpeechEnd(quality) => {
+        SpeechEvent::SpeechEnd { quality, .. } => {
             segments.push(SegmentTiming {
                 t_start_stream: starts.pop_front().unwrap_or(0.0),
                 t_close_stream: stream_now,

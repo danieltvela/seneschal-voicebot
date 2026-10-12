@@ -81,16 +81,12 @@ impl WhisperSttProvider {
         let vad = load_vad(&config.vad_model, config.vad_gpu)?;
         let segmenter = VadSegmenter::new(
             SileroDetector::new(vad),
-            SegmenterConfig {
-                silence_ms: config.silence_ms,
-                vad_start_threshold: config.vad_start_threshold,
-                vad_end_threshold: config.vad_end_threshold,
-                vad_confirm_probes: config.vad_confirm_probes,
-                // Whisper keeps its historical single-stage close (no post-roll)
-                // and does not trim the finalized segment.
-                post_roll_ms: 0,
-                trim_leading_silence: false,
-            },
+            SegmenterConfig::uniform(
+                config.silence_ms,
+                config.vad_start_threshold,
+                config.vad_end_threshold,
+                config.vad_confirm_probes,
+            ),
         )?;
 
         tracing::info!(
@@ -124,13 +120,13 @@ impl WhisperSttProvider {
     ) -> Result<()> {
         for event in self.segmenter.feed(audio) {
             match event {
-                SegmenterEvent::SpeechStart => {
-                    let _ = tx.send(SpeechEvent::SpeechStart).await;
+                SegmenterEvent::SpeechStart { segment_seq } => {
+                    let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
                 }
-                SegmenterEvent::SegmentReady(audio) => {
+                SegmenterEvent::SegmentReady { segment_seq, audio } => {
                     tracing::debug!(
                         target: "sttvad",
-                        "Finalizing segment: {:.2}s",
+                        "Finalizing segment {segment_seq}: {:.2}s",
                         audio.len() as f32 / SAMPLE_RATE as f32
                     );
 
@@ -144,7 +140,12 @@ impl WhisperSttProvider {
                         .context("transcription task join")??;
 
                     tracing::info!(target: "sttvad", "SpeechEnd: {}", quality.text);
-                    let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq,
+                            quality,
+                        })
+                        .await;
                 }
             }
         }

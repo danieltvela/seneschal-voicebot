@@ -13,10 +13,6 @@ use super::segmenter::{
 };
 use super::whisper::{WhisperSTTVADConfig, load_vad};
 
-/// Post-roll grace period before closing a segment (Parakeet historically used
-/// this two-stage close).
-const POST_ROLL_MS: usize = 250;
-
 /// Load the Parakeet TDT model, placing the ONNX Runtime session on `gpu`
 /// when requested (issue #14).
 #[cfg(feature = "cuda")]
@@ -71,16 +67,15 @@ impl ParakeetSttProvider {
         let vad = load_vad(&base.vad_model, base.vad_gpu)?;
         let segmenter = VadSegmenter::new(
             SileroDetector::new(vad),
-            SegmenterConfig {
-                silence_ms: base.silence_ms,
-                vad_start_threshold: base.vad_start_threshold,
-                vad_end_threshold: base.vad_end_threshold,
-                vad_confirm_probes: base.vad_confirm_probes,
-                // Parakeet historically used a 250 ms post-roll grace period
-                // and trimmed leading silence before transcription.
-                post_roll_ms: POST_ROLL_MS,
-                trim_leading_silence: true,
-            },
+            // Uniform contract (P6): 100 ms probes, real-audio pre-roll,
+            // 200 ms post-roll. Leading-silence trimming is disabled — the
+            // real pre-roll carries the onset and trimming would eat it.
+            SegmenterConfig::uniform(
+                base.silence_ms,
+                base.vad_start_threshold,
+                base.vad_end_threshold,
+                base.vad_confirm_probes,
+            ),
         )?;
 
         tracing::info!(
@@ -114,13 +109,16 @@ impl ParakeetSttProvider {
     ) -> Result<()> {
         for event in self.segmenter.feed(audio) {
             match event {
-                SegmenterEvent::SpeechStart => {
-                    let _ = tx.send(SpeechEvent::SpeechStart).await;
+                SegmenterEvent::SpeechStart { segment_seq } => {
+                    let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
                 }
-                SegmenterEvent::SegmentReady(segment) => {
+                SegmenterEvent::SegmentReady {
+                    segment_seq,
+                    segment,
+                } => {
                     tracing::debug!(
                         target: "sttvad",
-                        "Finalizing segment: {:.2}s",
+                        "Finalizing segment {segment_seq}: {:.2}s",
                         segment.len() as f32 / SAMPLE_RATE as f32
                     );
 
@@ -133,7 +131,12 @@ impl ParakeetSttProvider {
                         .context("transcription task join")??;
 
                     tracing::info!(target: "sttvad", "SpeechEnd: {}", quality.text);
-                    let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq,
+                            quality,
+                        })
+                        .await;
                 }
             }
         }

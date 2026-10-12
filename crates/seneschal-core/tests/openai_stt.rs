@@ -96,14 +96,14 @@ fn drain(rx: &mut mpsc::Receiver<SpeechEvent>) -> Vec<SpeechEvent> {
 fn starts(events: &[SpeechEvent]) -> usize {
     events
         .iter()
-        .filter(|e| matches!(e, SpeechEvent::SpeechStart))
+        .filter(|e| matches!(e, SpeechEvent::SpeechStart { .. }))
         .count()
 }
 
 async fn next_speech_end(rx: &mut mpsc::Receiver<SpeechEvent>) -> Option<String> {
     loop {
         match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
-            Ok(Some(SpeechEvent::SpeechEnd(q))) => return Some(q.text),
+            Ok(Some(SpeechEvent::SpeechEnd { quality, .. })) => return Some(quality.text),
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => return None,
         }
@@ -306,7 +306,7 @@ async fn cancel_inflight_aborts_pending_request() {
     assert!(
         !leftover
             .iter()
-            .any(|e| matches!(e, SpeechEvent::SpeechEnd(_))),
+            .any(|e| matches!(e, SpeechEvent::SpeechEnd { .. })),
         "cancelled request produced events: {leftover:?}"
     );
 }

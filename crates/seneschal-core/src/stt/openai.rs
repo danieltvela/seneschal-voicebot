@@ -44,10 +44,6 @@ use super::segmenter::{
 use super::wav;
 use super::whisper::{WhisperSTTVADConfig, load_vad};
 
-/// Whisper-style segment close (no post-roll grace); matches the default
-/// provider's segmentation exactly so the #217 audits behave identically.
-const POST_ROLL_MS: usize = 0;
-const TRIM_LEADING_SILENCE: bool = false;
 /// TCP connect timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -152,14 +148,14 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
 
         let segmenter = VadSegmenter::new(
             detector,
-            SegmenterConfig {
-                silence_ms: base.silence_ms,
-                vad_start_threshold: base.vad_start_threshold,
-                vad_end_threshold: base.vad_end_threshold,
-                vad_confirm_probes: base.vad_confirm_probes,
-                post_roll_ms: POST_ROLL_MS,
-                trim_leading_silence: TRIM_LEADING_SILENCE,
-            },
+            // Uniform contract (P6): same segmentation defaults as the local
+            // providers (100 ms probes, real pre-roll, 200 ms post-roll).
+            SegmenterConfig::uniform(
+                base.silence_ms,
+                base.vad_start_threshold,
+                base.vad_end_threshold,
+                base.vad_confirm_probes,
+            ),
         )?;
 
         tracing::info!(
@@ -258,10 +254,13 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
     ) -> Result<()> {
         for event in self.segmenter.feed(audio) {
             match event {
-                SegmenterEvent::SpeechStart => {
-                    let _ = tx.send(SpeechEvent::SpeechStart).await;
+                SegmenterEvent::SpeechStart { segment_seq } => {
+                    let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
                 }
-                SegmenterEvent::SegmentReady(segment) => {
+                SegmenterEvent::SegmentReady {
+                    segment_seq,
+                    segment,
+                } => {
                     let token = CancellationToken::new();
                     self.pending = Some(token.clone());
                     self.inflight.fetch_add(1, Ordering::SeqCst);
@@ -270,7 +269,16 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
                     let tx = tx.clone();
                     let inflight = Arc::clone(&self.inflight);
                     tokio::spawn(async move {
-                        dispatch_transcription(client, cfg, segment, token, tx, inflight).await;
+                        dispatch_transcription(
+                            client,
+                            cfg,
+                            segment,
+                            segment_seq,
+                            token,
+                            tx,
+                            inflight,
+                        )
+                        .await;
                     });
                 }
             }
@@ -371,10 +379,12 @@ impl Drop for InflightGuard {
 }
 
 /// Run the remote transcription and forward the outcome through `tx`.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_transcription(
     client: reqwest::Client,
     cfg: OpenAiSttConfig,
     segment: Vec<f32>,
+    segment_seq: u64,
     token: CancellationToken,
     tx: mpsc::Sender<SpeechEvent>,
     inflight: Arc<AtomicUsize>,
@@ -391,7 +401,12 @@ async fn dispatch_transcription(
             } else {
                 tracing::info!(target: "stt", "SpeechEnd: {}", quality.text);
             }
-            let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+            let _ = tx
+                .send(SpeechEvent::SpeechEnd {
+                    segment_seq,
+                    quality,
+                })
+                .await;
         }
         Err(e) => {
             if token.is_cancelled() {

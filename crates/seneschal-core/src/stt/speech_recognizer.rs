@@ -201,6 +201,9 @@ pub struct SpeechRecognizerSttProvider {
     /// Next utterance held while the previous Apple task finishes.
     pending: Option<PendingUtterance>,
     probe_carry: Vec<f32>,
+    /// Monotonic segment id, incremented at every SpeechStart emission so the
+    /// pipeline can discard stale ends after a barge-in (contract P2).
+    segment_seq: u64,
 }
 
 impl SpeechRecognizerSttProvider {
@@ -289,6 +292,7 @@ impl SpeechRecognizerSttProvider {
             onset_prefix: Vec::new(),
             pending: None,
             probe_carry: Vec::with_capacity(VAD_PROBE_SAMPLES),
+            segment_seq: 0,
         })
     }
 
@@ -517,7 +521,7 @@ impl SpeechRecognizerSttProvider {
     }
 
     /// Emit SpeechStart once per utterance (idempotent via speech_start_sent).
-    async fn emit_speech_start_if_needed(&self, tx: &mpsc::Sender<SpeechEvent>) {
+    async fn emit_speech_start_if_needed(&mut self, tx: &mpsc::Sender<SpeechEvent>) {
         let should_emit = {
             let mut st = self.state.lock().await;
             if st.speech_start_sent {
@@ -528,8 +532,13 @@ impl SpeechRecognizerSttProvider {
             }
         };
         if should_emit {
-            debug!(target: "stt", "SpeechStart (from VAD commit)");
-            let _ = tx.send(SpeechEvent::SpeechStart).await;
+            self.segment_seq += 1;
+            debug!(target: "stt", "SpeechStart (from VAD commit, seq {})", self.segment_seq);
+            let _ = tx
+                .send(SpeechEvent::SpeechStart {
+                    segment_seq: self.segment_seq,
+                })
+                .await;
         }
     }
 
@@ -640,7 +649,12 @@ impl SpeechRecognizerSttProvider {
                     };
 
                     info!(target: "stt", "SpeechEnd: {}", quality.text);
-                    let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq: self.segment_seq,
+                            quality,
+                        })
+                        .await;
                     speech_end_sent = true;
                     speech_start_sent = false;
                     last_partial = None;
@@ -689,7 +703,12 @@ impl SpeechRecognizerSttProvider {
             } else {
                 info!(target: "stt", "SpeechEnd (from last partial): {}", text);
             }
-            let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+            let _ = tx
+                .send(SpeechEvent::SpeechEnd {
+                    segment_seq: self.segment_seq,
+                    quality,
+                })
+                .await;
             speech_end_sent = true;
             speech_start_sent = false;
         }
@@ -786,7 +805,12 @@ impl SttProvider for SpeechRecognizerSttProvider {
                         compression_ratio: 0.0,
                     };
                     debug!(target: "stt", "SpeechEnd (accum discard, empty)");
-                    let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq: self.segment_seq,
+                            quality,
+                        })
+                        .await;
                 }
             }
         }
@@ -812,7 +836,12 @@ impl SttProvider for SpeechRecognizerSttProvider {
                     compression_ratio: 0.0,
                 };
                 debug!(target: "stt", "SpeechEnd (mid-speech task death, empty)");
-                let _ = tx.send(SpeechEvent::SpeechEnd(quality)).await;
+                let _ = tx
+                    .send(SpeechEvent::SpeechEnd {
+                        segment_seq: self.segment_seq,
+                        quality,
+                    })
+                    .await;
                 let mut st = self.state.lock().await;
                 st.speech_start_sent = false;
             }

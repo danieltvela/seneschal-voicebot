@@ -1250,6 +1250,10 @@ async fn async_main() -> Result<()> {
 
     let mut speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
     let mut t_speech_start: Option<Instant> = None;
+    // Seq of the last VAD-committed segment processed from STT. A SpeechEnd
+    // with a different seq is stale (a barge-in opened a newer utterance) and
+    // is dropped (contract P2, doc/stt-contract.md).
+    let mut active_segment_seq: u64 = 0;
 
     let turn_commit_counter = Arc::new(AtomicU64::new(0));
     let mut last_cleared_commit: u64 = 0;
@@ -2616,9 +2620,10 @@ async fn async_main() -> Result<()> {
                     let pending_events: Vec<SpeechEvent> = std::iter::from_fn(|| stt_rx.try_recv().ok()).collect();
                     for event in pending_events {
                         match event {
-                            SpeechEvent::SpeechStart => {
+                            SpeechEvent::SpeechStart { segment_seq } => {
+                                active_segment_seq = segment_seq;
                                 t_speech_start = Some(Instant::now());
-                                info!(target: "performance", "[+0ms] SpeechStart");
+                                info!(target: "performance", "[+0ms] SpeechStart (seq {segment_seq})");
                                 #[cfg(feature = "tui")]
                                 tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
                                     seneschal_tui::events::PipelineState::Listening,
@@ -2648,8 +2653,21 @@ async fn async_main() -> Result<()> {
                                 speech_buffer.push(&mono);
                                 debug!(target: "stt", "Partial: {}", partial_text);
                             }
-                            SpeechEvent::SpeechEnd(quality) => {
+                            SpeechEvent::SpeechEnd { segment_seq, quality } => {
                                 speech_buffer.push(&mono);
+
+                                // Stale result: a newer SpeechStart (barge-in)
+                                // opened a different utterance, so this end
+                                // belongs to superseded speech. Drop it — its
+                                // transcript must never reach the LLM under
+                                // the new utterance id.
+                                if segment_seq != active_segment_seq {
+                                    debug!(
+                                        target: "pipeline",
+                                        "Stale SpeechEnd (seq {segment_seq}, active {active_segment_seq}) — dropped after barge-in"
+                                    );
+                                    continue;
+                                }
 
                                 // NoSpeechGate: reject non-speech transcriptions
                                 if no_speech_gate.should_reject(&quality) {

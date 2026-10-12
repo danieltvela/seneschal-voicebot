@@ -24,10 +24,20 @@ pub use whisper::{WhisperSTTVAD, WhisperSTTVADConfig, WhisperSttProvider};
 pub use openai::{OpenAiSttConfig, OpenAiSttProvider};
 
 /// Events emitted while processing the audio stream.
+///
+/// `segment_seq` is the id the VAD segmenter assigned to the utterance; it
+/// lets the pipeline discard stale results after a barge-in (contract P2, see
+/// `doc/stt-contract.md`). The macOS `speech` provider starts its own seq
+/// counter; 0 marks an end without a committed segment (FSM-reset paths).
 #[derive(Debug, Clone)]
 pub enum SpeechEvent {
-    SpeechStart,
+    SpeechStart {
+        segment_seq: u64,
+    },
     #[allow(dead_code)]
     Speech(String),
-    SpeechEnd(TranscriptionQuality),
+    SpeechEnd {
+        segment_seq: u64,
+        quality: TranscriptionQuality,
+    },
 }
