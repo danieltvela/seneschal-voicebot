@@ -126,7 +126,7 @@ impl ParakeetSttProvider {
                 }
                 SegmenterEvent::SegmentReady {
                     segment_seq,
-                    segment,
+                    audio: segment,
                     trailing_silence,
                 } => {
                     tracing::debug!(

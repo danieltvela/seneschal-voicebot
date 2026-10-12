@@ -435,6 +435,8 @@ mod tests {
         announcement_window: Arc<Mutex<AnnouncementWindow>>,
         no_speech_gate: NoSpeechGate,
         transcript_tx: mpsc::Sender<PipelineFrame>,
+        #[cfg(feature = "tui")]
+        tui_tx: tokio::sync::mpsc::UnboundedSender<seneschal_tui::events::TuiEvent>,
     }
 
     fn fixture() -> Fixture {
@@ -442,6 +444,9 @@ mod tests {
         let events = Arc::new(PipelineEvents::new());
         let barge_in_rx = events.barge_in_tx.subscribe();
         let cancels = Arc::new(AtomicU64::new(0));
+        #[cfg(feature = "tui")]
+        let (tui_tx, _tui_rx) =
+            tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
         let parts = CtxParts {
             t_speech_start: None,
             active_segment_seq: 0,
@@ -462,6 +467,8 @@ mod tests {
             announcement_window: Arc::new(Mutex::new(AnnouncementWindow::new())),
             no_speech_gate: NoSpeechGate::default(),
             transcript_tx,
+            #[cfg(feature = "tui")]
+            tui_tx,
         };
         Fixture {
             ctx_parts: parts,
@@ -494,6 +501,8 @@ mod tests {
             no_speech_gate: p.no_speech_gate.clone(),
             transcript_tx: p.transcript_tx.clone(),
             identity_analyzer: None,
+            #[cfg(feature = "tui")]
+            tui_tx: p.tui_tx.clone(),
         }
     }
 

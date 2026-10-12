@@ -15,10 +15,30 @@ vad_silence_ms = 300
 vad_start_threshold = 0.65
 vad_end_threshold = 0.45
 vad_model = "models/ggml-silero-vad.bin"
-# Minimum consecutive speech probes (200ms each) before committing to STT.
-# Prevents coughs/throat-clearing from triggering transcription.
-# Set to 1 to disable (current behavior).
+# Speech probes required before the VAD commits to STT: N within a sliding
+# N+1 window (one inter-word gap tolerated). Prevents coughs/clicks from
+# triggering transcription; NoSpeechGate rejects the rest.
 vad_confirm_probes = 2
+# Probe window (ms). 200 ms keeps Silero probabilities stable; 100 ms windows
+# oscillate and delay commits. See doc/stt-contract.md (P1) and the
+# vad_probe_calibration audit.
+vad_probe_ms = 200
+# Real-audio pre-roll prepended to confirmed segments (ms): keeps the utterance
+# onset that the VAD threshold crossed late (contract P4).
+vad_preroll_ms = 300
+# Grace before closing a segment once the silence timeout fires (ms); resumed
+# speech cancels the closure (contract P5). Uniform for whisper/parakeet/openai.
+vad_post_roll_ms = 200
+
+# ── STT: live transcription (contract P3/P4) ──────────────────────────────────
+# While the user speaks, the buffered speech is re-decoded every interval and
+# partial text is emitted (SpeechEvent::Speech). At segment close, a decode
+# that already covered every spoken sample is reused as the final text; the
+# LLM waits only for the remainder. STT_LIVE_ENABLED=0 restores the old
+# batch-at-close behavior.
+stt_live_enabled = true
+stt_live_interval_ms = 1000
+stt_live_window_ms = 15000
 
 # ── Language ──────────────────────────────────────────────────────────────────
 # Drives i18n (startup/announcement prompts) + agent language hint.

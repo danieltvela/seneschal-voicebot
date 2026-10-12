@@ -108,17 +108,46 @@ Nearest-neighbour resampling for STT/VAD input. No interpolation — just picks 
 ## Ring Buffer (Speech Buffer)
 
 ```rust
-// src/audio/buffer.rs
-pub struct SpeechBuffer { /* circular buffer */ }
+// crates/seneschal-core/src/audio/buffer.rs
+pub struct AudioBuffer { /* circular buffer */ }
 ```
 
-Stores the rolling window of speech audio before STT processing. Used by `WhisperSTTVAD` to maintain the pre-roll window (300 ms before speech start) and the speech buffer during active utterances.
+Rolling window of recent microphone audio (30 s) kept by the main loop. It
+feeds speaker verification with the audio of the utterance that just closed
+(`get_samples_from(offset)`); it is not the STT input path — the STT
+providers own their segmenter buffers (see below).
 
-Key behaviors:
-- Fixed capacity in samples.
-- `push(chunk)` — appends audio; wraps around when full.
-- `drain()` — extracts all buffered samples and clears.
-- `len()` — current fill level.
+## STT Pipeline (VAD + segmentation + live transcription)
+
+The observable behavior of the STT/VAD subsystem is specified in
+[`doc/stt-contract.md`](stt-contract.md) (properties P1–P6, each locked by a
+named test). Summary:
+
+```
+Mic (CPAL, 100 ms chunks) → resample 16 kHz mono
+  → SttProvider::process_audio
+      → VadSegmenter (Silero probes, 200 ms; confirm 2-of-3 with gap tolerance;
+        real-audio pre-roll 300 ms; post-roll grace 200 ms; 20 s hard cap)
+          → SpeechStart { segment_seq }   → barge-in (cancels LLM/TTS/STT)
+          → Speech(partial)               → live re-decode every 1 s (P3)
+          → SegmentReady { seq, audio, trailing_silence }
+              → live decode reuse or final full decode (detached; P4)
+              → SpeechEnd { segment_seq, quality } → NoSpeechGate → LLM
+```
+
+Key components:
+
+- **`VadSegmenter`** (`crates/seneschal-core/src/stt/segmenter.rs`) — shared
+  state machine for whisper/parakeet/openai. The pre-commit onset audio is
+  kept in a real-audio pre-roll ring (the zero-pad fallback only applies when
+  speech starts on the very first probe of the stream).
+- **`LiveStreamer`** (`crates/seneschal-core/src/stt/streaming.rs`) —
+  single-flight partial re-decodes while the user speaks; at close, a decode
+  covering all speech is reused as the final text. `STT_LIVE_ENABLED=0`
+  restores the historical batch-at-close behavior.
+- **`AudioEvents`** (`src/audio_events.rs`) — pipeline-side handler: barge-in
+  on SpeechStart, stale-`SpeechEnd` drop by `segment_seq`, NoSpeechGate,
+  speaker verification, ambient/wake-word gating, `TranscriptReady` hand-off.
 
 ## Ambient Context Buffer
 

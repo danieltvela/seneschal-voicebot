@@ -63,6 +63,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 - **LLM→TTS streaming**: buffer until sentence boundary, synthesize immediately
 - **Barge-in**: `CancellationToken` cancels active pipeline
 - **Pluggable STT**: Provider trait for Whisper, Parakeet, SFSpeechRecognizer
+- **STT/VAD contract**: immediate barge-in on speech start, live transcription while the user speaks, LLM gated on the final transcript, stale results dropped after barge-in — specified in `doc/stt-contract.md` (P1–P6) and locked by deterministic + audit tests
 - **Cold Path Memory (S-DREAM)**: L1/L2 consolidation, see `src/dream/`
 
 ---
@@ -73,6 +74,7 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 
 | Topic | File |
 |-------|------|
+| STT/VAD pipeline contract (P1–P6) | [`doc/stt-contract.md`](doc/stt-contract.md) |
 | Module boundaries & legacy modules | [`doc/modules.md`](doc/modules.md) |
 | Environment variables | [`doc/env-vars.md`](doc/env-vars.md) |
 | Build features & dependencies | [`doc/build-features.md`](doc/build-features.md) |

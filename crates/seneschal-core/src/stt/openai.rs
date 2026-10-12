@@ -38,7 +38,7 @@ use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
-use super::segmenter::{SegmenterEvent, SileroDetector, SpeechDetector, VadSegmenter};
+use super::segmenter::{SAMPLE_RATE, SegmenterEvent, SileroDetector, SpeechDetector, VadSegmenter};
 use super::streaming::LiveStreamConfig;
 use super::wav;
 use super::whisper::{WhisperSTTVADConfig, load_vad, segmenter_config};
@@ -288,7 +288,7 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
                 }
                 SegmenterEvent::SegmentReady {
                     segment_seq,
-                    segment,
+                    audio: segment,
                     trailing_silence,
                 } => {
                     tracing::debug!(

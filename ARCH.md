@@ -170,22 +170,22 @@ Arrows read as "depends on". External crates listed in **bold**.
                           │ async_channel<AudioChunk>
                           ▼
                ┌────────────────────┐
-               │  WhisperSTTVAD     │
+               │  SttProvider       │
                │  (Silero VAD +     │
-               │   whisper-cpp-plus)│
+               │   STT model)       │
                └────────┬───────────┘
                         │ mpsc<SpeechEvent>
                         ▼
                ┌────────────────────┐
                │  main loop         │
-               │  dispatch          │
-               └──┬────────────┬────┘
-                  │            │
-        SpeechStart            SpeechEnd(transcript)
-        barge_in_tx            transcript_tx
-        (broadcast)            (mpsc)
-                  │            │
-                  ▼            ▼
+               │  (audio_events.rs) │
+               └──┬──────┬─────┬────┘
+                  │      │     │
+        SpeechStart Speech  SpeechEnd(transcript)
+        barge_in_tx (live   transcript_tx
+        (broadcast) partials)(mpsc)
+                  │      │     │
+                  ▼      │     ▼
           ┌──────────────────────────┐
           │  llm_task                │
           │  OpenAIClient::stream()  │
@@ -212,6 +212,13 @@ Arrows read as "depends on". External crates listed in **bold**.
           │  (CPAL output)           │
           └──────────────────────────┘
 ```
+
+STT/VAD behavior (immediate barge-in on SpeechStart, live transcription
+during speech, LLM gated on the final transcript, stale-result drop after
+barge-in) is specified in [`doc/stt-contract.md`](doc/stt-contract.md).
+SpeechStart fires BARGE_IN immediately; the LLM launch is gated on the
+final `SpeechEnd` transcript — live partials progress during speech so the
+close only waits for the remainder.
 
 ---
 

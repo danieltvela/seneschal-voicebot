@@ -11,6 +11,29 @@ Run specific test:
 cargo test <test_name> -- --nocapture
 ```
 
+## STT/VAD contract tests (regression guard)
+
+The STT/VAD subsystem has a written contract (`doc/stt-contract.md`, P1–P6)
+and three test layers that lock it:
+
+1. **L1 — deterministic unit tests** (no models, run in `make qa`): state
+   machine + streaming orchestrator behavior in
+   `crates/seneschal-core/src/stt/segmenter.rs` and `streaming.rs` (onset
+   preservation, commit budget, trailing silence, hysteresis, live cadence,
+   single-flight, stale discard).
+2. **L2 — pipeline contract tests** (no models): `src/audio_events.rs` drives
+   the extracted SpeechEvent handler with a mock STT provider (barge-in on
+   SpeechStart, TranscriptReady gating, stale drop, NoSpeechGate, ambient
+   gating).
+3. **L3 — real-model audits** (`make test-stt`, `#[ignore]`, espeak fixtures
+   under `target/stt-fixtures/`): `tests/stt_audit_contract.rs` (onset/tail/
+   live), `stt_audit_continuous.rs` (20 s cap, commit budget), plus
+   code-switching and terms audits. Provider selection via
+   `STT_AUDIT_PROVIDER=whisper|openai`.
+
+When a budget trips in L3, run the `vad_probe_calibration` audit first —
+Silero's probability behavior on synthetic audio is the usual suspect.
+
 ## Debugging Binary
 
 The `test_stt_plus` binary provides standalone STT testing without full pipeline:

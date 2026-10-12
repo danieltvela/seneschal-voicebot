@@ -23,7 +23,13 @@ Read from `.env` (dotenvy loads automatically):
 | `VAD_SILENCE_MS` | `300` | ms of continuous silence before SpeechEnd. Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |
 | `VAD_END_THRESHOLD` | `0.45` | Speech probability floor to keep a segment open. |
-| `VAD_CONFIRM_PROBES` | `2` | Consecutive speech probes (100ms each with `STT_PROVIDER=speech`) required before the VAD *commits* to STT. `SpeechStart` (LISTENING + barge-in) fires at commit time (~200ms) or on the short-utterance fallback after `VAD_SILENCE_MS` of silence — not on a single noisy probe. Short words that never reach the confirm count are still transcribed via the short-utterance fallback. Coughs/noise are rejected by `NoSpeechGate`. |
+| `VAD_CONFIRM_PROBES` | `2` | Speech probes required before the VAD *commits* to STT: N decisions within a sliding N+1 window, so one natural inter-word gap is tolerated while an isolated burst (cough/click) fails to confirm. `SpeechStart` (LISTENING + barge-in) fires at commit (worst case (N+1)×`VAD_PROBE_MS`, measured 0.3–0.8 s) or on the short-utterance fallback. Coughs/noise are rejected by `NoSpeechGate`. |
+| `VAD_PROBE_MS` | `200` | VAD probe window. 100 ms windows make Silero's probability oscillate (calibration audit `vad_probe_calibration`); keep 200 ms unless measuring. |
+| `VAD_PREROLL_MS` | `300` | Real-audio pre-roll prepended to confirmed segments: preserves the utterance onset the VAD threshold crossed late (first words are no longer lost). |
+| `VAD_POST_ROLL_MS` | `200` | Grace after the silence timeout during which resumed speech cancels the closure (uniform for whisper/parakeet/openai; the `speech` provider uses its own 500 ms). |
+| `STT_LIVE_ENABLED` | `1` | Live transcription while the user speaks (contract P3, `doc/stt-contract.md`): the open segment is re-decoded every `STT_LIVE_INTERVAL_MS` and partials are emitted as `SpeechEvent::Speech`; the close reuses a decode that already covered all speech. `0` restores the historical batch-at-close behavior. |
+| `STT_LIVE_INTERVAL_MS` | `1000` | Minimum new speech audio (ms) between live partial decodes. Raise on CPU-only hosts. |
+| `STT_LIVE_WINDOW_MS` | `15000` | Cap on the audio length per partial decode; longer segments decode their tail. |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
 | `GPU_AUTO` | `1` | Auto-assign the local ONNX models (Silero VAD, Parakeet, Kokoro TTS) round-robin over the GPUs with the most free VRAM (CUDA builds, issue #14). `0` = manual only. |
 | `VAD_GPU` | — | Pin Silero VAD to a GPU index (`0`, `1`, ...) or `cpu`. Wins over `GPU_AUTO`. |
