@@ -269,6 +269,85 @@ mod tests {
     use super::*;
     use crate::control::broadcast::ControlBroadcast;
     use futures_util::StreamExt;
+    use std::sync::atomic::AtomicBool;
+    use tokio::sync::{broadcast, mpsc, watch};
+    use tower::ServiceExt;
+
+    use seneschal_core::pipeline::{PauseReason, PipelineState};
+
+    /// Build a `ControlState` with the given pipeline state. The `/control/state`
+    /// handler only reads the watch channel, so the DB is never queried.
+    ///
+    /// The returned `TempDir` must be kept alive for the duration of the test.
+    async fn build_state(state: PipelineState) -> (Arc<ControlState>, tempfile::TempDir) {
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db =
+            seneschal_common::db::Database::new(db_dir.path().join("control.db").to_str().unwrap())
+                .await
+                .unwrap();
+        let (barge_in_tx, _) = broadcast::channel::<u64>(8);
+        let (transcript_tx, _) = mpsc::channel::<PipelineFrame>(8);
+        let (_state_tx, pipeline_state_rx) = watch::channel(state);
+
+        let control = Arc::new(ControlState {
+            broadcast: ControlBroadcast::new(16),
+            pipeline_state_rx,
+            tts_muted: Arc::new(AtomicBool::new(false)),
+            play_cancel: Arc::new(AtomicBool::new(false)),
+            barge_in_tx,
+            transcript_tx,
+            llm_session: Arc::new(std::sync::Mutex::new(seneschal_core::llm::LlmSession::new(
+                "sys",
+            ))),
+            db,
+            permission_gate: Arc::new(seneschal_common::PermissionGate::new()),
+        });
+        (control, db_dir)
+    }
+
+    async fn get_state_json(state: Arc<ControlState>) -> (StatusCode, serde_json::Value) {
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/state")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// `/control/state` must expose the stable wire token plus the utterance id
+    /// of the active speech state.
+    #[tokio::test]
+    async fn get_state_reports_active_state_and_utterance_id() {
+        let (state, _db_dir) = build_state(PipelineState::Thinking { utterance_id: 42 }).await;
+        let (status, json) = get_state_json(state).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["state"], "thinking");
+        assert_eq!(json["utterance_id"], 42);
+        assert_eq!(json["tts_muted"], false);
+        assert!(json.get("pause_reason").is_none());
+    }
+
+    /// A paused pipeline reports `paused` + the reason and no utterance id.
+    #[tokio::test]
+    async fn get_state_reports_paused_reason() {
+        let (state, _db_dir) = build_state(PipelineState::Paused {
+            reason: PauseReason::Consolidation,
+        })
+        .await;
+        let (status, json) = get_state_json(state).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["state"], "paused");
+        assert_eq!(json["utterance_id"], serde_json::Value::Null);
+        assert_eq!(json["pause_reason"], "consolidation");
+    }
 
     /// Regression: former `MAX_SSE_BUFFER_SIZE = 1 MiB` closed the stream mid-session.
     #[tokio::test]

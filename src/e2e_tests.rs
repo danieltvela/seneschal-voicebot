@@ -284,7 +284,9 @@ impl E2eHarness {
         };
 
         // Spawn TTS task.
-        let has_audio_device = self.audio_output.has_device();
+        // `has_audio_device` is forced on: the null output drains instantly but
+        // the FSM gate must be exercised so `Speaking` transitions are testable.
+        let has_audio_device = true;
         let h_tts = {
             let events_c = Arc::clone(&events);
             let state_tx_c = Arc::clone(&state_tx);
@@ -919,6 +921,52 @@ async fn barge_in_clean_state_reset() {
     h.wait_for_complete().await;
     let captured = h.tts_sentences();
     assert!(!captured.is_empty(), "second run should work");
+}
+
+/// End-to-end regression for the "TTS never returns to Idle" bug: after a
+/// normal turn the FSM must pass through `Thinking` and then settle on `Idle`
+/// (it used to stay stuck in `Speaking`).
+///
+/// The transient `Speaking` window itself is asserted deterministically by the
+/// `tts_task` state tests — with instant mock playback there is no observable
+/// gap between `Speaking` and `Idle` on the coalescing `watch` channel.
+#[tokio::test]
+#[ignore]
+async fn pipeline_returns_to_idle_after_turn() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Una sola frase de respuesta.").await;
+
+    h._reset_for_run();
+    let mut rx = h.state_rx.clone();
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Cuéntame algo, por favor.").await;
+
+    let mut seq: Vec<&'static str> = Vec::new();
+    let settled = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let st = rx.borrow().control_wire_state();
+            if seq.last() != Some(&st) {
+                seq.push(st);
+            }
+            if seq.contains(&"thinking") && st == "idle" {
+                break;
+            }
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+
+    settled.unwrap_or_else(|_| panic!("FSM stuck after a turn: {seq:?}"));
+    assert!(seq.contains(&"thinking"), "missing `thinking` in {seq:?}");
+    assert_eq!(
+        rx.borrow().control_wire_state(),
+        "idle",
+        "FSM must return to Idle after the turn: {seq:?}"
+    );
+
+    h.barge_in();
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
 }
 
 // ── STT tests (require Whisper model) ─────────────────────────────────────────

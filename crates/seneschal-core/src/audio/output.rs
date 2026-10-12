@@ -61,8 +61,21 @@ struct AudioOutputState {
 }
 
 impl AudioOutputState {
+    /// Release a previously claimed playback slot.
+    ///
+    /// Uses a checked decrement: a stray extra release (e.g. an error path that
+    /// also runs [`StreamSession`]'s `Drop`) must NOT wrap the counter to
+    /// `usize::MAX`. Such an underflow would make every future [`claim_slot`]
+    /// block forever, silently killing all TTS playback for the rest of the
+    /// process.
+    ///
+    /// [`claim_slot`]: AudioOutputState::claim_slot
     fn release_stream(&self) {
-        if self.active_streams.fetch_sub(1, Ordering::SeqCst) == 1 {
+        if let Ok(previous) =
+            self.active_streams
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            && previous == 1
+        {
             let _guard = self.idle_lock.lock().unwrap();
             self.idle.notify_all();
         }
@@ -386,13 +399,10 @@ impl AudioOutput {
     pub fn start_stream(&self, source_rate: u32, cancel: Arc<AtomicBool>) -> Result<StreamSession> {
         self.state.claim_slot();
         let snapshot = self.state.inner.read().unwrap().snapshot();
-        match StreamSession::new(snapshot, source_rate, cancel, Arc::clone(&self.state)) {
-            Ok(s) => Ok(s),
-            Err(e) => {
-                self.state.release_stream();
-                Err(e)
-            }
-        }
+        // On failure `StreamSession::new` drops the partially-built session,
+        // whose `Drop` already releases the slot claimed above. Releasing again
+        // here would double-decrement the counter (wrapping it to `usize::MAX`).
+        StreamSession::new(snapshot, source_rate, cancel, Arc::clone(&self.state))
     }
 
     /// Play mono f32 samples (at `source_rate`) through the output device.
@@ -1044,6 +1054,27 @@ mod tests {
         // Filling a full block yields upsampled output.
         let out = r.push(&vec![0.0; RESAMPLE_CHUNK - 10]);
         assert!(!out.is_empty());
+    }
+
+    /// Regression: a double release of the same playback slot (the historical
+    /// `start_stream` error path released on top of `StreamSession`'s `Drop`)
+    /// must not wrap `active_streams` to `usize::MAX`. If it did, every future
+    /// `claim_slot` would block forever and TTS would go silent for good.
+    #[test]
+    fn release_stream_does_not_underflow_on_double_release() {
+        let out = AudioOutput::null();
+
+        // No slot claimed, yet two releases happen. Counter must stay at 0.
+        out.state.release_stream();
+        out.state.release_stream();
+        assert_eq!(out.state.active_streams.load(Ordering::SeqCst), 0);
+
+        // A subsequent claim must succeed immediately (it would hang forever
+        // against a wrapped counter).
+        out.state.claim_slot();
+        assert_eq!(out.state.active_streams.load(Ordering::SeqCst), 1);
+        out.state.release_stream();
+        assert_eq!(out.state.active_streams.load(Ordering::SeqCst), 0);
     }
 
     #[test]

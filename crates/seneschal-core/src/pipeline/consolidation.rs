@@ -740,4 +740,107 @@ mod tests {
         let pos_append = prompt.find("APPEND").unwrap();
         assert!(pos_prepend < pos_base && pos_base < pos_append);
     }
+
+    async fn wait_for(rx: &mut watch::Receiver<PipelineState>, target: &str) {
+        let reached = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if rx.borrow().control_wire_state() == target {
+                    return;
+                }
+                if rx.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            reached.is_ok(),
+            "FSM did not reach `{target}` (now `{}`)",
+            rx.borrow().control_wire_state()
+        );
+    }
+
+    /// Announced consolidation must move the FSM `Idle → Paused{Consolidation}`
+    /// and back to `Idle` when the cycle finishes.
+    ///
+    /// No network is exercised: a long system prompt trips
+    /// `needs_consolidation` while `keep_turns` exceeds the message count, so
+    /// section extraction and summarisation are both skipped.
+    #[tokio::test]
+    async fn announced_consolidation_pauses_then_resumes_idle() {
+        let mut session = LlmSession::new(&"s".repeat(2000));
+        for i in 0..2 {
+            session.add_user_turn(&format!("Pregunta {i}"));
+            session.add_assistant_turn(&format!("Respuesta {i}"));
+        }
+
+        let events = Arc::new(PipelineEvents::new());
+        let (state_tx, state_rx) = watch::channel(PipelineState::Idle);
+        let (transcript_tx, mut transcript_rx) = mpsc::channel::<PipelineFrame>(8);
+        let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(8);
+
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db = Database::new(db_dir.path().join("t.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let session_id = db.get_or_create_session().await.unwrap();
+
+        // Never called on this path; the type is required by the signature.
+        let background_client: Arc<dyn LlmProvider> = Arc::new(crate::llm::OpenAiLlmProvider::new(
+            "http://127.0.0.1:1",
+            "unused",
+            16,
+            0.0,
+        ));
+
+        let handle = tokio::spawn(consolidation_task(
+            Arc::clone(&events),
+            Arc::new(state_tx),
+            state_rx.clone(),
+            transcript_tx,
+            Arc::new(Mutex::new(session)),
+            Arc::new(Mutex::new(PromptBuildState::Inactive)),
+            background_client,
+            db,
+            session_id,
+            10, // context_tokens — tiny → consolidation needed
+            10, // keep_turns — ≥ messages → nothing summarised
+            50, // threshold_pct
+            0,  // idle_consolidation_secs — announced path only
+            50, // idle_min_context_pct
+            "base".into(),
+            "seneschal".into(),
+            String::new(),
+            String::new(),
+            "es".into(),
+            proactive_tx,
+            Arc::new(AtomicBool::new(false)),
+        ));
+
+        let mut rx = state_rx;
+        // Kick the post-turn consolidation cycle.
+        events.llm_post_finished.notify_one();
+
+        // The task announces, then waits for the second LLM-post-finished.
+        let announced = tokio::time::timeout(Duration::from_secs(5), transcript_rx.recv())
+            .await
+            .expect("consolidation should emit a notification")
+            .expect("transcript channel open");
+        assert!(matches!(
+            announced,
+            PipelineFrame::SystemNotification { .. }
+        ));
+        events.llm_post_finished.notify_one();
+
+        // Paused (busy, with reason) …
+        wait_for(&mut rx, "paused").await;
+        assert!(rx.borrow().is_busy(), "Paused must report busy");
+        assert_eq!(rx.borrow().control_pause_reason(), Some("consolidation"));
+
+        // … then back to Idle when the cycle completes.
+        wait_for(&mut rx, "idle").await;
+        assert!(!rx.borrow().is_busy());
+
+        handle.abort();
+    }
 }

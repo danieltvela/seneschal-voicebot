@@ -46,7 +46,7 @@ pub async fn sen_task(
                             let _ = sentences_tx.send(PipelineFrame::SentenceReady { utterance_id, sentence }).await;
                         }
                     }
-                    Some(PipelineFrame::LLMResponseDone { utterance_id, .. }) => {
+                    Some(PipelineFrame::LLMResponseDone { utterance_id, end_of_turn, .. }) => {
                         if let Some(sentence) = splitter.flush() {
                             let _ = sentences_tx.send(PipelineFrame::SentenceReady { utterance_id, sentence }).await;
                         }
@@ -57,6 +57,7 @@ pub async fn sen_task(
                             .send(PipelineFrame::LLMResponseDone {
                                 utterance_id,
                                 full_text: String::new(),
+                                end_of_turn,
                             })
                             .await;
                         first_sentence_logged = false;

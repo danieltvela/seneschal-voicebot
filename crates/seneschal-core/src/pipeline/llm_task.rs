@@ -279,6 +279,7 @@ pub async fn llm_task(
                             .send(super::frames::PipelineFrame::LLMResponseDone {
                                 utterance_id: pipeline_id,
                                 full_text: String::new(),
+                                end_of_turn: true,
                             })
                             .await;
                         events.llm_post_finished.notify_one();
@@ -337,6 +338,7 @@ pub async fn llm_task(
                                     let _ = llm_tx.send(super::frames::PipelineFrame::LLMResponseDone {
                                         utterance_id: pipeline_id,
                                         full_text: llm_text.clone(),
+                                        end_of_turn: true,
                                     }).await;
                                     events.llm_post_finished.notify_one();
                                     if let Some(ref tx) = tui_tx {
@@ -415,6 +417,9 @@ pub async fn llm_task(
                                 .send(super::frames::PipelineFrame::LLMResponseDone {
                                     utterance_id: pipeline_id,
                                     full_text: ack_text.clone(),
+                                    // The ack closes the spoken turn: the background
+                                    // result arrives later as a brand-new turn.
+                                    end_of_turn: true,
                                 })
                                 .await;
                             events.llm_post_finished.notify_one();
@@ -576,6 +581,9 @@ pub async fn llm_task(
                             .send(PipelineFrame::LLMResponseDone {
                                 utterance_id: pipeline_id,
                                 full_text: String::new(),
+                                // Mid-turn: the tool result continues this spoken
+                                // turn, so the TTS FSM must NOT return to Idle.
+                                end_of_turn: false,
                             })
                             .await;
 

@@ -1286,13 +1286,9 @@ async fn async_main() -> Result<()> {
                 let state = rx.borrow().clone();
                 tracing::debug!(target: "fsm", "Pipeline state → {:?}", state);
                 #[cfg(feature = "control")]
-                ctrl.send(
-                    seneschal_control::control::broadcast::ControlEvent::StateChanged {
-                        state: state.control_wire_state().to_string(),
-                        utterance_id: state.utterance_id(),
-                        pause_reason: state.control_pause_reason().map(str::to_string),
-                    },
-                );
+                ctrl.send(seneschal_control::control::state::state_changed_event(
+                    &state,
+                ));
             }
         });
     }

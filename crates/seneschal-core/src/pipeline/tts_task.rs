@@ -24,9 +24,11 @@ pub type RemoteTtsTx = Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<T
 ///
 /// Owns the FSM transitions into and out of `PipelineState::Speaking`:
 /// - Sets `Speaking { utterance_id }` on the first sentence of each utterance.
-/// - Sets `Idle` when playback finishes AND the LLM has signalled it is done
-///   streaming (so no more sentences are coming), or when barge-in cancels
-///   the in-flight response. Issue #34.
+/// - Sets `Idle` when the LLM's end-of-turn frame arrives: because frames are
+///   FIFO and playback is serialised in this loop, that frame is always observed
+///   after every sentence for the turn has finished playing. Mid-turn flushes
+///   (`end_of_turn: false`, e.g. a foreground tool's narration) do not idle.
+/// - Sets `Idle` when barge-in cancels the in-flight response. Issue #34.
 ///
 /// Playback is incremental (issue #16): the provider streams PCM chunks and
 /// they are written to the speaker as they arrive.
@@ -51,9 +53,6 @@ pub async fn tts_task(
     let mut cancel_rx = events.barge_in_tx.subscribe();
     let mut first_sentence = true;
     let mut last_utterance_id: Option<u64> = None;
-    // Set when the LLM signalled end-of-response; used to go idle as soon as the
-    // final sentence finishes playing.
-    let mut llm_done = false;
 
     loop {
         // Drain queue first for low latency; block only when empty.
@@ -92,11 +91,6 @@ pub async fn tts_task(
                 }
                 announcement_window.lock().unwrap().queue_audio();
 
-                // A new utterance id means a fresh response started.
-                if last_utterance_id != Some(utterance_id) {
-                    llm_done = false;
-                }
-
                 if has_audio_device {
                     if last_utterance_id != Some(utterance_id) {
                         let _ = pipeline_state_tx.send(PipelineState::Speaking { utterance_id });
@@ -110,6 +104,13 @@ pub async fn tts_task(
                         .ok();
                     }
                 }
+
+                // Move this response from "queued" to "playing". Without the
+                // matching `start_playback`, `queue_audio` accumulated forever
+                // and `AnnouncementWindow::is_blocked()` stayed true for the
+                // rest of the session — so background results (deep worker,
+                // external agents) were never announced.
+                announcement_window.lock().unwrap().start_playback();
 
                 let outcome = exec_sentence(
                     &tts,
@@ -161,19 +162,16 @@ pub async fn tts_task(
                 }
 
                 announcement_window.lock().unwrap().finish_playback();
-
-                // Last sentence of the response already played → go idle.
-                if llm_done {
-                    try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
-                    llm_done = false;
-                }
             }
-            Some(PipelineFrame::LLMResponseDone { .. }) => {
-                llm_done = true;
-                // No sentence was playing (e.g. empty response) → idle now.
-                if last_utterance_id.is_none() {
+            Some(PipelineFrame::LLMResponseDone { end_of_turn, .. }) => {
+                // Frames are FIFO and playback is serialised in this loop, so an
+                // end-of-turn frame is always observed after every `SentenceReady`
+                // for that turn has finished playing. Only a real end-of-turn may
+                // return the FSM to `Idle`; mid-turn flushes (`end_of_turn: false`,
+                // e.g. a foreground tool's narration) keep the current state so
+                // the follow-up answer does not briefly flash `Idle`.
+                if end_of_turn {
                     try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
-                    llm_done = false;
                 }
             }
             Some(_) => continue,
@@ -323,6 +321,256 @@ fn try_set_idle(
                 seneschal_common::tui_events::PipelineState::Idle,
             ))
             .ok();
+        }
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+    use crate::pipeline::announcement_window::AnnouncementWindow;
+    use crate::pipeline::fsm::PauseReason;
+    use crate::tts::mock_tts::MockTts;
+    use std::time::Duration;
+
+    type Harness = (
+        mpsc::Sender<PipelineFrame>,
+        watch::Receiver<PipelineState>,
+        tokio::task::JoinHandle<()>,
+        Arc<Mutex<AnnouncementWindow>>,
+    );
+
+    /// Spawn a `tts_task` on a null audio output but with the `has_audio_device`
+    /// gate enabled, so the FSM actually exercises `Speaking` (the real device
+    /// check is irrelevant for state-machine coverage).
+    ///
+    /// The `AnnouncementWindow` the task owns is returned so tests can assert
+    /// the audio-queued accounting (which gates result announcements).
+    fn spawn(initial: PipelineState) -> Harness {
+        let events = Arc::new(PipelineEvents::new());
+        let (state_tx, state_rx) = watch::channel(initial);
+        let (tx, rx) = mpsc::channel::<PipelineFrame>(16);
+        let (mock, _captured) = MockTts::new();
+        let announcement_window = Arc::new(Mutex::new(AnnouncementWindow::new()));
+        let handle = tokio::spawn(tts_task(
+            events,
+            Arc::new(state_tx),
+            Arc::new(Mutex::new(None)),
+            rx,
+            Arc::new(TtsEngine::Mock(mock)),
+            Arc::new(AudioOutput::null()),
+            22050,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            true,
+            None,
+            Arc::clone(&announcement_window),
+            Arc::new(tokio::sync::Mutex::new(None)),
+        ));
+        (tx, state_rx, handle, announcement_window)
+    }
+
+    async fn send(tx: &mpsc::Sender<PipelineFrame>, frame: PipelineFrame) {
+        tx.send(frame).await.expect("tts channel closed");
+    }
+
+    async fn wait_for_wire(rx: &mut watch::Receiver<PipelineState>, target: &str) {
+        let reached = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if rx.borrow().control_wire_state() == target {
+                    return;
+                }
+                if rx.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            reached.is_ok(),
+            "FSM did not reach `{target}` within timeout (now `{}`)",
+            rx.borrow().control_wire_state()
+        );
+    }
+
+    /// Regression for the observed bug: the end-of-turn frame is only consumed
+    /// after the last sentence has already finished playing (FIFO), so the FSM
+    /// used to stay stuck in `Speaking` forever. It must return to `Idle`.
+    #[tokio::test]
+    async fn returns_to_idle_when_end_of_turn_arrives_after_playback() {
+        let (tx, mut rx, handle, _aw) = spawn(PipelineState::Thinking { utterance_id: 1 });
+
+        send(
+            &tx,
+            PipelineFrame::SentenceReady {
+                utterance_id: 1,
+                sentence: "Hola.".into(),
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "speaking").await;
+
+        send(
+            &tx,
+            PipelineFrame::LLMResponseDone {
+                utterance_id: 1,
+                full_text: "Hola.".into(),
+                end_of_turn: true,
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "idle").await;
+
+        handle.abort();
+    }
+
+    /// A mid-turn flush (foreground tool narration) must NOT idle: the follow-up
+    /// answer continues the same spoken turn.
+    #[tokio::test]
+    async fn stays_speaking_on_mid_turn_flush_then_idles_on_end_of_turn() {
+        let (tx, mut rx, handle, _aw) = spawn(PipelineState::Thinking { utterance_id: 1 });
+
+        send(
+            &tx,
+            PipelineFrame::SentenceReady {
+                utterance_id: 1,
+                sentence: "Te lo busco.".into(),
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "speaking").await;
+
+        send(
+            &tx,
+            PipelineFrame::LLMResponseDone {
+                utterance_id: 1,
+                full_text: String::new(),
+                end_of_turn: false,
+            },
+        )
+        .await;
+        // Let the task process the flush; state must remain `Speaking`.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(rx.borrow().control_wire_state(), "speaking");
+
+        send(
+            &tx,
+            PipelineFrame::SentenceReady {
+                utterance_id: 1,
+                sentence: "Aquí está.".into(),
+            },
+        )
+        .await;
+        send(
+            &tx,
+            PipelineFrame::LLMResponseDone {
+                utterance_id: 1,
+                full_text: "Aquí está.".into(),
+                end_of_turn: true,
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "idle").await;
+
+        handle.abort();
+    }
+
+    /// Empty response (no sentence ever queued): the end-of-turn frame is the
+    /// only signal, and it must still return the FSM to `Idle`.
+    #[tokio::test]
+    async fn returns_to_idle_on_empty_response() {
+        let (tx, mut rx, handle, _aw) = spawn(PipelineState::Thinking { utterance_id: 1 });
+
+        send(
+            &tx,
+            PipelineFrame::LLMResponseDone {
+                utterance_id: 1,
+                full_text: String::new(),
+                end_of_turn: true,
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "idle").await;
+
+        handle.abort();
+    }
+
+    /// Regression for the deep-worker "result never announced" bug: every
+    /// `queue_audio` must be balanced by a `start_playback`, otherwise
+    /// `audio_queued_count` grows forever and `pop_announcement` returns `None`
+    /// for the rest of the session.
+    #[tokio::test]
+    async fn playback_start_balances_queue_audio_and_unblocks_announcements() {
+        let (tx, mut rx, handle, aw) = spawn(PipelineState::Thinking { utterance_id: 1 });
+
+        // A background result (deep worker) is queued while the turn speaks.
+        aw.lock()
+            .unwrap()
+            .queue_announcement("tarea".into(), "resultado".into());
+
+        send(
+            &tx,
+            PipelineFrame::SentenceReady {
+                utterance_id: 1,
+                sentence: "Procesando en segundo plano.".into(),
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "speaking").await;
+
+        send(
+            &tx,
+            PipelineFrame::LLMResponseDone {
+                utterance_id: 1,
+                full_text: "Procesando en segundo plano.".into(),
+                end_of_turn: true,
+            },
+        )
+        .await;
+        wait_for_wire(&mut rx, "idle").await;
+
+        // After playback the window must be open and the result deliverable.
+        let announced = aw.lock().unwrap().pop_announcement();
+        assert!(
+            announced.is_some(),
+            "announcement blocked after playback — start_playback accounting broken"
+        );
+
+        handle.abort();
+    }
+
+    /// `try_set_idle` must only reset active states — never `Idle` (no-op),
+    /// `Listening` (still accumulating speech) or `Paused` (consolidation owns
+    /// its own resume).
+    #[test]
+    fn try_set_idle_only_resets_active_states() {
+        let aw = Arc::new(Mutex::new(AnnouncementWindow::new()));
+        let cases = [
+            (PipelineState::Idle, false),
+            (PipelineState::Listening { utterance_id: 1 }, false),
+            (PipelineState::Thinking { utterance_id: 1 }, true),
+            (PipelineState::Speaking { utterance_id: 1 }, true),
+            (
+                PipelineState::Paused {
+                    reason: PauseReason::Consolidation,
+                },
+                false,
+            ),
+        ];
+
+        for (state, should_idle) in cases {
+            let (tx, rx) = watch::channel(state.clone());
+            try_set_idle(&Arc::new(tx), &None, &aw);
+            let before = state.control_wire_state();
+            let after = rx.borrow().control_wire_state();
+            if should_idle {
+                assert_eq!(after, "idle", "state {state:?} should reset to Idle");
+            } else {
+                assert_eq!(
+                    after, before,
+                    "state {state:?} must stay unchanged after try_set_idle"
+                );
+            }
         }
     }
 }

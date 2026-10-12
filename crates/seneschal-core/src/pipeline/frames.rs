@@ -11,9 +11,15 @@ pub enum PipelineFrame {
     LLMToken { utterance_id: u64, token: String },
 
     /// LLM stream finished; carries the full concatenated response.
+    ///
+    /// `end_of_turn` is `true` only for the frame that closes the spoken turn
+    /// (the TTS actor returns to `PipelineState::Idle`). Mid-turn flushes — e.g.
+    /// between a foreground tool's narration and its follow-up answer — set it
+    /// to `false` so the FSM does not leave `Speaking` prematurely.
     LLMResponseDone {
         utterance_id: u64,
         full_text: String,
+        end_of_turn: bool,
     },
 
     /// A complete sentence ready for TTS synthesis.

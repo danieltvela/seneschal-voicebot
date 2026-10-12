@@ -60,8 +60,15 @@ fi
 
 # ── Overrides específicos de Linux (el .env apunta a dispositivos/voices de macOS) ──
 # STT: Parakeet TDT vía ONNX. El modelo ya está en models/parakeet-tdt-0.6b-v3-onnx.
-export STT_PROVIDER=parakeet
-export PARAKEET_MODEL_DIR="${PARAKEET_MODEL_DIR:-models/parakeet-tdt-0.6b-v3-onnx}"
+# export STT_PROVIDER=parakeet
+# export PARAKEET_MODEL_DIR="${PARAKEET_MODEL_DIR:-models/parakeet-tdt-0.6b-v3-onnx}"
+
+# STT:
+export STT_PROVIDER=openai
+export STT_URL=http://localhost:8024
+export STT_MODEL=qwen3-asr
+export STT_TIMEOUT_MS=10000
+
 
 # TTS: Kokoro. En Linux no existe AVSpeechSynthesizer; si el .env hereda
 # TTS_PROVIDER=avspeech, el binario abortaría al arrancar.
@@ -71,12 +78,14 @@ export OPENAI_TTS_URL=http://localhost:8025
 export OPENAI_TTS_VOICE=aiden
 export OPENAI_TTS_LANGUAGE=auto
 
+
+
 # ── GPU (issue #14): CUDA opt-in ─────────────────────────────────────────────
 # Con SENECHAL_CUDA=1 se compila con CUDA (whisper.cpp + ONNX Runtime GPU) y,
 # por defecto, GPU_AUTO reparte VAD/Parakeet/Kokoro entre las GPUs visibles.
 # Requiere toolkit CUDA instalado (nvcc) en el host. Requiere GPU_AUTO=0 o
 # overrides VAD_GPU/PARAKEET_GPU/TTS_GPU para un reparto manual.
-FEATURES="control,parakeet,kokoro,tui,remote,openai-tts"
+FEATURES="control,parakeet,kokoro,tui,remote,openai-tts,openai-stt"
 if [[ "${SENECHAL_CUDA:-0}" == "1" ]]; then
     FEATURES="$FEATURES,cuda"
 fi

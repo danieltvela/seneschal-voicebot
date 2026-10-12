@@ -100,4 +100,46 @@ mod control_wire_tests {
         );
         assert_eq!(PipelineState::Idle.control_pause_reason(), None);
     }
+
+    /// `is_busy()` is the gate consolidation uses to decide whether it may
+    /// interrupt; only `Idle` must report "not busy".
+    #[test]
+    fn is_busy_is_false_only_for_idle() {
+        assert!(!PipelineState::Idle.is_busy());
+        assert!(PipelineState::Listening { utterance_id: 1 }.is_busy());
+        assert!(PipelineState::Thinking { utterance_id: 1 }.is_busy());
+        assert!(PipelineState::Speaking { utterance_id: 1 }.is_busy());
+        assert!(
+            PipelineState::Paused {
+                reason: PauseReason::Consolidation,
+            }
+            .is_busy()
+        );
+    }
+
+    /// `utterance_id()` is surfaced on the Control API; speech states carry it,
+    /// `Idle`/`Paused` do not.
+    #[test]
+    fn utterance_id_exposed_for_speech_states_only() {
+        assert_eq!(PipelineState::Idle.utterance_id(), None);
+        assert_eq!(
+            PipelineState::Listening { utterance_id: 7 }.utterance_id(),
+            Some(7)
+        );
+        assert_eq!(
+            PipelineState::Thinking { utterance_id: 8 }.utterance_id(),
+            Some(8)
+        );
+        assert_eq!(
+            PipelineState::Speaking { utterance_id: 9 }.utterance_id(),
+            Some(9)
+        );
+        assert_eq!(
+            PipelineState::Paused {
+                reason: PauseReason::Consolidation,
+            }
+            .utterance_id(),
+            None
+        );
+    }
 }
