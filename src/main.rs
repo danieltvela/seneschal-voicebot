@@ -7,6 +7,7 @@
 // analysis → seneschal_extras::analysis
 // audio → seneschal_core::audio
 
+mod audio_events;
 mod config;
 mod db;
 // dream → seneschal_memory::dream
@@ -95,7 +96,7 @@ fn openai_tts_config(config: &Config) -> OpenAiTtsConfig {
 
 const AUDIO_CHANNEL_CAPACITY: usize = 200;
 const MAX_SPEECH_BUFFER_SECS: u32 = 30;
-const MIN_SPEECH_DURATION_MS: u32 = 300;
+// MIN_SPEECH_DURATION_MS moved to audio_events (its only user).
 
 // When the `avspeech` feature is enabled, the main thread must run CFRunLoop
 // so that AVSpeechSynthesizer buffer callbacks are delivered.
@@ -2058,868 +2059,602 @@ async fn async_main() -> Result<()> {
 
     let mut proactive_rx = proactive_rx;
     tokio::select! {
-            _ = async {
-                loop {
-                    // Inject pending agent results when AnnouncementWindow allows it.
-                    let maybe_announcement = announcement_window.lock().unwrap().pop_announcement();
-                    if let Some(announcement) = maybe_announcement {
-                        // issue #221: the announcement previously injected the FULL
-                        // rewritten task into the LLM history (a third copy — the
-                        // tool-call args and this one already carry it). Keep the
-                        // announcement to a short task label (≤80 chars) + the
-                        // result, which is enough for the model to announce it
-                        // naturally without dragging the whole task around.
-                        let task_short =
-                            seneschal_core::pipeline::truncate_chars(&announcement.task, 80);
-                        let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
-                            .replace("{task}", &task_short)
-                            .replace("{result}", &announcement.result);
-                        transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
-                    }
+                _ = async {
+                    loop {
+                        // Inject pending agent results when AnnouncementWindow allows it.
+                        let maybe_announcement = announcement_window.lock().unwrap().pop_announcement();
+                        if let Some(announcement) = maybe_announcement {
+                            // issue #221: the announcement previously injected the FULL
+                            // rewritten task into the LLM history (a third copy — the
+                            // tool-call args and this one already carry it). Keep the
+                            // announcement to a short task label (≤80 chars) + the
+                            // result, which is enough for the model to announce it
+                            // naturally without dragging the whole task around.
+                            let task_short =
+                                seneschal_core::pipeline::truncate_chars(&announcement.task, 80);
+                            let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
+                                .replace("{task}", &task_short)
+                                .replace("{result}", &announcement.result);
+                            transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                        }
 
-                    let chunk: AudioChunk = tokio::select! {
-                        result = rx.recv() => match result {
-                            Ok(c) => c,
-                            Err(e) => {
-                                error!(target: "audio", "Audio channel closed: {}", e);
-                                #[cfg(feature = "tui")]
-                                tui_tx.send(seneschal_tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
-                                break;
-                            }
-                        },
-                        Some(event) = proactive_rx.recv() => {
-                            match event {
-    ProactiveEvent::AgentResult {
-                                    task,
-                                    result,
-                                    tool_call_id,
-                                    correlation_id,
-                                } => {
-                                    // Stop background processing sound
-                                    filler_controller.stop();
+                        let chunk: AudioChunk = tokio::select! {
+                            result = rx.recv() => match result {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    error!(target: "audio", "Audio channel closed: {}", e);
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
+                                    break;
+                                }
+                            },
+                            Some(event) = proactive_rx.recv() => {
+                                match event {
+        ProactiveEvent::AgentResult {
+                                        task,
+                                        result,
+                                        tool_call_id,
+                                        correlation_id,
+                                    } => {
+                                        // Stop background processing sound
+                                        filler_controller.stop();
 
-                                    // Only real results (no tool_call_id) are shown as agent-task
-                                    // completion/failed. The `bg_` placeholder from a background
-                                    // tool call arrives as its own event, and the gray Tool row
-                                    // already shows the delegation ack.
-                                    let is_real = tool_call_id.is_none();
-                                    if is_real {
-                                        let task_key = if correlation_id.is_empty() {
-                                            task.clone()
+                                        // Only real results (no tool_call_id) are shown as agent-task
+                                        // completion/failed. The `bg_` placeholder from a background
+                                        // tool call arrives as its own event, and the gray Tool row
+                                        // already shows the delegation ack.
+                                        let is_real = tool_call_id.is_none();
+                                        if is_real {
+                                            let task_key = if correlation_id.is_empty() {
+                                                task.clone()
+                                            } else {
+                                                correlation_id.clone()
+                                            };
+                                            const ERROR_PREFIXES: &[&str] = &[
+                                                "ACP error:",
+                                                "ACP spawn error:",
+                                                "ACP init error:",
+                                                "ACP send error:",
+                                                "Agent error:",
+                                                "Deep worker error:",
+                                                "Deep worker timeout",
+                                                "Hermes",
+                                                "Visible session error:",
+                                                "Visible agent send error:",
+                                                "OpenCode session error:",
+                                            ];
+                                            let is_error = ERROR_PREFIXES
+                                                .iter()
+                                                .any(|p| result.starts_with(p));
+                                            #[cfg(feature = "tui")]
+                                            {
+                                                if is_error {
+                                                    tui_tx
+                                                        .send(seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                                                            task_id: task_key.clone(),
+                                                            message: result.clone(),
+                                                        })
+                                                        .ok();
+                                                } else {
+                                                    tui_tx
+                                                        .send(
+                                                            seneschal_tui::events::TuiEvent::AgentTaskCompleted {
+                                                                task_id: task_key.clone(),
+                                                                objective: task.clone(),
+                                                                result: result.clone(),
+                                                            },
+                                                        )
+                                                        .ok();
+                                                }
+                                            }
+                                            #[cfg(feature = "control")]
+                                            {
+                                                use seneschal_control::control::broadcast::ControlEvent;
+                                                const MAX_RESULT: usize = 32 * 1024;
+                                                let wire_result = if result.len() > MAX_RESULT {
+                                                    format!(
+                                                        "{}…[truncated]",
+                                                        &result[..MAX_RESULT]
+                                                    )
+                                                } else {
+                                                    result.clone()
+                                                };
+                                                let ctrl_ev = if is_error {
+                                                    ControlEvent::AgentTaskFailed {
+                                                        task_id: task_key,
+                                                        message: wire_result,
+                                                    }
+                                                } else {
+                                                    ControlEvent::AgentTaskCompleted {
+                                                        task_id: task_key,
+                                                        objective: task.clone(),
+                                                        result: wire_result,
+                                                    }
+                                                };
+                                                control_broadcast.send(ctrl_ev);
+                                            }
+                                        }
+
+                                        if let Some(id) = tool_call_id {
+                                            // Background tools (id starts with "bg_"): do NOT persist
+                                            // the placeholder tool result to session/DB, and do NOT
+                                            // send a PipelineFrame::AgentResult. The model already
+                                            // emitted an ack text and the pipeline has ended cleanly.
+                                            // The actual agent result will arrive later as a separate
+                                            // ProactiveEvent::AgentResult (without tool_call_id) and
+                                            // be delivered as an announcement.
+                                            let is_background = id.starts_with("bg_");
+                                            if !is_background {
+                                                let tool_msg = serde_json::json!({
+                                                    "role": "tool",
+                                                    "tool_call_id": id,
+                                                    "content": result,
+                                                });
+                                                {
+                                                    let mut s = llm_session.lock().unwrap();
+                                                    s.add_tool_exchange(vec![tool_msg.clone()]);
+                                                }
+                                                {
+                                                    let db_c = db.clone();
+                                                    let exchange = vec![tool_msg];
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
+                                                            warn!(target: "db", "Failed to save tool_result exchange: {}", e);
+                                                        }
+                                                    });
+                                                }
+                                                // Channel buffers this if llm_task is busy; it will pick it up when idle.
+                                                transcript_tx.send(PipelineFrame::AgentResult {
+                                                    task,
+                                                    result,
+                                                    tool_call_id: Some(id),
+                                                }).await.ok();
+                                            }
                                         } else {
-                                            correlation_id.clone()
-                                        };
-                                        const ERROR_PREFIXES: &[&str] = &[
-                                            "ACP error:",
-                                            "ACP spawn error:",
-                                            "ACP init error:",
-                                            "ACP send error:",
-                                            "Agent error:",
-                                            "Deep worker error:",
-                                            "Deep worker timeout",
-                                            "Hermes",
-                                            "Visible session error:",
-                                            "Visible agent send error:",
-                                            "OpenCode session error:",
-                                        ];
-                                        let is_error = ERROR_PREFIXES
-                                            .iter()
-                                            .any(|p| result.starts_with(p));
+                                            announcement_window.lock().unwrap().queue_announcement(task, result);
+                                        }
+                                    }
+                                    ProactiveEvent::InferenceDaemon { .. } => {}
+                                    ProactiveEvent::L1Saturated { total_chars, threshold } => {
+                                        let prompt = seneschal_common::i18n::get_notification("l1_saturated", &config.language)
+                                            .replace("{total_chars}", &total_chars.to_string())
+                                            .replace("{threshold}", &threshold.to_string());
+                                        transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
+                                    }
+                                    ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
+                                        // ── Mode "full" (issue #167) ────────────────────────
+                                        // Auto-approve without enqueuing or speaking. Mirrors
+                                        // qwen-audio-agent's `permissionMode === 'full'` and the
+                                        // `acp_agent_chat` test binary's `PermissionMode::Auto`.
+                                        if config.permission_mode == "full" {
+                                            let option_id = find_allow_option_id(&options)
+                                                .unwrap_or_else(|| "cancelled".to_string());
+                                            info!(
+                                                target: "acp",
+                                                "Auto-allowing permission (full mode) task={task_id} agent={agent_name} → {option_id}",
+                                            );
+                                            let _ = response_tx.send(option_id.clone());
+                                            #[cfg(feature = "control")]
+                                            control_broadcast.send(
+                                                seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
+                                                    task_id: task_id.clone(),
+                                                    option_id,
+                                                },
+                                            );
+                                            continue;
+                                        }
+
                                         #[cfg(feature = "tui")]
                                         {
-                                            if is_error {
-                                                tui_tx
-                                                    .send(seneschal_tui::events::TuiEvent::AgentTaskFailed {
-                                                        task_id: task_key.clone(),
-                                                        message: result.clone(),
-                                                    })
-                                                    .ok();
-                                            } else {
-                                                tui_tx
-                                                    .send(
-                                                        seneschal_tui::events::TuiEvent::AgentTaskCompleted {
-                                                            task_id: task_key.clone(),
-                                                            objective: task.clone(),
-                                                            result: result.clone(),
-                                                        },
-                                                    )
-                                                    .ok();
+                                            let display_opts: Vec<String> = options
+                                                .iter()
+                                                .map(|o| o.display_label())
+                                                .collect();
+                                            tui_tx
+                                                .send(
+                                                    seneschal_tui::events::TuiEvent::AgentTaskPermissionRequested {
+                                                        task_id: task_id.clone(),
+                                                        agent_name: agent_name.clone(),
+                                                        description: question.clone(),
+                                                        options: display_opts,
+                                                    },
+                                                )
+                                                .ok();
+                                        }
+                                        #[cfg(feature = "control")]
+                                        control_broadcast.send(
+                                            seneschal_control::control::broadcast::ControlEvent::AgentPermissionRequested {
+                                                task_id: task_id.clone(),
+                                                agent_name: agent_name.clone(),
+                                                description: question.clone(),
+                                                options: options.clone(),
+                                            },
+                                        );
+
+                                        if pipeline_state_rx.borrow().is_busy() {
+                                            events.barge_in_tx.send(0).ok();
+                                            announcement_window.lock().unwrap().interrupt();
+                                        }
+                                        let opts_str = options
+                                            .iter()
+                                            .map(|o| o.display_label())
+                                            .collect::<Vec<_>>()
+                                            .join(" / ");
+                                        let prompt_template = seneschal_common::i18n::get_notification(
+                                            "acp_permission",
+                                            &config.language,
+                                        );
+                                        let spoken_prompt = prompt_template
+                                            .replace("{question}", &question)
+                                            .replace("{opts_str}", &opts_str);
+
+                                        // Mint the permission id (also used as scope) and enqueue.
+                                        let authorization_id = permission_gate.enqueue(
+                                            task_id,
+                                            agent_name,
+                                            question.clone(),
+                                            options,
+                                            response_tx,
+                                        );
+
+                                        // Compose the LLM-visible notification: the natural
+                                        // spoken prompt PLUS the `<backend_permission_request>`
+                                        // block with the authorization_id so the LLM can call
+                                        // `respond_agent_permission` after hearing the user.
+                                        // The model sees the id but won't read it aloud (it
+                                        // generates its own natural question from `spoken_prompt`).
+                                        let llm_prompt = format!(
+                                            "{spoken_prompt}\n\n\
+                                             <backend_permission_request>\n\
+                                             authorization_id={authorization_id}\n\
+                                             operation={question}\n\
+                                             </backend_permission_request>\n\n\
+                                             Cuando el usuario responda en esta vuelta, llama a\n\
+                                             la herramienta `respond_agent_permission` con ese\n\
+                                             `authorization_id` y la `decision` que corresponda\n\
+                                             (`always` si consintió, `reject` si rechazó)."
+                                        );
+                                        transcript_tx
+                                            .send(PipelineFrame::SystemNotification { text: llm_prompt })
+                                            .await
+                                            .ok();
+                                    }
+                                    ProactiveEvent::PluginSwitch { .. } => {
+                                        // No-op: handled via dedicated plugin_switch_rx channel
+                                    }
+                                    ProactiveEvent::DeviceConnected => {
+                                        // Audio device present and capture idle —
+                                        // (re)start capture, swap output, and greet
+                                        // at most once per session.
+                                        info!(target: "audio", "DeviceConnected received — starting audio pipeline");
+                                        // A dead stream leaves a ZOMBIE handle here:
+                                        // err_fn clears capture_active on stream
+                                        // errors (POLLERR-class ones log only at
+                                        // TRACE), but nothing drops the Stream, so the
+                                        // old `capture_stream.is_none()` guard could
+                                        // never rebuild → permanent deafness. Rebuild
+                                        // whenever capture is not actually running.
+                                        if !capture_active.load(Ordering::SeqCst) {
+                                            // Dropping joins the old audio thread, so
+                                            // its stale err_fn cannot clear the flag
+                                            // after the new stream starts.
+                                            capture_stream = None;
+                                            match AudioCapture::new(config.audio_input_device.as_deref()) {
+                                                Ok(ac) => {
+                                                    source_sample_rate = ac.sample_rate();
+                                                    speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
+                                                    info!(target: "audio", "Audio input connected: {}Hz", source_sample_rate);
+                                                    match ac.start_capture(tx.clone(), samples_per_chunk, Some(Arc::clone(&capture_active))) {
+                                                        Ok(stream) => {
+                                                            capture_active.store(true, Ordering::SeqCst);
+                                                            capture_stream = Some(stream);
+                                                        }
+                                                        Err(e) => {
+                                                            error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
+                                                }
                                             }
+                                            // Swap output device (spawn_blocking — may wait for in-flight playback)
+                                            let out = Arc::clone(&audio_output);
+                                            let out_name = config.audio_output_device.clone();
+                                            tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
+                                                .await
+                                                .ok();
+                                        }
+                                        // Send the full greeting exactly once, only once capture is actually running.
+                                        if !startup_greeted && capture_stream.is_some() {
+                                            let key = if is_first_launch { "first_launch" } else { "startup" };
+                                            let notification = seneschal_common::i18n::get_notification(key, &config.language);
+                                            let notification = if is_first_launch {
+                                                notification.to_string()
+                                            } else {
+                                                let now = chrono::Local::now();
+                                                let time_str = now.format("%H:%M").to_string();
+                                                let date_str = now.format("%d/%m/%Y").to_string();
+                                                notification
+                                                    .replace("{time_str}", &time_str)
+                                                    .replace("{date_str}", &date_str)
+                                            };
+                                            transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                                            startup_greeted = true;
+                                        }
+                                    }
+                                    ProactiveEvent::AgentMilestone { agent_name: _, milestone, .. } => {
+                                        // Heuristic ES/EN substring mapping is known quality debt (design #190).
+                                        let milestone_text = milestone.clone();
+                                        let lower = milestone_text.to_lowercase();
+                                        let kind = if lower.contains("ejecución")
+                                            || lower.contains("running")
+                                            || lower.contains("procesando")
+                                        {
+                                            "running"
+                                        } else if lower.contains("finalizando")
+                                            || lower.contains("organizando")
+                                            || lower.contains("complet")
+                                        {
+                                            "finalizing"
+                                        } else if lower.contains("delegación")
+                                            || lower.contains("delegated")
+                                            || lower.contains("proyecto")
+                                        {
+                                            "delegated"
+                                        } else {
+                                            "running"
+                                        };
+                                        #[cfg(feature = "tui")]
+                                        {
+                                            let tui_ev = match kind {
+                                                "finalizing" => {
+                                                    seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                                        task_id: milestone_text.clone(),
+                                                        objective: milestone_text.clone(),
+                                                    }
+                                                }
+                                                "delegated" => {
+                                                    seneschal_tui::events::TuiEvent::AgentTaskDelegated {
+                                                        task_id: milestone_text.clone(),
+                                                        objective: milestone_text.clone(),
+                                                    }
+                                                }
+                                                _ => seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                },
+                                            };
+                                            tui_tx.send(tui_ev).ok();
                                         }
                                         #[cfg(feature = "control")]
                                         {
                                             use seneschal_control::control::broadcast::ControlEvent;
-                                            const MAX_RESULT: usize = 32 * 1024;
-                                            let wire_result = if result.len() > MAX_RESULT {
-                                                format!(
-                                                    "{}…[truncated]",
-                                                    &result[..MAX_RESULT]
-                                                )
-                                            } else {
-                                                result.clone()
-                                            };
-                                            let ctrl_ev = if is_error {
-                                                ControlEvent::AgentTaskFailed {
-                                                    task_id: task_key,
-                                                    message: wire_result,
-                                                }
-                                            } else {
-                                                ControlEvent::AgentTaskCompleted {
-                                                    task_id: task_key,
-                                                    objective: task.clone(),
-                                                    result: wire_result,
-                                                }
+                                            let ctrl_ev = match kind {
+                                                "finalizing" => ControlEvent::AgentTaskFinalizing {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                },
+                                                "delegated" => ControlEvent::AgentTaskDelegated {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                },
+                                                _ => ControlEvent::AgentTaskRunning {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                },
                                             };
                                             control_broadcast.send(ctrl_ev);
                                         }
-                                    }
 
-                                    if let Some(id) = tool_call_id {
-                                        // Background tools (id starts with "bg_"): do NOT persist
-                                        // the placeholder tool result to session/DB, and do NOT
-                                        // send a PipelineFrame::AgentResult. The model already
-                                        // emitted an ack text and the pipeline has ended cleanly.
-                                        // The actual agent result will arrive later as a separate
-                                        // ProactiveEvent::AgentResult (without tool_call_id) and
-                                        // be delivered as an announcement.
-                                        let is_background = id.starts_with("bg_");
-                                        if !is_background {
-                                            let tool_msg = serde_json::json!({
-                                                "role": "tool",
-                                                "tool_call_id": id,
-                                                "content": result,
-                                            });
-                                            {
-                                                let mut s = llm_session.lock().unwrap();
-                                                s.add_tool_exchange(vec![tool_msg.clone()]);
-                                            }
-                                            {
-                                                let db_c = db.clone();
-                                                let exchange = vec![tool_msg];
-                                                tokio::spawn(async move {
-                                                    if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
-                                                        warn!(target: "db", "Failed to save tool_result exchange: {}", e);
-                                                    }
-                                                });
-                                            }
-                                            // Channel buffers this if llm_task is busy; it will pick it up when idle.
-                                            transcript_tx.send(PipelineFrame::AgentResult {
-                                                task,
-                                                result,
-                                                tool_call_id: Some(id),
-                                            }).await.ok();
+                                        // Speak the milestone text via TTS so the user hears progress.
+                                        if !pipeline_state_rx.borrow().is_busy() {
+                                            transcript_tx
+                                                .send(PipelineFrame::SystemNotification {
+                                                    text: milestone,
+                                                })
+                                                .await
+                                                .ok();
+                                        } else {
+                                            debug!(target: "pipeline", "AgentMilestone skipped (pipeline busy): {milestone}");
                                         }
-                                    } else {
-                                        announcement_window.lock().unwrap().queue_announcement(task, result);
                                     }
-                                }
-                                ProactiveEvent::InferenceDaemon { .. } => {}
-                                ProactiveEvent::L1Saturated { total_chars, threshold } => {
-                                    let prompt = seneschal_common::i18n::get_notification("l1_saturated", &config.language)
-                                        .replace("{total_chars}", &total_chars.to_string())
-                                        .replace("{threshold}", &threshold.to_string());
-                                    transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
-                                }
-                                ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
-                                    // ── Mode "full" (issue #167) ────────────────────────
-                                    // Auto-approve without enqueuing or speaking. Mirrors
-                                    // qwen-audio-agent's `permissionMode === 'full'` and the
-                                    // `acp_agent_chat` test binary's `PermissionMode::Auto`.
-                                    if config.permission_mode == "full" {
-                                        let option_id = find_allow_option_id(&options)
-                                            .unwrap_or_else(|| "cancelled".to_string());
+                                    ProactiveEvent::McpNotification { server_name, method, params } => {
                                         info!(
-                                            target: "acp",
-                                            "Auto-allowing permission (full mode) task={task_id} agent={agent_name} → {option_id}",
+                                            target: "mcp",
+                                            "Notification from MCP server '{server_name}': {method} {params}"
                                         );
-                                        let _ = response_tx.send(option_id.clone());
                                         #[cfg(feature = "control")]
                                         control_broadcast.send(
-                                            seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
-                                                task_id: task_id.clone(),
-                                                option_id,
+                                            seneschal_control::control::broadcast::ControlEvent::McpNotification {
+                                                server_name: server_name.clone(),
+                                                method: method.clone(),
+                                                params: params.clone(),
                                             },
                                         );
-                                        continue;
                                     }
-
-                                    #[cfg(feature = "tui")]
-                                    {
-                                        let display_opts: Vec<String> = options
-                                            .iter()
-                                            .map(|o| o.display_label())
-                                            .collect();
-                                        tui_tx
-                                            .send(
-                                                seneschal_tui::events::TuiEvent::AgentTaskPermissionRequested {
-                                                    task_id: task_id.clone(),
-                                                    agent_name: agent_name.clone(),
-                                                    description: question.clone(),
-                                                    options: display_opts,
-                                                },
-                                            )
-                                            .ok();
-                                    }
-                                    #[cfg(feature = "control")]
-                                    control_broadcast.send(
-                                        seneschal_control::control::broadcast::ControlEvent::AgentPermissionRequested {
-                                            task_id: task_id.clone(),
-                                            agent_name: agent_name.clone(),
-                                            description: question.clone(),
-                                            options: options.clone(),
-                                        },
-                                    );
-
-                                    if pipeline_state_rx.borrow().is_busy() {
-                                        events.barge_in_tx.send(0).ok();
-                                        announcement_window.lock().unwrap().interrupt();
-                                    }
-                                    let opts_str = options
-                                        .iter()
-                                        .map(|o| o.display_label())
-                                        .collect::<Vec<_>>()
-                                        .join(" / ");
-                                    let prompt_template = seneschal_common::i18n::get_notification(
-                                        "acp_permission",
-                                        &config.language,
-                                    );
-                                    let spoken_prompt = prompt_template
-                                        .replace("{question}", &question)
-                                        .replace("{opts_str}", &opts_str);
-
-                                    // Mint the permission id (also used as scope) and enqueue.
-                                    let authorization_id = permission_gate.enqueue(
-                                        task_id,
-                                        agent_name,
-                                        question.clone(),
-                                        options,
-                                        response_tx,
-                                    );
-
-                                    // Compose the LLM-visible notification: the natural
-                                    // spoken prompt PLUS the `<backend_permission_request>`
-                                    // block with the authorization_id so the LLM can call
-                                    // `respond_agent_permission` after hearing the user.
-                                    // The model sees the id but won't read it aloud (it
-                                    // generates its own natural question from `spoken_prompt`).
-                                    let llm_prompt = format!(
-                                        "{spoken_prompt}\n\n\
-                                         <backend_permission_request>\n\
-                                         authorization_id={authorization_id}\n\
-                                         operation={question}\n\
-                                         </backend_permission_request>\n\n\
-                                         Cuando el usuario responda en esta vuelta, llama a\n\
-                                         la herramienta `respond_agent_permission` con ese\n\
-                                         `authorization_id` y la `decision` que corresponda\n\
-                                         (`always` si consintió, `reject` si rechazó)."
-                                    );
-                                    transcript_tx
-                                        .send(PipelineFrame::SystemNotification { text: llm_prompt })
-                                        .await
-                                        .ok();
                                 }
-                                ProactiveEvent::PluginSwitch { .. } => {
-                                    // No-op: handled via dedicated plugin_switch_rx channel
-                                }
-                                ProactiveEvent::DeviceConnected => {
-                                    // Audio device present and capture idle —
-                                    // (re)start capture, swap output, and greet
-                                    // at most once per session.
-                                    info!(target: "audio", "DeviceConnected received — starting audio pipeline");
-                                    // A dead stream leaves a ZOMBIE handle here:
-                                    // err_fn clears capture_active on stream
-                                    // errors (POLLERR-class ones log only at
-                                    // TRACE), but nothing drops the Stream, so the
-                                    // old `capture_stream.is_none()` guard could
-                                    // never rebuild → permanent deafness. Rebuild
-                                    // whenever capture is not actually running.
-                                    if !capture_active.load(Ordering::SeqCst) {
-                                        // Dropping joins the old audio thread, so
-                                        // its stale err_fn cannot clear the flag
-                                        // after the new stream starts.
-                                        capture_stream = None;
-                                        match AudioCapture::new(config.audio_input_device.as_deref()) {
-                                            Ok(ac) => {
-                                                source_sample_rate = ac.sample_rate();
-                                                speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
-                                                info!(target: "audio", "Audio input connected: {}Hz", source_sample_rate);
-                                                match ac.start_capture(tx.clone(), samples_per_chunk, Some(Arc::clone(&capture_active))) {
-                                                    Ok(stream) => {
-                                                        capture_active.store(true, Ordering::SeqCst);
-                                                        capture_stream = Some(stream);
-                                                    }
-                                                    Err(e) => {
-                                                        error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
-                                            }
+                                continue;
+                            },
+                            Some(switch_event) = plugin_switch_rx.recv() => {
+                                // Queue switch event — apply between turns only
+                                pending_plugin_switch = Some(switch_event);
+                                continue;
+                            },
+                        };
+
+                        // Process pending plugin switch when pipeline is idle
+                        if !pipeline_state_rx.borrow().is_busy()
+                            && let Some(switch_event) = pending_plugin_switch.take()
+                        {
+                             match switch_event {
+                                PluginSwitchEvent::Activate { plugin_id } => {
+                                    if let Some(activated) = plugin_manager.activate(
+                                        &plugin_id,
+                                        OriginalConfigSnapshot::from_config(&config),
+                                    ) {
+                                        // Issue #236: plugin tools live in the worker
+                                        // pool when the deep worker is enabled —
+                                        // unregister/register there.
+                                        let target_reg: Arc<Mutex<ToolRegistry>> = match &deep_worker {
+                                            Some(ctx) => Arc::clone(&ctx.tools),
+                                            None => Arc::clone(&tools),
+                                        };
+                                        // Cleanup previous plugin's tools
+                                        for name in &activated.previous_tool_names {
+                                            target_reg.lock().unwrap().unregister(name);
                                         }
-                                        // Swap output device (spawn_blocking — may wait for in-flight playback)
-                                        let out = Arc::clone(&audio_output);
-                                        let out_name = config.audio_output_device.clone();
-                                        tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
-                                            .await
-                                            .ok();
-                                    }
-                                    // Send the full greeting exactly once, only once capture is actually running.
-                                    if !startup_greeted && capture_stream.is_some() {
-                                        let key = if is_first_launch { "first_launch" } else { "startup" };
-                                        let notification = seneschal_common::i18n::get_notification(key, &config.language);
-                                        let notification = if is_first_launch {
-                                            notification.to_string()
+                                        for name in &activated.previous_agent_names {
+                                            target_reg.lock().unwrap().unregister(name);
+                                        }
+                                        // Drop previous MCP servers (they die when handle is dropped)
+                                        plugin_runtime_spawned_mcp = None;
+
+                                        // Spawn new MCP servers and register tools
+                                        if !activated.mcp_servers.is_empty() {
+                                            let (clients, proxies, names) =
+                                                SpawnedMcpServers::spawn_clients(&activated.mcp_servers).await;
+                                            let spawned = {
+                                                let mut tools_guard = target_reg.lock().unwrap();
+                                                SpawnedMcpServers::from_parts(
+                                                    clients,
+                                                    proxies,
+                                                    names,
+                                                    &mut tools_guard,
+                                                )
+                                            };
+                                            plugin_runtime_spawned_mcp = Some(spawned);
+                                        }
+
+                                        // Rebuild system prompt with new plugin sections
+                                        let p_sections = build_plugin_prompt_section(&[&activated.prompt]);
+                                        if let Some(ctx) = &deep_worker {
+                                            // Voice stays lean; the worker gets the
+                                            // fresh plugin sections (issue #236).
+                                            let mut sections = deep_worker_delegate.agents_section();
+                                            sections.push_str(&build_plugin_prompt_section_text(&p_sections));
+                                            ctx.engine.set_extra_sections(sections);
+                                        }
+                                        let voice_sections = if deep_worker.is_some() {
+                                            PluginPromptSections::default()
                                         } else {
-                                            let now = chrono::Local::now();
-                                            let time_str = now.format("%H:%M").to_string();
-                                            let date_str = now.format("%d/%m/%Y").to_string();
-                                            notification
-                                                .replace("{time_str}", &time_str)
-                                                .replace("{date_str}", &date_str)
+                                            p_sections
                                         };
-                                        transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
-                                        startup_greeted = true;
+                                        // The voice prompt's tool section always
+                                        // reflects the VOICE registry.
+                                        let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                        let new_sys_prompt = build_system_prompt(
+                                            &config.llm_system_prompt,
+                                            config.primary_wake_word(),
+                                            &profile_facts,
+                                            &memories,
+                                            &agent_section,
+                                            &tool_sec,
+                                            &immutable_rules,
+                                            &voice_sections,
+                                        );
+                                        llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+                                        plugin_runtime_active_id = Some(plugin_id);
+
+                                        info!(target: "pipeline", plugin = %activated.id, "Plugin activated between turns");
                                     }
                                 }
-                                ProactiveEvent::AgentMilestone { agent_name: _, milestone, .. } => {
-                                    // Heuristic ES/EN substring mapping is known quality debt (design #190).
-                                    let milestone_text = milestone.clone();
-                                    let lower = milestone_text.to_lowercase();
-                                    let kind = if lower.contains("ejecución")
-                                        || lower.contains("running")
-                                        || lower.contains("procesando")
-                                    {
-                                        "running"
-                                    } else if lower.contains("finalizando")
-                                        || lower.contains("organizando")
-                                        || lower.contains("complet")
-                                    {
-                                        "finalizing"
-                                    } else if lower.contains("delegación")
-                                        || lower.contains("delegated")
-                                        || lower.contains("proyecto")
-                                    {
-                                        "delegated"
-                                    } else {
-                                        "running"
-                                    };
-                                    #[cfg(feature = "tui")]
-                                    {
-                                        let tui_ev = match kind {
-                                            "finalizing" => {
-                                                seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
-                                                    task_id: milestone_text.clone(),
-                                                    objective: milestone_text.clone(),
-                                                }
-                                            }
-                                            "delegated" => {
-                                                seneschal_tui::events::TuiEvent::AgentTaskDelegated {
-                                                    task_id: milestone_text.clone(),
-                                                    objective: milestone_text.clone(),
-                                                }
-                                            }
-                                            _ => seneschal_tui::events::TuiEvent::AgentTaskRunning {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text.clone(),
-                                            },
+                                PluginSwitchEvent::Deactivate => {
+                                    if let Some(deactivated) = plugin_manager.deactivate(
+                                        OriginalConfigSnapshot::from_config(&config),
+                                    ) {
+                                        let target_reg: Arc<Mutex<ToolRegistry>> = match &deep_worker {
+                                            Some(ctx) => Arc::clone(&ctx.tools),
+                                            None => Arc::clone(&tools),
                                         };
-                                        tui_tx.send(tui_ev).ok();
-                                    }
-                                    #[cfg(feature = "control")]
-                                    {
-                                        use seneschal_control::control::broadcast::ControlEvent;
-                                        let ctrl_ev = match kind {
-                                            "finalizing" => ControlEvent::AgentTaskFinalizing {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text.clone(),
-                                            },
-                                            "delegated" => ControlEvent::AgentTaskDelegated {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text.clone(),
-                                            },
-                                            _ => ControlEvent::AgentTaskRunning {
-                                                task_id: milestone_text.clone(),
-                                                objective: milestone_text.clone(),
-                                            },
-                                        };
-                                        control_broadcast.send(ctrl_ev);
-                                    }
+                                        // Unregister plugin tools
+                                        for name in &deactivated.tool_names {
+                                            target_reg.lock().unwrap().unregister(name);
+                                        }
+                                        for name in &deactivated.agent_names {
+                                            target_reg.lock().unwrap().unregister(name);
+                                        }
+                                        // Drop MCP servers
+                                        plugin_runtime_spawned_mcp = None;
 
-                                    // Speak the milestone text via TTS so the user hears progress.
-                                    if !pipeline_state_rx.borrow().is_busy() {
-                                        transcript_tx
-                                            .send(PipelineFrame::SystemNotification {
-                                                text: milestone,
-                                            })
-                                            .await
-                                            .ok();
-                                    } else {
-                                        debug!(target: "pipeline", "AgentMilestone skipped (pipeline busy): {milestone}");
-                                    }
-                                }
-                                ProactiveEvent::McpNotification { server_name, method, params } => {
-                                    info!(
-                                        target: "mcp",
-                                        "Notification from MCP server '{server_name}': {method} {params}"
-                                    );
-                                    #[cfg(feature = "control")]
-                                    control_broadcast.send(
-                                        seneschal_control::control::broadcast::ControlEvent::McpNotification {
-                                            server_name: server_name.clone(),
-                                            method: method.clone(),
-                                            params: params.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                            continue;
-                        },
-                        Some(switch_event) = plugin_switch_rx.recv() => {
-                            // Queue switch event — apply between turns only
-                            pending_plugin_switch = Some(switch_event);
-                            continue;
-                        },
-                    };
+                                        // Rebuild system prompt without plugin sections
+                                        let empty_sections = PluginPromptSections::default();
+                                        if let Some(ctx) = &deep_worker {
+                                            ctx.engine
+                                                .set_extra_sections(deep_worker_delegate.agents_section());
+                                        }
+                                        // The voice prompt's tool section always
+                                        // reflects the VOICE registry.
+                                        let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                        let new_sys_prompt = build_system_prompt(
+                                            &config.llm_system_prompt,
+                                            config.primary_wake_word(),
+                                            &profile_facts,
+                                            &memories,
+                                            &agent_section,
+                                            &tool_sec,
+                                            &immutable_rules,
+                                            &empty_sections,
+                                        );
+                                        llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
 
-                    // Process pending plugin switch when pipeline is idle
-                    if !pipeline_state_rx.borrow().is_busy()
-                        && let Some(switch_event) = pending_plugin_switch.take()
-                    {
-                         match switch_event {
-                            PluginSwitchEvent::Activate { plugin_id } => {
-                                if let Some(activated) = plugin_manager.activate(
-                                    &plugin_id,
-                                    OriginalConfigSnapshot::from_config(&config),
-                                ) {
-                                    // Issue #236: plugin tools live in the worker
-                                    // pool when the deep worker is enabled —
-                                    // unregister/register there.
-                                    let target_reg: Arc<Mutex<ToolRegistry>> = match &deep_worker {
-                                        Some(ctx) => Arc::clone(&ctx.tools),
-                                        None => Arc::clone(&tools),
-                                    };
-                                    // Cleanup previous plugin's tools
-                                    for name in &activated.previous_tool_names {
-                                        target_reg.lock().unwrap().unregister(name);
+                                        info!(target: "pipeline", plugin = %deactivated.id, "Plugin deactivated between turns");
                                     }
-                                    for name in &activated.previous_agent_names {
-                                        target_reg.lock().unwrap().unregister(name);
-                                    }
-                                    // Drop previous MCP servers (they die when handle is dropped)
-                                    plugin_runtime_spawned_mcp = None;
-
-                                    // Spawn new MCP servers and register tools
-                                    if !activated.mcp_servers.is_empty() {
-                                        let (clients, proxies, names) =
-                                            SpawnedMcpServers::spawn_clients(&activated.mcp_servers).await;
-                                        let spawned = {
-                                            let mut tools_guard = target_reg.lock().unwrap();
-                                            SpawnedMcpServers::from_parts(
-                                                clients,
-                                                proxies,
-                                                names,
-                                                &mut tools_guard,
-                                            )
-                                        };
-                                        plugin_runtime_spawned_mcp = Some(spawned);
-                                    }
-
-                                    // Rebuild system prompt with new plugin sections
-                                    let p_sections = build_plugin_prompt_section(&[&activated.prompt]);
-                                    if let Some(ctx) = &deep_worker {
-                                        // Voice stays lean; the worker gets the
-                                        // fresh plugin sections (issue #236).
-                                        let mut sections = deep_worker_delegate.agents_section();
-                                        sections.push_str(&build_plugin_prompt_section_text(&p_sections));
-                                        ctx.engine.set_extra_sections(sections);
-                                    }
-                                    let voice_sections = if deep_worker.is_some() {
-                                        PluginPromptSections::default()
-                                    } else {
-                                        p_sections
-                                    };
-                                    // The voice prompt's tool section always
-                                    // reflects the VOICE registry.
-                                    let tool_sec = tools.lock().unwrap().system_prompt_section();
-                                    let new_sys_prompt = build_system_prompt(
-                                        &config.llm_system_prompt,
-                                        config.primary_wake_word(),
-                                        &profile_facts,
-                                        &memories,
-                                        &agent_section,
-                                        &tool_sec,
-                                        &immutable_rules,
-                                        &voice_sections,
-                                    );
-                                    llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
-                                    plugin_runtime_active_id = Some(plugin_id);
-
-                                    info!(target: "pipeline", plugin = %activated.id, "Plugin activated between turns");
-                                }
-                            }
-                            PluginSwitchEvent::Deactivate => {
-                                if let Some(deactivated) = plugin_manager.deactivate(
-                                    OriginalConfigSnapshot::from_config(&config),
-                                ) {
-                                    let target_reg: Arc<Mutex<ToolRegistry>> = match &deep_worker {
-                                        Some(ctx) => Arc::clone(&ctx.tools),
-                                        None => Arc::clone(&tools),
-                                    };
-                                    // Unregister plugin tools
-                                    for name in &deactivated.tool_names {
-                                        target_reg.lock().unwrap().unregister(name);
-                                    }
-                                    for name in &deactivated.agent_names {
-                                        target_reg.lock().unwrap().unregister(name);
-                                    }
-                                    // Drop MCP servers
-                                    plugin_runtime_spawned_mcp = None;
-
-                                    // Rebuild system prompt without plugin sections
-                                    let empty_sections = PluginPromptSections::default();
-                                    if let Some(ctx) = &deep_worker {
-                                        ctx.engine
-                                            .set_extra_sections(deep_worker_delegate.agents_section());
-                                    }
-                                    // The voice prompt's tool section always
-                                    // reflects the VOICE registry.
-                                    let tool_sec = tools.lock().unwrap().system_prompt_section();
-                                    let new_sys_prompt = build_system_prompt(
-                                        &config.llm_system_prompt,
-                                        config.primary_wake_word(),
-                                        &profile_facts,
-                                        &memories,
-                                        &agent_section,
-                                        &tool_sec,
-                                        &immutable_rules,
-                                        &empty_sections,
-                                    );
-                                    llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
-
-                                    info!(target: "pipeline", plugin = %deactivated.id, "Plugin deactivated between turns");
                                 }
                             }
                         }
-                    }
 
-                    let mono: Vec<f32> = if chunk.channels > 1 {
-                        chunk.samples
-                            .chunks(chunk.channels as usize)
-                            .map(|f| f.iter().sum::<f32>() / chunk.channels as f32)
-                            .collect()
-                    } else {
-                        chunk.samples
-                    };
-                    let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
+                        let mono: Vec<f32> = if chunk.channels > 1 {
+                            chunk.samples
+                                .chunks(chunk.channels as usize)
+                                .map(|f| f.iter().sum::<f32>() / chunk.channels as f32)
+                                .collect()
+                        } else {
+                            chunk.samples
+                        };
+                        let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
 
-                    stt_provider.process_audio(&mono, &stt_tx).await.ok();
+                        stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
-                    // Collect pending STT events, then process each one.
-                    // Using a Vec + for loop allows .await inside SpeechEnd handling.
-                    let pending_events: Vec<SpeechEvent> = std::iter::from_fn(|| stt_rx.try_recv().ok()).collect();
-                    for event in pending_events {
-                        match event {
-                            SpeechEvent::SpeechStart { segment_seq } => {
-                                active_segment_seq = segment_seq;
-                                t_speech_start = Some(Instant::now());
-                                info!(target: "performance", "[+0ms] SpeechStart (seq {segment_seq})");
-                                #[cfg(feature = "tui")]
-                                tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                    seneschal_tui::events::PipelineState::Listening,
-                                )).ok();
-                                *last_speech_at.lock().unwrap() = Instant::now();
-
-                                info!(target: "pipeline", "SpeechStart — firing BARGE_IN");
-                                events.barge_in_tx.send(utterance_epoch.load(Ordering::SeqCst)).ok();
-                                // Remote STT (issue #17): abort any in-flight
-                                // transcription now that the user barged in.
-                                stt_provider.cancel_inflight();
-                                announcement_window.lock().unwrap().set_user_speaking(true);
-                                announcement_window.lock().unwrap().interrupt();
-                                info!(target: "pipeline", "SpeechStart — interrupted pending announcements");
-
-                                let current_commits = turn_commit_counter.load(Ordering::SeqCst);
-                                if current_commits > last_cleared_commit {
-                                    speech_buffer.clear();
-                                    last_cleared_commit = current_commits;
-                                }
-                                speech_buffer_start_offset = speech_buffer.sample_count();
-                                speech_buffer.push(&mono);
-
-                                utterance_epoch.fetch_add(1, Ordering::SeqCst);
-                            }
-                            SpeechEvent::Speech(partial_text) => {
-                                speech_buffer.push(&mono);
-                                debug!(target: "stt", "Partial: {}", partial_text);
-                            }
-                            SpeechEvent::SpeechEnd { segment_seq, quality } => {
-                                speech_buffer.push(&mono);
-
-                                // Stale result: a newer SpeechStart (barge-in)
-                                // opened a different utterance, so this end
-                                // belongs to superseded speech. Drop it — its
-                                // transcript must never reach the LLM under
-                                // the new utterance id.
-                                if segment_seq != active_segment_seq {
-                                    debug!(
-                                        target: "pipeline",
-                                        "Stale SpeechEnd (seq {segment_seq}, active {active_segment_seq}) — dropped after barge-in"
-                                    );
-                                    continue;
-                                }
-
-                                // NoSpeechGate: reject non-speech transcriptions
-                                if no_speech_gate.should_reject(&quality) {
-                                    debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
-                                    t_speech_start = None;
-                                    #[cfg(feature = "tui")]
-                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                        seneschal_tui::events::PipelineState::Idle,
-                                    )).ok();
-                                    continue;
-                                }
-
-                                let segment_duration_ms = t_speech_start.as_ref()
-                                    .map(|t| t.elapsed().as_millis() as u32)
-                                    .unwrap_or(0);
-
-                                // Wall-clock duration can be tiny on the short-utterance
-                                // path (SpeechStart fires at finalize, Apple returns in
-                                // ~50–200ms). NoSpeechGate already rejected empty/junk;
-                                // accept non-empty gated text even if wall duration is low.
-                                if segment_duration_ms < MIN_SPEECH_DURATION_MS
-                                    && quality.text.trim().is_empty()
-                                {
-                                    debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
-                                    t_speech_start = None;
-                                    #[cfg(feature = "tui")]
-                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                        seneschal_tui::events::PipelineState::Idle,
-                                    )).ok();
-                                    continue;
-                                }
-
-                                let current_commits = turn_commit_counter.load(Ordering::SeqCst);
-                                if current_commits > last_cleared_commit {
-                                    last_cleared_commit = current_commits;
-                                }
-                                let audio = speech_buffer.get_samples_from(speech_buffer_start_offset);
-                                let duration_ms = audio.len() as u32 * 1000 / source_sample_rate;
-
-                                info!(target: "pipeline", "Speech: {}ms (segment {}ms)", duration_ms, segment_duration_ms);
-
-                                let mut segment_text = quality.text;
-
-                                #[cfg(feature = "tui")]
-                                tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                    seneschal_tui::events::PipelineState::Transcribing,
-                                )).ok();
-
-                                let vad_elapsed = t_speech_start.take()
-                                    .map(|t| t.elapsed().as_millis()).unwrap_or(0);
-                                info!(target: "performance", "[+{}ms] VAD end ({}ms speech)", vad_elapsed, duration_ms);
-                                *t_vad_end.lock().unwrap() = Some(Instant::now());
-
-                                *last_speech_at.lock().unwrap() = Instant::now();
-
-                                // ── Speaker verification (synchronous, CPU-blocking) ──
-                                // issue #220: the verification is best-effort. A failed
-                                // JoinHandle used to `.unwrap()` — panicking the audio
-                                // loop and killing the whole pipeline (no state events
-                                // ever reach the TUI again). On failure, fall back to the
-                                // default speaker identity so the utterance still flows.
-                                let (is_main_speaker, speaker_label) =
-                                    if let Some(ref analyzer) = identity_analyzer {
-                                        let analyzer = Arc::clone(analyzer);
-                                        let audio_c = audio.clone();
-                                        let sample_rate = config.sample_rate;
-                                        match tokio::task::spawn_blocking(move || {
-                                            let mut a = analyzer.lock().unwrap();
-                                            let result = a.verify(sample_rate, &audio_c);
-                                            (result.is_main_speaker, result.speaker_label)
-                                        })
-                                        .await
-                                        {
-                                            Ok(result) => result,
-                                            Err(e) => {
-                                                warn!(
-                                                    target: "pipeline",
-                                                    "Speaker verification task failed ({e}) — \
-                                                     defaulting to main speaker",
-                                                );
-                                                (true, "Usuario".to_string())
-                                            }
-                                        }
-                                    } else {
-                                        (true, "Usuario".to_string())
-                                    };
-
-                                // ── Mode-change side effects (streak, ambient buffer) ──
-                                if !is_main_speaker {
-                                    let mut streak = non_user_streak.lock().unwrap();
-                                    *streak = streak.saturating_add(1);
-                                    if *streak >= config.speaker_ambient_trigger {
-                                        let mut mode = conv_mode.lock().unwrap();
-                                        if *mode == ConversationMode::Active {
-                                            *mode = ConversationMode::Ambient;
-                                            drop(mode);
-                                            info!(
-                                                target: "pipeline",
-                                                "Ambient mode: {} consecutive non-user voices",
-                                                *streak
-                                            );
-                                        }
-                                    }
-                                    drop(streak);
-                                    // Buffer non-main-speaker transcript regardless of mode.
-                                    ambient_buffer.lock().unwrap()
-                                        .push(speaker_label.clone(), segment_text.clone());
-                                    debug!(
-                                        target: "pipeline",
-                                        "Ambient buffer ← {speaker_label}: {}",
-                                        segment_text
-                                    );
-                                } else {
-                                    *non_user_streak.lock().unwrap() = 0;
-                                }
-
-                                // ── Permission gate (issue #167) ────────────────────────
-                                // Previously this branch re-transcribed the audio and
-                                // mapped keywords (sí/no) to the ACP option. The voice
-                                // path no longer intercepts permissions: the user's
-                                // spoken answer flows through the normal transcript
-                                // pipeline and the frontend LLM resolves the pending
-                                // permission by calling `respond_agent_permission`. The
-                                // gate itself is still drained by `cancel_scope` at the
-                                // end of every ACP prompt and by the HTTP control API.
-
-                                let stt_elapsed_ms = segment_duration_ms as u128;
-                                info!(
-                                    target: "performance",
-                                    "[+{}ms] STT transcription complete (audio={}samples, {}chars)",
-                                    stt_elapsed_ms, audio.len(), segment_text.len()
-                                );
-                                debug!(target: "stt", "Segment final: {}", segment_text);
-
-                                if segment_text.trim().is_empty() {
-                                    debug!(target: "pipeline", "Empty transcription — skipping");
-                                    // issue #220: the TUI was set to Transcribing above;
-                                    // this rejection branch must return it to Idle or the
-                                    // status bar stays stuck on TRANSCRIBING.
-                                    #[cfg(feature = "tui")]
-                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                        seneschal_tui::events::PipelineState::Idle,
-                                    )).ok();
-                                    continue;
-                                }
-
-                                // ── Ambient/Active mode gating with wake word ─────────
-                                let mode_snapshot = conv_mode.lock().unwrap().clone();
-                                let is_ambient = matches!(
-                                    mode_snapshot,
-                                    ConversationMode::Ambient | ConversationMode::AmbientLocked
-                                );
-                                // issue #228: WAKE_WORD may hold a comma-separated
-                                // list; any entry triggers a response.
-                                let has_wake_word = config.has_wake_word(&segment_text);
-
-                                if is_ambient {
-                                    if has_wake_word && is_main_speaker {
-                                        // Main user + wake word → respond AND switch to Active
-                                        *conv_mode.lock().unwrap() = ConversationMode::Active;
-                                        info!(target: "pipeline", "Main user wake word — switching to Active");
-                                        // Fall through → respond normally
-                                    } else if has_wake_word {
-                                        // Secondary voice + wake word → respond BUT stay Ambient
-                                        info!(target: "pipeline", "Secondary voice wake word — responding, staying Ambient");
-                                        // Fall through → respond normally (mode unchanged)
-                                    } else {
-                                        // No wake word → buffer (already buffered for
-                                        // non-main above) and skip LLM pipeline.
-                                        if is_main_speaker {
-                                            ambient_buffer.lock().unwrap()
-                                                .push(speaker_label.clone(), segment_text.clone());
-                                            debug!(target: "pipeline", "Ambient: main user without wake word — buffered");
-                                        }
-                                        // issue #220: this `continue` leaves the LLM
-                                        // pipeline cold, so Transcribing is never
-                                        // resolved by llm_task — reset the TUI here.
-                                        #[cfg(feature = "tui")]
-                                        tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                            seneschal_tui::events::PipelineState::Idle,
-                                        )).ok();
-                                        continue;
-                                    }
-                                } else {
-                                    // Active mode
-                                    if !is_main_speaker {
-                                        // Non-main user in Active → discard (already buffered
-                                        // above in the mode-change side effects section).
-                                        // issue #220: same as the Ambient no-wake-word branch
-                                        // — the turn dies here, so return the TUI to Idle.
-                                        #[cfg(feature = "tui")]
-                                        tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                            seneschal_tui::events::PipelineState::Idle,
-                                        )).ok();
-                                        continue;
-                                    }
-                                    // Main user in Active → respond normally (fall through)
-                                }
-
-                                // ── Ambient context injection ──────────────────────────
-                                let mut final_text = segment_text;
-                                final_text = {
-                                    let buf = ambient_buffer.lock().unwrap();
-                                    if seneschal_core::audio::ambient_buffer::has_referential(&final_text) {
-                                        if let Some(ctx) = buf.format_context() {
-                                            format!("{ctx}\n---\n{final_text}")
-                                        } else {
-                                            final_text
-                                        }
-                                    } else {
-                                        final_text
-                                    }
-                                };
-
-                                if final_text.trim().is_empty() {
-                                    debug!(target: "pipeline", "Empty after context injection — skipping");
-                                    // issue #220: last rejection branch before the LLM
-                                    // hand-off — return the TUI to Idle so the bar
-                                    // doesn't stay stuck on TRANSCRIBING.
-                                    #[cfg(feature = "tui")]
-                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
-                                        seneschal_tui::events::PipelineState::Idle,
-                                    )).ok();
-                                    continue;
-                                }
-
-                                if let Some(t0) = t_vad_end.lock().unwrap().as_ref() {
-                                    info!(
-                                        target: "performance",
-                                        "[+{}ms] STT done → transcript channel",
-                                        t0.elapsed().as_millis()
-                                    );
-                                }
-                                let uid = utterance_epoch.load(Ordering::SeqCst);
-                                announcement_window.lock().unwrap().set_user_speaking(false);
-                                announcement_window.lock().unwrap().begin_turn();
-                                transcript_tx.send(PipelineFrame::TranscriptReady {
-                                    utterance_id: uid,
-                                    text: final_text,
-                                }).await.ok();
-                            }
+                        // Collect pending STT events, then process each one.
+                        // Using a Vec + for loop allows .await inside SpeechEnd handling.
+                        let pending_events: Vec<SpeechEvent> = std::iter::from_fn(|| stt_rx.try_recv().ok()).collect();
+                        let mut audio_events = audio_events::AudioEvents {
+                            t_speech_start: &mut t_speech_start,
+                            active_segment_seq: &mut active_segment_seq,
+                            last_cleared_commit: &mut last_cleared_commit,
+                            speech_buffer: &mut speech_buffer,
+                            speech_buffer_start_offset: &mut speech_buffer_start_offset,
+                            stt_provider: &mut *stt_provider,
+                            source_sample_rate,
+                            config: &config,
+                            events: Arc::clone(&events),
+                            utterance_epoch: Arc::clone(&utterance_epoch),
+                            turn_commit_counter: Arc::clone(&turn_commit_counter),
+                            t_vad_end: Arc::clone(&t_vad_end),
+                            last_speech_at: Arc::clone(&last_speech_at),
+                            non_user_streak: Arc::clone(&non_user_streak),
+                            conv_mode: Arc::clone(&conv_mode),
+                            ambient_buffer: Arc::clone(&ambient_buffer),
+                            announcement_window: Arc::clone(&announcement_window),
+                            no_speech_gate: no_speech_gate.clone(),
+                            transcript_tx: transcript_tx.clone(),
+                            identity_analyzer: identity_analyzer.clone(),
+    #[cfg(feature = "tui")]
+                            tui_tx: tui_tx.clone(),
+                        };
+                        for event in pending_events {
+                            audio_events.handle(event, &mono).await;
                         }
                     }
+                } => {}
+                _ = tokio::signal::ctrl_c() => {
+                    info!(target: "seneschal", "Shutting down...");
+                    events.barge_in_tx.send(0).ok();
+                    play_cancel.store(true, Ordering::SeqCst);
+                    shutdown.store(true, Ordering::SeqCst);
                 }
-            } => {}
-            _ = tokio::signal::ctrl_c() => {
-                info!(target: "seneschal", "Shutting down...");
-                events.barge_in_tx.send(0).ok();
-                play_cancel.store(true, Ordering::SeqCst);
-                shutdown.store(true, Ordering::SeqCst);
             }
-        }
 
     Ok(())
 }
