@@ -1,0 +1,7 @@
+[package]
+name = "seneschal-classifier"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+seneschal-common = { path = "../seneschal-common" }

@@ -1,0 +1,1 @@
+explíame los modos de funcionamiento plan, build, etc, o lo que disponga este harness

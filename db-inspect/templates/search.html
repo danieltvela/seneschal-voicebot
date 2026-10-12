@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Search Messages</h1>
+<form class="search-form" method="get" action="/search">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search messages...">
+    <button type="submit">Search</button>
+</form>
+
+{% if let Some(results) = messages %}
+<h2>Results</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Session</th>
+            <th>Time</th>
+            <th>Role</th>
+            <th>Content Preview</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for msg in results %}
+        <tr>
+            <td><a href="/sessions/{{ msg.session_id }}">{{ msg.session_id }}</a></td>
+            <td>{{ msg.timestamp }}</td>
+            <td><span class="badge badge-{{ msg.role_class }}">{{ msg.role_display }}</span></td>
+            <td>{{ msg.content }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

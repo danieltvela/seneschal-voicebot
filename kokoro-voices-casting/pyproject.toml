@@ -1,0 +1,27 @@
+[project]
+name = "kokoro-voices-casting"
+version = "1.0.0"
+description = "Casting de las 54 voces de Kokoro 82M v1.0: escuchar, comparar, elegir"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "kokoro==0.9.4",
+    "misaki[en]>=0.9.4",
+    "soundfile>=0.12",
+    "torch>=2.6",
+    # modelo spaCy que usa misaki[en] para el G2P inglés (autofijo por URL
+    # porque dentro de un venv de uv, spacy no encuentra pip para bajarlo)
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+
+# torch sin CUDA: el casting va holgado en CPU (~1x realtime, 300 MB)
+# y no toca la GPU compartida de tesla. Si algún día quieres cuda:
+#   uv pip install --index-url https://download.pytorch.org/whl/cu126 torch
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+# kokoro 0.9.4 exige <3.13; uv baja su propio CPython 3.12, no toca el del sistema.

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Dream State</h1>
+<table>
+    <thead>
+        <tr>
+            <th>Session ID</th>
+            <th>Last Processed</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr>
+            <td><a href="/sessions/{{ entry.session_id }}">{{ entry.session_id }}</a></td>
+            <td>{{ entry.last_processed_at }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

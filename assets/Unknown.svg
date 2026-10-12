@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Fondo -->
+  <rect width="1024" height="1024" fill="#0F2743"/>
+  
+  <!-- Estandarte blanco puro (forma clásica de gonfalón) -->
+  <path d="
+    M 340 180
+    L 684 180
+    L 684 720
+    L 512 880
+    L 340 720
+    Z
+  " fill="#FFFFFF"/>
+  
+  <!-- Tres estrellas centradas en la parte superior del estandarte -->
+  <g fill="#0F2743">
+    <!-- Estrella central -->
+    <polygon transform="translate(512,320) scale(1.15)" 
+             points="0,-22 5.5,-7 22,-7 9,3 14,18 0,9 -14,18 -9,3 -22,-7 -5.5,-7"/>
+    <!-- Estrella izquierda -->
+    <polygon transform="translate(420,320) scale(0.95)" 
+             points="0,-22 5.5,-7 22,-7 9,3 14,18 0,9 -14,18 -9,3 -22,-7 -5.5,-7"/>
+    <!-- Estrella derecha -->
+    <polygon transform="translate(604,320) scale(0.95)" 
+             points="0,-22 5.5,-7 22,-7 9,3 14,18 0,9 -14,18 -9,3 -22,-7 -5.5,-7"/>
+  </g>
+</svg>

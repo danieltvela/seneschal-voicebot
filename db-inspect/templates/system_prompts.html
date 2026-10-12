@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>System Prompts</h1>
+
+<section class="prompt-form">
+    <h2>Create New Prompt</h2>
+    <form method="post" action="/system-prompts">
+        <label>
+            Session ID
+            <input type="text" name="session_id" required>
+        </label>
+        <label>
+            Content
+            <textarea name="content" rows="6" required></textarea>
+        </label>
+        <label class="checkbox-label">
+            <input type="checkbox" name="active" checked>
+            Active
+        </label>
+        <button type="submit">Create</button>
+    </form>
+</section>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Session ID</th>
+            <th>Content</th>
+            <th>Active</th>
+            <th>Created</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for prompt in prompts %}
+        <tr class="{% if prompt.is_active %}active-row{% endif %}">
+            <td>{{ prompt.id }}</td>
+            <td><a href="/sessions/{{ prompt.session_id }}">{{ prompt.session_id }}</a></td>
+            <td>{{ prompt.content }}</td>
+            <td>{{ prompt.is_active }}</td>
+            <td>{{ prompt.created_at }}</td>
+            <td>
+                {% if !prompt.is_active %}
+                <form method="post" action="/system-prompts/{{ prompt.id }}/activate" class="inline-form">
+                    <button type="submit" class="btn-activate">Activate</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/system-prompts/{{ prompt.id }}/delete" class="inline-form" onsubmit="return confirm('Delete this prompt?')">
+                    <button type="submit" class="btn-delete">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="6">No system prompts found.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

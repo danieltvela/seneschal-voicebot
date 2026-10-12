@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#0F2743"/>
+  
+  <!-- Banner + reborde -->
+  <path d="M340 210 L684 210 L684 235 L715 235 L715 265 L684 265 L684 720 L512 850 L340 720 L340 265 L309 265 L309 235 L340 235 Z" 
+        fill="#FDFDFD" stroke="#0F2743" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M358 245 L666 245 L666 258 L688 258 L688 275 L666 275 L666 710 L512 825 L358 710 L358 275 L336 275 L336 258 L358 258 Z" 
+        fill="none" stroke="#0F2743" stroke-width="8" stroke-linejoin="round"/>
+  
+  <!-- Circle -->
+  <circle cx="512" cy="510" r="140" fill="#0F2743"/>
+  
+  <!-- Tree trunk + roots + canopy (top limited to leave room for stars) -->
+  <rect x="502" y="520" width="20" height="115" rx="3" fill="#FDFDFD"/>
+  <path d="M502 635 Q475 645 450 665 Q465 650 490 642 Q496 638 502 636 Z" fill="#FDFDFD"/>
+  <path d="M522 635 Q549 645 574 665 Q559 650 534 642 Q528 638 522 636 Z" fill="#FDFDFD"/>
+  <path d="M490 640 Q465 655 440 675 Q460 660 485 650 Z" fill="#FDFDFD"/>
+  <path d="M534 640 Q559 655 584 675 Q564 660 539 650 Z" fill="#FDFDFD"/>
+  <path d="M505 640 Q512 665 519 640 Z" fill="#FDFDFD"/>
+  
+  <!-- Canopy (top at ~410) -->
+  <path d="M512 520 C485 510 460 490 440 460 C425 440 420 420 435 405 C450 390 470 395 480 410 C490 425 500 445 512 460 Z" fill="#FDFDFD"/>
+  <path d="M512 520 C539 510 564 490 584 460 C599 440 604 420 589 405 C574 390 554 395 544 410 C534 425 524 445 512 460 Z" fill="#FDFDFD"/>
+  <path d="M495 460 C485 440 480 420 490 400 C500 385 512 380 524 385 C536 400 539 420 529 440 C524 450 515 455 512 460 Z" fill="#FDFDFD"/>
+  <path d="M470 500 C450 490 435 470 425 450 C415 430 420 415 435 410 C450 405 460 415 465 430 C470 445 475 460 480 475 Z" fill="#FDFDFD"/>
+  <path d="M554 500 C574 490 589 470 599 450 C609 430 604 415 589 410 C574 405 564 415 559 430 C554 445 549 460 544 475 Z" fill="#FDFDFD"/>
+  <path d="M490 550 C470 540 455 520 445 500 C435 480 440 465 455 460 C470 455 480 465 485 480 C490 495 495 510 500 525 Z" fill="#FDFDFD"/>
+  <path d="M534 550 C554 540 569 520 579 500 C589 480 584 465 569 460 C554 455 544 465 539 480 C534 495 529 510 524 525 Z" fill="#FDFDFD"/>
+  
+  <!-- Foliage tips (below stars) -->
+  <circle cx="440" cy="420" r="10" fill="#FDFDFD"/>
+  <circle cx="584" cy="420" r="10" fill="#FDFDFD"/>
+  <circle cx="455" cy="450" r="8" fill="#FDFDFD"/>
+  <circle cx="569" cy="450" r="8" fill="#FDFDFD"/>
+  <circle cx="480" cy="400" r="7" fill="#FDFDFD"/>
+  <circle cx="544" cy="400" r="7" fill="#FDFDFD"/>
+  <circle cx="420" cy="480" r="7" fill="#FDFDFD"/>
+  <circle cx="604" cy="480" r="7" fill="#FDFDFD"/>
+  <circle cx="460" cy="520" r="8" fill="#FDFDFD"/>
+  <circle cx="564" cy="520" r="8" fill="#FDFDFD"/>
+  
+  <!-- Stars (high, visible) -->
+  <g fill="#FDFDFD">
+    <polygon transform="translate(512,360)" points="0,-13 3.2,-4 13,-4 5,1.5 8,10 0,5 -8,10 -5,1.5 -13,-4 -3.2,-4"/>
+    <polygon transform="translate(462,385) scale(0.7)" points="0,-13 3.2,-4 13,-4 5,1.5 8,10 0,5 -8,10 -5,1.5 -13,-4 -3.2,-4"/>
+    <polygon transform="translate(562,385) scale(0.7)" points="0,-13 3.2,-4 13,-4 5,1.5 8,10 0,5 -8,10 -5,1.5 -13,-4 -3.2,-4"/>
+    <polygon transform="translate(432,420) scale(0.55)" points="0,-13 3.2,-4 13,-4 5,1.5 8,10 0,5 -8,10 -5,1.5 -13,-4 -3.2,-4"/>
+    <polygon transform="translate(592,420) scale(0.55)" points="0,-13 3.2,-4 13,-4 5,1.5 8,10 0,5 -8,10 -5,1.5 -13,-4 -3.2,-4"/>
+  </g>
+</svg>

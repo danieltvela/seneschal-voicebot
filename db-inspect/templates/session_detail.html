@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Session: {{ session.id }}</h1>
+<p>Created: {{ session.created_at }} | Active: {{ session.is_active }}</p>
+{% if let Some(closed) = session.closed_at %}
+<p>Closed: {{ closed }}</p>
+{% endif %}
+{% if let Some(summary) = session.summary %}
+<h2>Summary</h2>
+<p>{{ summary }}</p>
+{% endif %}
+
+<h2>Messages</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>Role</th>
+            <th>Content</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for msg in messages %}
+        <tr>
+            <td>{{ msg.timestamp }}</td>
+            <td><span class="badge badge-{{ msg.role_class }}">{{ msg.role_display }}</span></td>
+            <td>{{ msg.display_content | safe }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% if has_next %}
+<div class="pagination">
+    <a href="/sessions/{{ session.id }}?page={{ next_page }}">Next →</a>
+</div>
+{% endif %}
+{% endblock %}

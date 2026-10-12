@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" width="512" height="512">
+  <title>Seneschal mark concept — three stars over white standard</title>
+  <desc>Three silver-white stars in inverted-V formation, linked by thin lines, above a white banner with silver edge on dark field.</desc>
+
+  <defs>
+    <radialGradient id="field" cx="50%" cy="40%" r="72%">
+      <stop offset="0%" stop-color="#141C2E"/>
+      <stop offset="100%" stop-color="#0B1220"/>
+    </radialGradient>
+    <linearGradient id="starFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="50%" stop-color="#E6ECF5"/>
+      <stop offset="100%" stop-color="#A9B6CA"/>
+    </linearGradient>
+    <linearGradient id="bannerFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#EEF2F8"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E2E8F0"/>
+      <stop offset="45%" stop-color="#9AA8BD"/>
+      <stop offset="100%" stop-color="#C5CEDC"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Dark field -->
+  <rect width="128" height="128" fill="url(#field)"/>
+
+  <!-- Thin white connectors: inverted V (outer stars high, center low) -->
+  <g stroke="#F4F7FB" stroke-width="1.4" stroke-linecap="round" fill="none" opacity="0.95">
+    <line x1="36" y1="30" x2="64" y2="48"/>
+    <line x1="92" y1="30" x2="64" y2="48"/>
+  </g>
+
+  <!-- Three 4-point stars (white → silver) -->
+  <g fill="url(#starFill)">
+    <!-- left -->
+    <path d="M36 18.5 L39.1 27.1 L48 30 L39.1 32.9 L36 41.5 L32.9 32.9 L24 30 L32.9 27.1 Z"/>
+    <!-- right -->
+    <path d="M92 18.5 L95.1 27.1 L104 30 L95.1 32.9 L92 41.5 L88.9 32.9 L80 30 L88.9 27.1 Z"/>
+    <!-- center (apex of inverted V) -->
+    <path d="M64 36.5 L67.4 45.6 L77 48.5 L67.4 51.4 L64 60.5 L60.6 51.4 L51 48.5 L60.6 45.6 Z"/>
+  </g>
+
+  <!-- Banner hanging bar (silver) -->
+  <rect x="28" y="66" width="72" height="2.4" rx="1.2" fill="url(#silver)"/>
+
+  <!-- White standard with silver ribete + swallowtail -->
+  <path
+    d="M32 68.5 H96 V110 L64 99.5 L32 110 Z"
+    fill="url(#bannerFill)"
+    stroke="url(#silver)"
+    stroke-width="2.4"
+    stroke-linejoin="round"/>
+
+  <!-- Inner silver edge (ribete) -->
+  <path
+    d="M36.5 72.5 H91.5 V104.5 L64 95.5 L36.5 104.5 Z"
+    fill="none"
+    stroke="#9AA8BD"
+    stroke-width="1"
+    stroke-linejoin="round"
+    opacity="0.9"/>
+</svg>

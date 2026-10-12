@@ -1,0 +1,7 @@
+# ggml (vía whisper-cpp-plus-sys) compila ggml-cpu con OpenMP activado por
+# defecta en Linux, pero su build.rs no emite `rustc-link-lib=gomp`, así que el
+# enlazado final del binario falla con símbolos GOMP_*/omp_* sin resolver.
+# -fopenmp al enlazar añade libgomp. Restringido a Linux: no afecta a macOS
+# (Apple Clang no tiene OpenMP y ggml usa Accelerate/Metal) ni a Windows.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-fopenmp"]

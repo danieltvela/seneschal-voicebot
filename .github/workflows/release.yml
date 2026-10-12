@@ -1,0 +1,170 @@
+name: Release
+
+# Trigger: push a version tag like v1.0.0 or v1.0.0-beta.1
+on:
+  push:
+    tags:
+      - 'v[0-9]*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── macOS — Apple Silicon ─────────────────────────────────────────────────
+  # x86_64-apple-darwin is not built: ONNX Runtime (>= 1.24) and ort-sys no
+  # longer publish binaries for Intel macOS, so the `parakeet` feature cannot
+  # build for that target.
+  build-macos:
+    name: Build · ${{ matrix.target }}
+    runs-on: macos-latest      # GitHub's arm64 (M-series) runner
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin   # native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --bin seneschal --target ${{ matrix.target }} --features speech,avspeech,tui,parakeet
+
+      - name: Package
+        run: |
+          BIN="target/${{ matrix.target }}/release/seneschal"
+          strip "$BIN"
+          tar -czf "voicebot-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
+          shasum -a 256 "voicebot-${{ matrix.target }}.tar.gz" > "voicebot-${{ matrix.target }}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voicebot-${{ matrix.target }}
+          path: voicebot-${{ matrix.target }}.tar.gz*
+          if-no-files-found: error
+          retention-days: 1
+
+  # # ── Linux — x86_64 on ubuntu-latest, aarch64 on ubuntu-24.04-arm ────────
+  # # ort 2.x statically links ONNX Runtime — no .so to bundle.
+  # build-linux:
+  #   name: Build · ${{ matrix.target }}
+  #   runs-on: ${{ matrix.runner }}
+  #   env:
+  #     RUSTFLAGS: "-C link-arg=-lgomp"
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - target: x86_64-unknown-linux-gnu
+  #           runner: ubuntu-latest
+  #         - target: aarch64-unknown-linux-gnu
+  #           runner: ubuntu-24.04-arm
+  #
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Install Rust + target
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: ${{ matrix.target }}
+  #
+  #     - name: Cache cargo
+  #       uses: Swatinem/rust-cache@v2
+  #       with:
+  #         key: ${{ matrix.target }}
+  #
+  #     - name: Install Linux build deps
+  #       run: |
+  #         sudo apt-get update -qq
+  #         sudo apt-get install -y --no-install-recommends \
+  #           libasound2-dev espeak-ng pkg-config build-essential libssl-dev cmake libclang-dev libgomp1
+  #
+  #     - name: Build
+  #       run: cargo build --release --bin seneschal --target ${{ matrix.target }} --features kokoro
+  #
+  #     # ── Package binary ────────────────────────────────────────────────────
+  #     - name: Package
+  #       run: |
+  #         BIN="target/${{ matrix.target }}/release/seneschal"
+  #         strip "$BIN" 2>/dev/null || true
+        #         tar -czf "voicebot-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" seneschal
+        #         sha256sum "voicebot-${{ matrix.target }}.tar.gz" > "voicebot-${{ matrix.target }}.tar.gz.sha256"
+        #         echo "Tarball contents:"
+        #         tar -tzf "voicebot-${{ matrix.target }}.tar.gz"
+        #
+        #     - uses: actions/upload-artifact@v4
+        #       with:
+        #         name: voicebot-${{ matrix.target }}
+        #         path: voicebot-${{ matrix.target }}.tar.gz*
+  #         if-no-files-found: error
+  #         retention-days: 1
+
+  # ── GitHub Release ────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Build release body
+        id: body
+        run: |
+          TAG="${{ github.ref_name }}"
+          {
+            echo 'body<<EOF'
+            echo "## Installation"
+            echo ""
+            echo '```sh'
+            echo "curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | sh"
+            echo '```'
+            echo ""
+            echo "Pin a specific version:"
+            echo '```sh'
+            echo "SENECHAL_VERSION=${TAG} \\"
+            echo "  curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | sh"
+            echo '```'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Clean up any existing release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A leftover release (e.g. an empty one from an earlier failed
+          # run) makes action-gh-release fail with "already_exists".
+          gh release delete "${{ github.ref_name }}" --yes || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Seneschal ${{ github.ref_name }}
+          body: ${{ steps.body.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+            install.sh

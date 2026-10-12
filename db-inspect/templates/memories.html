@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Memories</h1>
+
+<div class="filter-links">
+    <a href="/memories"{% if filter_all_active %} class="active"{% endif %}>All</a>
+    <a href="/memories?active=1"{% if filter_active_active %} class="active"{% endif %}>Active</a>
+    <a href="/memories?active=0"{% if filter_inactive_active %} class="active"{% endif %}>Inactive</a>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Content</th>
+            <th>Category</th>
+            <th>Source Session</th>
+            <th>Created</th>
+            <th>Active</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for mem in memories %}
+        <tr>
+            <td>{{ mem.id }}</td>
+            <td>{{ mem.content }}</td>
+            <td>{{ mem.category }}</td>
+            <td>
+                {% if let Some(sid) = mem.source_session_id %}
+                <a href="/sessions/{{ sid }}">{{ sid }}</a>
+                {% else %}—{% endif %}
+            </td>
+            <td>{{ mem.created_at }}</td>
+            <td>{{ mem.is_active }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="6">No memories found.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,264 @@
+# Changelog
+
+All notable changes to Seneschal will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/).
+
+## Unreleased
+
+## v0.1.0-alpha.9 (2026-08-29)
+
+### Features
+- **[#213](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/213)**: Scenario-based dynamic benchmarking — multi-turn scenario runner in `bench-models.py` with mocked tool results and trace evaluation (`scripts/scenarios.json`)
+- **[#223](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/223)**: Parakeet (`parakeet-tdt-0.6b-v3-onnx`) as default STT provider in the installer, with model auto-download
+- **[#224](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/224)**: LLM sampling parameters configurable (temperature, top_p, top_k, min_p, presence/repetition penalties)
+- **[#228](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/228)**: `WAKE_WORD` accepts a comma-separated list of wake words (e.g. `WAKE_WORD=seneschal,jardis`); any entry triggers a response in Ambient mode, first entry stays the bot's name
+- **[#229](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/229)**: Click the ACTIVE | AMBIENT status-bar segment in the TUI to toggle conversation mode
+
+### Bug Fixes
+- **[#204](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/204)**: Eliminated the NOOP tool and its references in `.env` and system prompts
+- **[#205](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/205)**: TUI expandable controls (tool calls, subagent runs) now expand correctly when the scroll is pinned to the bottom
+- **[#206](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/206)**: TUI scroll follows new content to the bottom while pinned, and preserves the reading position otherwise
+- **[#217](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/217)**: STT code-switching ES/EN — Whisper with `language="auto"` instead of a fixed `es-ES` locale ("Hugging Face" no longer transcribed as "Joy fase")
+- **[#218](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/218)**: Double TTS — pre-tool narration already streamed is no longer re-emitted when delegating to a background subagent
+- **[#219](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/219)**: Stable TUI scroll — unconditional auto-follow, correct re-pin, `G` key to jump to bottom, `↓ N nuevos` indicator
+- **[#220](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/220)**: TUI stuck in TRANSCRIBING — state reset on rejected turns; speaker-verification task failure no longer panics the audio loop
+- **[#221](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/221)**: Subagent delegation history contamination — truncated task text in persisted history, unique tool-call ids, raw agent output truncated and marked when synthesis is unavailable
+
+### Removed
+- **[#208](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/208)**: Intent classifier (SIMPLE/COMPLEX pre-analysis) and all features using it
+- **[#222](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/222)**: Secondary LLM fallback and its `SECONDARY_LLM_*` configuration
+
+## v0.1.0-alpha.8 (2026-08-03)
+
+### Features
+- **[#190](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/190)**: iOS companion v2 — mirror TUI, control API, and adaptive iPhone/iPad UI
+- **[#192](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/192)**: Control API — structured `state_changed` events, agent lifecycle events, SSE connection lifetime fix
+- **[#193](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/193)**: Control API — PermissionGate, agent emit twins, `POST /control/permission`
+- **[#194](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/194)**: iOS Control REST/SSE clients with Codable `ControlEvent`
+- **[#195](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/195)**: iOS dual-channel ViewModel, StatusBar, composer, Control-only fallback on 409
+- **[#196](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/196)**: iOS event timeline for tools, system, agents, and errors
+- **[#197](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/197)**: iOS agent permission sheet with `option_id` and lifecycle row polish
+- **[#198](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/198)**: iOS adaptive iPad split layout and accessibility polish
+- **[#199](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/199)**: Documentation — iOS companion dual-channel guide and ROADMAP M2.4
+- **[#200](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/200)**: watchOS pipeline state and last-line glance via iPhone relay
+- **[#189](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/189)**: TUI chat history and session context rehydration after relaunch
+- **[#164](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/164)**: TUI ACP agent communication display (delegated tasks, agent status)
+- **[#157](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/157)**: TUI new section to visualize ACP agent sessions
+- **[#168](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/168)**: AnnouncementWindow for managing when to announce task results
+- **[#182](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/182)**: `SPEAKER_ENABLED` config flag to toggle speaker verification at runtime
+- **[#169](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/169)**: New greeting type
+- **[#156](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/156)**: Recovered ambient/active automatic mode switching
+- **[#175](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/175)**: System notifications injected as user messages for Gemma-4 chat template compatibility
+- **[#176](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/176)**: Temporary: disable all tools except CurrentTime, SetConversationMode, and RunAgent (testing phase)
+
+### Bug Fixes
+- **[#191](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/191)**: KV cache invalidation on intent flip — conversational LLM requests always include full tool definitions
+- **[#181](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/181)**: ACP permission request now shows full tool details and input arguments
+- **[#173](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/173)**: Panic in `agent_session.rs` when delegating to subagent Hermes (tokio runtime)
+- **[#184](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/184)**: QA Test 02 — Classifier SIMPLE/COMPLEX now reflected in TUI
+- **[#154](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/154)**: Fixed invalid download binary URL in `install.sh`
+- **[#153](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/153)**: Install script now shows text output correctly
+
+### Breaking Changes
+- **Workspace restructured**: Monolithic `src/` (~25k LOC) split into 13 crates under `crates/`
+- **Feature flags**: All accreted crates are now opt-in via `[features]` in Cargo.toml
+- **Default profile**: `memory`, `tools-core`, `search`, `mcp`, `agents`, `plugins`, `extras`
+- **Meta-feature `full`**: Enables everything (control, remote, tui, classifier)
+
+### Architecture
+- `seneschal-common`: Shared types (Config, Database, Tool trait, Classifier, i18n, AcpWriter)
+- `seneschal-core`: Voice pipeline (audio, stt, llm, tts, pipeline, memory, profile)
+- `seneschal-search`: Search providers (Brave, Tavily, Exa, SearXNG)
+- `seneschal-mcp`: MCP client (JSON-RPC 2.0) + McpToolProxy
+- `seneschal-control`: HTTP REST + SSE Control API
+- `seneschal-remote`: WebSocket server (Apple Watch client)
+- `seneschal-classifier`: Intent classifier (thin wrapper)
+- `seneschal-memory`: S-DREAM cold-path memory consolidation daemon
+- `seneschal-agents`: Multi-agent session management + ACP protocol
+- `seneschal-tui`: Terminal UI (status-only)
+- `seneschal-plugins`: Plugin lifecycle management
+- `seneschal-tools-core`: 10 essential LLM tools (shell, clipboard, file, search, etc.)
+- `seneschal-extras`: Advanced tools, daemons, visual awareness, device monitor
+
+### Removed
+- `classifier/embedding.rs`, `classifier/logistic.rs` (empty stubs)
+- `tts/piper.rs` (dead code, not in mod.rs)
+- `bin/bench_pipeline.rs.bak` (stale backup)
+
+### Infrastructure
+- `make qa` updated: uses `--features full` for test-ci, build, and e2e stages
+- Feature flags propagate correctly to workspace crates (avspeech, kokoro, etc.)
+- MockTts available without `#[cfg(test)]` in seneschal-core for cross-crate testing
+- QA pipeline verified: 6/6 stages green (fmt, lint, test, test-ci, test-e2e, build)
+
+## v0.1.0-alpha.7 (2026-07-22)
+
+### Features
+- **[#129](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/129)**: Rename binary from voicebot to seneschal
+- **[#138](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/138)**: Improved subagent integration (Hermes, OpenCode) with session persistence and viewer
+- **[#142](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/142)**: Prompt-Build Mode -- iterative prompt building with TUI display
+- **[#144](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/144)**: MCP server support via URL (throw server)
+- **[#145](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/145)**: File/directory input tool for TUI
+- **[#146](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/146)**: BrowserOS plugin for web navigation
+- **[#151](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/151)**: Visible subagent mode with PTY sessions and terminal viewer
+
+### Bug Fixes
+- **[#127](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/127)**: CI release build now compiled with speech feature
+- **[#128](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/128)**: Install script voice test phrase updated to "Hello, this is Seneschal"
+- **[#131](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/131)**: Fixed Hermes integration config parsing
+- **[#132](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/132)**: Reminders now lists the Today list correctly
+- **[#133](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/133)**: Calendar event search returns recent events
+- **[#134](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/134)**: Fixed end-of-speech detection misses (~1/6 of turns)
+- **[#147](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/147)**: TUI now uses full viewport with status bar on last line
+- **[#148](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/148)**: Removed developer message role, unified under system role
+- **[#150](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/150)**: Fixed VAD not detecting short user phrases
+
+---
+
+## v0.1.0-alpha.6 (2026-07-10)
+
+### Features
+- **[#122](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/122)**: External agent integration (Hermes, OpenCode, custom) in install script
+
+### Bug Fixes
+- **[#124](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/124)**: Seneschal can create reminders but cannot read existing ones
+- **[#125](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/125)**: Welcome message not sent to LLM on app launch
+
+---
+
+## v0.1.0-alpha.5 (2026-07-09)
+
+### Features
+- **[#120](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/120)**: Conversation improvements — spoken fillers, async tool result injection, subtask tracking, background sound during tool calls
+- **[#118](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/118)**: Reduced AGENTS.md size by splitting documentation into `doc/` directory
+
+### Bug Fixes
+- **[#121](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/121)**: Install script LLM provider check used wrong URL
+
+---
+
+## v0.1.0-alpha.4 (2026-07-08)
+
+### Features
+- **[#104](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/104)**: macOS SFSpeechRecognizer STT provider
+- **[#108](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/108)**: CHANGELOG.md and `/changelog` command
+- **[#109](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/109)**: macOS speech as default STT provider in installer
+- **[#114](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/114)**: Auto-discover LLM models during installation
+
+### Bug Fixes
+- **[#113](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/113)**: Configured API key not sent to LLM provider
+- EOF safety for wake word read in install.sh
+
+### Other
+- **[#103](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/103)**: Research on STT false positives from coughs and non-speech sounds
+
+---
+
+## v0.1.0-alpha.3 (2026-07-08)
+
+### Features
+- **[#99](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/99)**: App starts even when no audio device is found
+- **[#100](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/100)**: Project renamed from Voicebot to Seneschal
+- Configurable seneschal name via `SENECHAL_NAME` env var
+- Brave Search web search provider integration
+- Apple Events tools for macOS automation
+- First startup welcome message
+- Input device change monitoring — detects Bluetooth headset reconnect
+- LLM requirements and benchmarks documentation
+
+### Bug Fixes
+- **[#96](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/96)**: Removed hardcoded Hermes routing section from system prompt
+- **[#97](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/97)**: Device monitor now detects reconnected audio devices
+- **[#93](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/93)**: Second request cache miss after launch
+- **[#91](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/91)**: LLM model config value not loading from pro environment
+- Fixed environment variables in launch script
+- Fixed first launch initialization
+
+### Other
+- **[#92](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/92)**: Investigated audio device reconnection detection
+- **[#94](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/94)**: Research on system/developer message roles in OpenAI-compatible APIs
+- **[#95](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/95)**: LLM response handling for system/developer message roles
+- Removed ContextLens from main pipeline
+- Added `developer` message role support
+- README restructured with Quick Start at the top
+- Full codemap documentation
+
+---
+
+## v0.1.0-alpha.2 (2026-06-27)
+
+### Features
+- **[#77](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/77)**: `seneschal.toml` config file with env override
+- **[#78](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/78)**: PRO and DEV environment separation
+- **[#80](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/80)**: Apple Watch companion app scaffolding
+- **[#81](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/81)**: Plugin system foundation
+- iOS companion app Xcode project
+- LLM thinking/support mode
+- S-DREAM memory consolidation daemon
+- Database inspection tool (`db-inspect`)
+- Agent pre-warming on startup
+
+### Bug Fixes
+- **[#82](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/82)**: Installer script fixes
+- **[#83](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/83)**: Screenshot tool SSH permission diagnostics
+- **[#84](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/84)**: Installation bugs and CI fixes
+- **[#85](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/85)**: install.sh improvements
+- Shared `screen_capture.rs` utility consolidating duplicate code
+- Kokoro TTS ONNX Runtime API compatibility patch
+- CI workflow macOS-only adjustments
+- Installer language prompt and config generation
+
+### Other
+- Removed llama-cpp-2 in-process LLM provider
+- Removed Gitea references from user-facing code
+- Removed LLM evaluation framework
+- UI improvements for iOS companion app
+- iOS messages view and connection state indicators
+
+---
+
+## v0.1.0-alpha.1 (2026-06-09)
+
+### Features
+- **[#42](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/42)**: AI-agent-runnable QA harness (`make qa`)
+- **[#46](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/46)**: NOOP tool for idle pipeline handling
+- **[#48](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/48)**: `recover_historical_context` tool with FTS5 search
+- **[#50](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/50)**: Terminal-native scrollback for TUI message history
+- **[#53](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/53)**: iOS companion app concept
+- **[#54](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/54)**: STT improvements
+- **[#55](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/55)**: Parakeet STT provider with Spanish support
+- **[#59](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/59)**: Forced tool selection via ToolRegistry
+- **[#63](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/63)**: Clean LLM provider architecture
+- Multi-MCP server support with namespace prefixing
+- Session search tool
+- Tiered web search (fast path vs deep research)
+- Barge-in transcript append to last user turn
+- Uninstall script (`uninstall.sh`)
+- S-DREAM cold-path memory consolidation (L1/L2)
+- Speaker verification module
+- Kokoro ONNX TTS backend
+- WebSocket remote audio streaming server
+
+### Bug Fixes
+- Parakeet STT Spanish transcription quality
+- Stream input audio handling
+- STT VAD audio processing
+- Current_time tool explicit-request detection
+- Flaky current_time test
+- Vendor COPY in CI Dockerfile
+
+### Other
+- **[#47](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/47)**: STT→LLM latency improvement research
+- **[#49](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/49)**: Seneschal R&D exploration
+- **[#51](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/51)**: Niche use case analysis
+- **[#52](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/52)**: Multi-user speech detection research
+- **[#56](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/56)**: Evaluation test cases
+- **[#57](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/57)**: Multi-user LLM research
+- **[#58](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/58)**: Embedded LLM exploration
+- **[#60](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/60)**: Telnyx research
+- **[#64](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/64)**: apple/ml-ssd model research
+- **[#73](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/73)**: Self-improvement analysis
+- **[#74](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/74)**: Database inspection website
+- **[#75](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/75)**: Config file design (replaced by #77)
+- **[#76](http://tesla.local:3000/danielvela/seneschal-voicebot/issues/76)**: Secondary LLM as agent research

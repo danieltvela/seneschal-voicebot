@@ -1,0 +1,613 @@
+use std::env;
+
+/// Single external agent definition loaded from TOML config (`[[agents]]` array).
+///
+/// This is the TOML-deserializable form. Convert to `AgentConfig` via `From`.
+pub use seneschal_common::config::AgentTomlConfig;
+
+impl From<AgentTomlConfig> for AgentConfig {
+    fn from(src: AgentTomlConfig) -> Self {
+        Self {
+            name: src.name,
+            mode: src.mode,
+            command: src.command,
+            acp_command: src.acp_command.unwrap_or_default(),
+            remote_url: src.remote_url,
+            remote_dir: src.remote_dir,
+            remote_session_path: src.remote_session_path,
+            remote_message_path: src.remote_message_path,
+            remote_event_path: src.remote_event_path,
+            remote_api_key: src.remote_api_key,
+            when_to_use: src.when_to_use,
+            prompt: src.prompt,
+            description: src.description,
+            task_description: src.task_description,
+        }
+    }
+}
+
+/// Single external agent definition loaded from environment variables.
+///
+/// Each agent gets its own tool (`run_{name}`), its own system prompt
+/// section (when-to-use), and independent mode (cli/acp/remote).
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    /// Unique name used as tool suffix: `run_{name}`.
+    pub name: String,
+    /// Communication mode: `"cli"` (one-shot subprocess), `"acp"` (persistent JSON-RPC stdio),
+    /// `"remote"` (OpenCode HTTP transport), or `"visible"` (PTY-based visible session).
+    pub mode: String,
+    /// CLI command (e.g. `"hermes chat"`). Used only when `mode = "cli"`.
+    pub command: Option<String>,
+    /// ACP command (e.g. `"hermes acp"`). Used only when `mode = "acp"`.
+    pub acp_command: String,
+    /// OpenCode remote URL (e.g. "http://localhost:4096"). Used only when `mode = "remote"`.
+    pub remote_url: String,
+    /// Working directory for the remote OpenCode session.
+    pub remote_dir: String,
+    /// Custom path for creating a remote session (default: "/session").
+    pub remote_session_path: String,
+    /// Custom path for submitting a message (default: "/session/{id}/message").
+    pub remote_message_path: String,
+    /// Custom path for the SSE event stream (default: "/event").
+    pub remote_event_path: String,
+    /// Hermes API key for Bearer auth. When set, the transport uses Hermes protocol.
+    pub remote_api_key: String,
+    /// LLM-facing text: when to delegate to this agent.
+    /// Appended to the system prompt so the primary LLM knows which agent to pick.
+    pub when_to_use: String,
+    /// Agent-facing prompt. Prepended to the query sent to the agent subprocess
+    /// so it knows how to behave (role, style, capabilities).
+    pub prompt: String,
+    /// Tool description shown in the function-calling definition (`Tool::description()`).
+    /// Falls back to a built-in generic delegation description when empty.
+    pub description: String,
+    /// Description of the `task` parameter in the tool's JSON Schema.
+    /// Falls back to "The task to delegate" when empty.
+    pub task_description: String,
+}
+
+/// Registry of all configured external agents.
+///
+/// Created once at startup from environment variables. Supports both the
+/// new multi-agent format (`AGENTS=hermes,<nombre_agente>`) and the legacy
+/// single-agent format (`AGENT_COMMAND` / `AGENT_MODE`).
+#[derive(Debug, Clone)]
+pub struct AgentRegistry {
+    pub agents: Vec<AgentConfig>,
+}
+
+impl AgentRegistry {
+    /// Load agents from environment variables.
+    ///
+    /// Priority:
+    /// 1. If `AGENTS` is set → parse comma-separated names, load each via `AGENT_<NAME>_*`.
+    /// 2. If `AGENT_COMMAND` or `AGENT_MODE` is set → create single `"hermes"` agent from legacy vars.
+    /// 3. Otherwise → empty registry (no agent tools).
+    pub fn from_env() -> Self {
+        // ── New multi-agent format ──────────────────────────────────────
+        if let Ok(raw) = env::var("AGENTS") {
+            let names: Vec<&str> = raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if !names.is_empty() {
+                let agents = names.into_iter().filter_map(load_agent_from_env).collect();
+                return Self { agents };
+            }
+        }
+
+        // ── Legacy single-agent format (backward compatibility) ─────────
+        let has_command = env::var("AGENT_COMMAND").is_ok();
+        let has_mode = env::var("AGENT_MODE").is_ok();
+        let has_acp = env::var("AGENT_ACP_COMMAND").is_ok();
+
+        if (has_command || has_mode || has_acp)
+            && let Some(agent) = load_legacy_agent()
+        {
+            return Self {
+                agents: vec![agent],
+            };
+        }
+
+        // ── No agents configured ────────────────────────────────────────
+        Self { agents: Vec::new() }
+    }
+
+    /// Load agents with TOML config as fallback when no env vars are set.
+    ///
+    /// Priority:
+    /// 1. `AGENTS` env var → multi-agent from `AGENT_<NAME>_*` vars (existing)
+    /// 2. Legacy `AGENT_COMMAND` / `AGENT_MODE` env vars → single "hermes" agent (existing)
+    /// 3. TOML `[[agents]]` array from config file → new path
+    /// 4. Empty registry
+    pub fn from_config_and_env(toml_agents: Vec<AgentTomlConfig>) -> Self {
+        // ── New multi-agent env format ──────────────────────────────────────
+        if let Ok(raw) = env::var("AGENTS") {
+            let names: Vec<&str> = raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if !names.is_empty() {
+                let agents: Vec<_> = names.into_iter().filter_map(load_agent_from_env).collect();
+                tracing::info!(target: "seneschal", "Loaded {} agent(s) from AGENTS env var", agents.len());
+                return Self { agents };
+            }
+        }
+
+        // ── Legacy single-agent env format ──────────────────────────────────
+        let has_command = env::var("AGENT_COMMAND").is_ok();
+        let has_mode = env::var("AGENT_MODE").is_ok();
+        let has_acp = env::var("AGENT_ACP_COMMAND").is_ok();
+
+        if (has_command || has_mode || has_acp)
+            && let Some(agent) = load_legacy_agent()
+        {
+            tracing::info!(target: "seneschal", "Loaded legacy agent from env vars");
+            return Self {
+                agents: vec![agent],
+            };
+        }
+
+        // ── TOML [[agents]] fallback ────────────────────────────────────────
+        if !toml_agents.is_empty() {
+            let agents: Vec<AgentConfig> = toml_agents.into_iter().map(AgentConfig::from).collect();
+            tracing::info!(target: "seneschal", "Loaded {} agent(s) from TOML config", agents.len());
+            return Self { agents };
+        }
+
+        // ── No agents configured ────────────────────────────────────────────
+        Self { agents: Vec::new() }
+    }
+
+    /// Build the system prompt section describing all available agents.
+    ///
+    /// Returns an empty string if no agents are configured.
+    /// The result is meant to be inserted between memory context and tool
+    /// instructions in the full system prompt.
+    pub fn system_prompt_section(&self) -> String {
+        if self.agents.is_empty() {
+            return String::new();
+        }
+
+        let mut section = String::from(
+            "\n\n## EXTERNAL AGENTS\n\n\
+             Delegate complex tasks by calling the corresponding tool.\n",
+        );
+
+        for agent in &self.agents {
+            section.push_str(&format!(
+                "\n- **{display_name}**: tool `run_{name}`. {when}\n",
+                display_name = capitalize(&agent.name),
+                name = agent.name,
+                when = agent.when_to_use,
+            ));
+        }
+
+        section
+    }
+}
+
+/// Load a single agent from env vars using the `AGENT_<NAME>_*` convention.
+///
+/// Returns `None` if the agent has no valid command configured (neither CLI nor ACP).
+fn load_agent_from_env(name: &str) -> Option<AgentConfig> {
+    let upper = name.to_uppercase().replace('-', "_");
+
+    let mode = env::var(format!("AGENT_{}_MODE", upper)).unwrap_or_else(|_| "acp".to_string());
+
+    let command = env::var(format!("AGENT_{}_COMMAND", upper)).ok();
+    let acp_command = env::var(format!("AGENT_{}_ACP_COMMAND", upper))
+        .unwrap_or_else(|_| default_acp_command(name));
+
+    // Validate: at least one command must be available for the chosen mode.
+    if mode == "cli" && command.is_none() {
+        return None;
+    }
+    if mode == "acp" && acp_command.is_empty() {
+        return None;
+    }
+
+    let remote_url = env::var(format!("AGENT_{}_REMOTE_URL", upper)).unwrap_or_default();
+    let remote_dir = env::var(format!("AGENT_{}_REMOTE_DIR", upper)).unwrap_or_default();
+    let remote_session_path =
+        env::var(format!("AGENT_{}_REMOTE_SESSION_PATH", upper)).unwrap_or_default();
+    let remote_message_path =
+        env::var(format!("AGENT_{}_REMOTE_MESSAGE_PATH", upper)).unwrap_or_default();
+    let remote_event_path =
+        env::var(format!("AGENT_{}_REMOTE_EVENT_PATH", upper)).unwrap_or_default();
+    let remote_api_key = env::var(format!("AGENT_{}_REMOTE_API_KEY", upper)).unwrap_or_default();
+
+    let when_to_use = env::var(format!("AGENT_{}_WHEN_TO_USE", upper))
+        .unwrap_or_else(|_| default_when_to_use(name));
+
+    let prompt = env::var(format!("AGENT_{}_PROMPT", upper))
+        .or_else(|_| env::var(format!("AGENT_{}_INSTRUCTIONS", upper)))
+        .unwrap_or_else(|_| default_prompt(name));
+
+    let description =
+        env::var(format!("AGENT_{}_DESCRIPTION", upper)).unwrap_or_else(|_| default_description());
+
+    let task_description = env::var(format!("AGENT_{}_TASK_DESCRIPTION", upper))
+        .unwrap_or_else(|_| default_task_description());
+
+    Some(AgentConfig {
+        name: name.to_string(),
+        mode,
+        command,
+        acp_command,
+        remote_url,
+        remote_dir,
+        remote_session_path,
+        remote_message_path,
+        remote_event_path,
+        remote_api_key,
+        when_to_use,
+        prompt,
+        description,
+        task_description,
+    })
+}
+
+/// Load a single agent from legacy env vars (backward compatibility).
+fn load_legacy_agent() -> Option<AgentConfig> {
+    let command = env::var("AGENT_COMMAND").ok();
+    let mode = env::var("AGENT_MODE").unwrap_or_else(|_| "cli".to_string());
+    let acp_command = env::var("AGENT_ACP_COMMAND").unwrap_or_else(|_| "hermes acp".to_string());
+
+    // Legacy agents use built-in defaults for when_to_use and prompt.
+    let when_to_use = default_when_to_use("hermes");
+    let prompt = env::var("AGENT_PROMPT_INSTRUCTIONS").unwrap_or_else(|_| default_prompt("hermes"));
+
+    let description = default_description();
+    let task_description = default_task_description();
+
+    Some(AgentConfig {
+        name: "hermes".to_string(),
+        mode,
+        command,
+        acp_command,
+        remote_url: String::new(),
+        remote_dir: String::new(),
+        remote_session_path: String::new(),
+        remote_message_path: String::new(),
+        remote_event_path: String::new(),
+        remote_api_key: String::new(),
+        when_to_use,
+        prompt,
+        description,
+        task_description,
+    })
+}
+
+/// Default ACP command for known agent names.
+fn default_acp_command(name: &str) -> String {
+    match name {
+        "hermes" => "hermes acp".to_string(),
+        _ => format!("{} acp", name),
+    }
+}
+
+/// Default "when to use" text for known agent names.
+fn default_when_to_use(name: &str) -> String {
+    match name {
+        "hermes" => "Único agente externo disponible. Punto de contacto para lo que Seneschal \
+                      no puede resolver con sus propias herramientas: programación y código, \
+                      investigación profunda, gestión de calendario, flujos de múltiples pasos, \
+                      y cualquier tarea que requiera razonamiento extendido o herramientas \
+                      del sistema."
+            .to_string(),
+        _ => format!("Tareas delegables al agente externo {name}."),
+    }
+}
+
+/// Default prompt for known agent names.
+fn default_prompt(name: &str) -> String {
+    match name {
+        "hermes" => "Eres Hermes, el gateway de agentes externos. Puedes redirigir \
+                       internamente a especialistas (programadores, investigadores, etc.). \
+                       Recibe la consulta de Seneschal, coordina los recursos necesarios y devuelves \
+                       una respuesta clara y ejecutable."
+            .to_string(),
+        _ => format!(
+            "Eres un agente externo ({name}). Resuelve la tarea delegada de forma autónoma."
+        ),
+    }
+}
+
+/// Default tool description (used when `AGENT_{}_DESCRIPTION` is not set).
+fn default_description() -> String {
+    "Delegates a task to an external agent for execution. \
+     Use when the user asks for web search, complex reasoning, \
+     or file system actions. The result arrives asynchronously."
+        .to_string()
+}
+
+/// Default task parameter description (used when `AGENT_{}_TASK_DESCRIPTION` is not set).
+fn default_task_description() -> String {
+    "The task to delegate".to_string()
+}
+
+/// Capitalize first letter of a string.
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temp_env::with_vars;
+
+    #[test]
+    fn empty_registry_when_no_env() {
+        with_vars(&[] as &[(&str, Option<&str>); 0], || {
+            let reg = AgentRegistry::from_env();
+            assert!(reg.agents.is_empty());
+        });
+    }
+
+    #[test]
+    fn legacy_single_agent_fallback() {
+        with_vars(
+            [
+                ("AGENT_COMMAND", Some("hermes chat")),
+                ("AGENT_MODE", Some("cli")),
+            ],
+            || {
+                let reg = AgentRegistry::from_env();
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].name, "hermes");
+                assert_eq!(reg.agents[0].mode, "cli");
+                assert_eq!(reg.agents[0].command.as_deref(), Some("hermes chat"));
+            },
+        );
+    }
+
+    #[test]
+    fn legacy_acp_mode_fallback() {
+        with_vars(
+            [
+                ("AGENT_MODE", Some("acp")),
+                ("AGENT_ACP_COMMAND", Some("hermes acp")),
+            ],
+            || {
+                let reg = AgentRegistry::from_env();
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].name, "hermes");
+                assert_eq!(reg.agents[0].mode, "acp");
+                assert_eq!(reg.agents[0].acp_command, "hermes acp");
+            },
+        );
+    }
+
+    #[test]
+    fn multi_agent_from_env() {
+        with_vars(
+            [
+                ("AGENTS", Some("hermes,generic_test")),
+                ("AGENT_HERMES_MODE", Some("acp")),
+                ("AGENT_HERMES_ACP_COMMAND", Some("hermes acp")),
+                ("AGENT_GENERIC_TEST_MODE", Some("acp")),
+                ("AGENT_GENERIC_TEST_ACP_COMMAND", Some("generic_test acp")),
+            ],
+            || {
+                let reg = AgentRegistry::from_env();
+                assert_eq!(reg.agents.len(), 2);
+                assert_eq!(reg.agents[0].name, "hermes");
+                assert_eq!(reg.agents[1].name, "generic_test");
+            },
+        );
+    }
+
+    #[test]
+    fn system_prompt_section_empty_for_no_agents() {
+        let reg = AgentRegistry { agents: vec![] };
+        assert!(reg.system_prompt_section().is_empty());
+    }
+
+    #[test]
+    fn system_prompt_section_non_empty_for_agents() {
+        let reg = AgentRegistry {
+            agents: vec![AgentConfig {
+                name: "test".to_string(),
+                mode: "cli".to_string(),
+                command: Some("test-agent".to_string()),
+                acp_command: "test acp".to_string(),
+                remote_url: String::new(),
+                remote_dir: String::new(),
+                remote_session_path: String::new(),
+                remote_message_path: String::new(),
+                remote_event_path: String::new(),
+                remote_api_key: String::new(),
+                when_to_use: "Test when to use".to_string(),
+                prompt: "Test prompt".to_string(),
+                description: String::new(),
+                task_description: String::new(),
+            }],
+        };
+        let section = reg.system_prompt_section();
+        assert!(section.contains("EXTERNAL AGENTS"));
+        assert!(section.contains("run_test"));
+        assert!(section.contains("Test when to use"));
+    }
+
+    #[test]
+    fn default_acp_command_known_agents() {
+        assert_eq!(default_acp_command("hermes"), "hermes acp");
+        assert_eq!(default_acp_command("unknown"), "unknown acp");
+    }
+
+    #[test]
+    fn capitalize_works() {
+        assert_eq!(capitalize("hermes"), "Hermes");
+        assert_eq!(capitalize("my_agent"), "My_agent");
+        assert_eq!(capitalize(""), "");
+    }
+
+    mod toml_tests {
+        use super::*;
+
+        #[test]
+        fn toml_agents_loaded_when_no_env() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let toml_agents = vec![AgentTomlConfig {
+                    name: "hermes".to_string(),
+                    mode: "acp".to_string(),
+                    command: None,
+                    acp_command: Some("hermes acp".to_string()),
+                    remote_url: String::new(),
+                    remote_dir: String::new(),
+                    remote_session_path: String::new(),
+                    remote_message_path: String::new(),
+                    remote_event_path: String::new(),
+                    remote_api_key: String::new(),
+                    when_to_use: "Para todo".to_string(),
+                    prompt: "Eres Hermes".to_string(),
+                    description: String::new(),
+                    task_description: String::new(),
+                }];
+
+                let reg = AgentRegistry::from_config_and_env(toml_agents);
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].name, "hermes");
+                assert_eq!(reg.agents[0].mode, "acp");
+                assert_eq!(reg.agents[0].acp_command, "hermes acp");
+            });
+        }
+
+        #[test]
+        fn toml_acp_command_optional() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let toml_agents = vec![AgentTomlConfig {
+                    name: "test-agent".to_string(),
+                    mode: "cli".to_string(),
+                    command: Some("test-agent run".to_string()),
+                    acp_command: None,
+                    remote_url: String::new(),
+                    remote_dir: String::new(),
+                    remote_session_path: String::new(),
+                    remote_message_path: String::new(),
+                    remote_event_path: String::new(),
+                    remote_api_key: String::new(),
+                    when_to_use: "Para pruebas".to_string(),
+                    prompt: "Test agent".to_string(),
+                    description: String::new(),
+                    task_description: String::new(),
+                }];
+
+                let reg = AgentRegistry::from_config_and_env(toml_agents);
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].acp_command, ""); // default empty string
+            });
+        }
+
+        #[test]
+        fn empty_toml_agents_gives_empty_registry() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let reg = AgentRegistry::from_config_and_env(vec![]);
+                assert!(reg.agents.is_empty());
+            });
+        }
+
+        #[test]
+        fn from_impl_converts_toml_to_agent_config() {
+            let toml = AgentTomlConfig {
+                name: "hermes".to_string(),
+                mode: "acp".to_string(),
+                command: None,
+                acp_command: Some("hermes acp".to_string()),
+                remote_url: "http://localhost:4096".to_string(),
+                remote_dir: "/tmp".to_string(),
+                remote_session_path: String::new(),
+                remote_message_path: String::new(),
+                remote_event_path: String::new(),
+                remote_api_key: String::new(),
+                when_to_use: "Para todo".to_string(),
+                prompt: "Eres Hermes".to_string(),
+                description: String::new(),
+                task_description: String::new(),
+            };
+
+            let agent: AgentConfig = toml.into();
+            assert_eq!(agent.name, "hermes");
+            assert_eq!(agent.mode, "acp");
+            assert_eq!(agent.command, None);
+            assert_eq!(agent.acp_command, "hermes acp");
+            assert_eq!(agent.remote_url, "http://localhost:4096");
+            assert_eq!(agent.remote_dir, "/tmp");
+        }
+
+        #[test]
+        fn remote_api_key_loaded_from_env() {
+            with_vars(
+                [
+                    ("AGENTS", Some("testagent")),
+                    ("AGENT_TESTAGENT_MODE", Some("remote")),
+                    ("AGENT_TESTAGENT_REMOTE_URL", Some("http://localhost:8642")),
+                    ("AGENT_TESTAGENT_REMOTE_API_KEY", Some("sk-hermes-key")),
+                    ("AGENT_TESTAGENT_WHEN_TO_USE", Some("test")),
+                    ("AGENT_TESTAGENT_PROMPT", Some("test")),
+                ],
+                || {
+                    let reg = AgentRegistry::from_env();
+                    assert_eq!(reg.agents.len(), 1);
+                    assert_eq!(reg.agents[0].remote_api_key, "sk-hermes-key");
+                },
+            );
+        }
+
+        #[test]
+        fn remote_api_key_defaults_to_empty() {
+            with_vars(
+                [
+                    ("AGENTS", Some("testagent")),
+                    ("AGENT_TESTAGENT_MODE", Some("remote")),
+                    ("AGENT_TESTAGENT_REMOTE_URL", Some("http://localhost:8642")),
+                    ("AGENT_TESTAGENT_WHEN_TO_USE", Some("test")),
+                    ("AGENT_TESTAGENT_PROMPT", Some("test")),
+                ],
+                || {
+                    let reg = AgentRegistry::from_env();
+                    assert_eq!(reg.agents.len(), 1);
+                    assert_eq!(reg.agents[0].remote_api_key, "");
+                },
+            );
+        }
+
+        #[test]
+        fn toml_remote_api_key_loaded() {
+            with_vars(&[] as &[(&str, Option<&str>); 0], || {
+                let toml_agents = vec![AgentTomlConfig {
+                    name: "hermes".to_string(),
+                    mode: "remote".to_string(),
+                    command: None,
+                    acp_command: None,
+                    remote_url: "http://localhost:8642".to_string(),
+                    remote_dir: String::new(),
+                    remote_session_path: String::new(),
+                    remote_message_path: String::new(),
+                    remote_event_path: String::new(),
+                    remote_api_key: "toml-hermes-key".to_string(),
+                    when_to_use: "test".to_string(),
+                    prompt: "test".to_string(),
+                    description: String::new(),
+                    task_description: String::new(),
+                }];
+
+                let reg = AgentRegistry::from_config_and_env(toml_agents);
+                assert_eq!(reg.agents.len(), 1);
+                assert_eq!(reg.agents[0].remote_api_key, "toml-hermes-key");
+            });
+        }
+    }
+}

@@ -1,0 +1,3050 @@
+#![allow(dead_code)]
+#![allow(unreachable_code)]
+#![allow(unused_mut)]
+#![allow(unused_variables)]
+
+// agents → seneschal_agents
+// analysis → seneschal_extras::analysis
+// audio → seneschal_core::audio
+
+mod config;
+mod db;
+// dream → seneschal_memory::dream
+// llm → seneschal_core::llm
+// memory → seneschal_core::memory
+// pipeline → seneschal_core::pipeline
+// plugins → seneschal_plugins + seneschal_extras::agent_bridge
+// profile → seneschal_core::profile
+// screen_capture → seneschal_extras::screen_capture
+// search → seneschal_search
+// stt → seneschal_core::stt
+// tools → seneschal_tools_core + seneschal_extras
+// tts → seneschal_core::tts
+// tui → seneschal_tui
+
+use anyhow::{Context, Result};
+use async_channel::bounded;
+use seneschal_common::tools::PromptBuildState;
+use seneschal_worker::AgentDelegate;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use tokio::sync::mpsc;
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::EnvFilter;
+
+use crate::config::{Config, SeneschalEnv};
+use crate::db::{Database, Memory};
+use seneschal_agents::agent_session::VisibleSessionManager;
+use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
+use seneschal_common::events::ProactiveEvent;
+use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
+use seneschal_common::tools::{ConversationMode, ToolRegistry};
+use seneschal_common::{PermissionGate, find_allow_option_id};
+use seneschal_core::audio::ambient_buffer::AmbientBuffer;
+use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
+use seneschal_core::audio::audio_transform::resample_nearest;
+use seneschal_core::audio::buffer::AudioBuffer;
+use seneschal_core::audio::output::AudioOutput;
+use seneschal_core::audio::speaker::SpeakerVerifier;
+use seneschal_core::llm::LlmSession;
+use seneschal_core::pipeline::{
+    PipelineEvents, PipelineFrame, PipelineState, build_system_prompt,
+    check_system_prompt_saturation, consolidation_task, llm_task, run_consolidation_cycle,
+    sen_task, tts_task,
+};
+use seneschal_core::profile::ProfileFact;
+use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
+#[cfg(feature = "avspeech")]
+use seneschal_core::tts::AvSpeechTts;
+#[cfg(feature = "kokoro")]
+use seneschal_core::tts::KokoroTts;
+use seneschal_core::tts::TtsEngine;
+use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
+use seneschal_extras::analysis::ContextLens;
+use seneschal_extras::analysis::identity::IdentityAnalyzer;
+use seneschal_extras::{
+    RespondAgentPermissionTool, RunAgentTool, conversation_mode::SetConversationModeTool,
+    run_agent::ActiveTask,
+};
+use seneschal_mcp::mcp::McpToolProxy;
+use seneschal_memory::{SDreamConfig, SDreamDaemon};
+use seneschal_plugins::{
+    OriginalConfigSnapshot, PluginManager, SpawnedMcpServers, build_plugin_prompt_section,
+};
+use seneschal_tools_core::CurrentTimeTool;
+
+#[cfg(test)]
+mod e2e_tests;
+
+const AUDIO_CHANNEL_CAPACITY: usize = 200;
+const MAX_SPEECH_BUFFER_SECS: u32 = 30;
+const MIN_SPEECH_DURATION_MS: u32 = 300;
+
+// When the `avspeech` feature is enabled, the main thread must run CFRunLoop
+// so that AVSpeechSynthesizer buffer callbacks are delivered.
+#[cfg(feature = "avspeech")]
+fn main() {
+    unsafe extern "C" {
+        fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, ret: u8) -> i32;
+        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    let quit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let quit_c = quit.clone();
+
+    let handle = std::thread::spawn(move || {
+        let result = rt.block_on(async_main());
+        quit_c.store(true, std::sync::atomic::Ordering::SeqCst);
+        result
+    });
+
+    while !quit.load(std::sync::atomic::Ordering::SeqCst) {
+        unsafe {
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, 0);
+        }
+    }
+
+    if let Err(e) = handle.join().expect("tokio thread panicked") {
+        eprintln!("Error: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "avspeech"))]
+#[tokio::main]
+async fn main() -> Result<()> {
+    async_main().await
+}
+
+async fn async_main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
+    let active_env = SeneschalEnv::from_env_var();
+
+    #[cfg(feature = "tui")]
+    {
+        let log_path = Config::log_file_path();
+        let log_file = std::fs::File::create(&log_path)
+            .unwrap_or_else(|e| panic!("failed to create {}: {e}", log_path));
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .with_writer(std::sync::Mutex::new(log_file))
+            .with_ansi(false)
+            .init();
+    }
+    #[cfg(not(feature = "tui"))]
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    info!(target: "seneschal", "Active environment: {}", active_env.as_str());
+    info!(target: "seneschal", "Starting seneschal...");
+    let mut config = Config::from_env()?;
+
+    // Route whisper.cpp / ggml diagnostics into `tracing` so the `whisper_*` /
+    // `ggml_*` lines don't clutter the terminal/TUI screen.
+    seneschal_core::stt::whisper_log::install();
+
+    // Route libasound's stderr diagnostics (e.g. "unable to open slave") into
+    // `tracing` so they don't clutter the terminal/TUI screen either.
+    #[cfg(target_os = "linux")]
+    seneschal_core::audio::alsa_silencer::install();
+
+    // Point ALSA's virtual `default` PCM at the configured device before any
+    // PCM is opened, so libasound doesn't fail with "unable to open slave"
+    // (e.g. when card 0 is HDMI-only and has no PCM 0) and spam stderr.
+    #[cfg(target_os = "linux")]
+    seneschal_core::audio::alsa_setup::set_default_pcm_card(config.audio_input_device.as_deref());
+
+    // ── Permission gate (issue #167) ─────────────────────────────────────────
+    // Shared across the voice path (gate.enqueue in AgentQuestion handler), the
+    // Control API, the `respond_agent_permission` LLM tool, and the agent
+    // task lifecycle (gate.cancel_scope at end of every ACP prompt). Created
+    // up-front so the same Arc can be handed to every consumer.
+    let permission_gate = Arc::new(PermissionGate::new());
+
+    // ── Device listing shortcut ───────────────────────────────────────────────
+    let list_devices = config.list_devices
+        || std::env::args().any(|a| a == "--list-devices" || a == "list-devices");
+    if list_devices {
+        AudioCapture::print_devices()?;
+        return Ok(());
+    }
+
+    // ── Voice listing shortcut ────────────────────────────────────────────────
+    let list_voices =
+        config.list_voices || std::env::args().any(|a| a == "--list-voices" || a == "list-voices");
+    if list_voices {
+        match config.tts_provider.as_str() {
+            #[cfg(feature = "avspeech")]
+            "avspeech" => {
+                AvSpeechTts::list_voices();
+            }
+            #[cfg(not(feature = "avspeech"))]
+            "avspeech" => {
+                eprintln!(
+                    "TTS_PROVIDER=avspeech requires the 'avspeech' feature: cargo run --features avspeech"
+                );
+                std::process::exit(1);
+            }
+            #[cfg(feature = "kokoro")]
+            "kokoro" => {
+                let k = KokoroTts::new(
+                    &config.kokoro_model,
+                    &config.kokoro_voices,
+                    &config.kokoro_voice,
+                    &config.kokoro_language,
+                    config.kokoro_speed,
+                )
+                .await?;
+                k.list_voices();
+            }
+            #[cfg(not(feature = "kokoro"))]
+            "kokoro" => {
+                eprintln!(
+                    "TTS_PROVIDER=kokoro requires the 'kokoro' feature: cargo run --features kokoro"
+                );
+                std::process::exit(1);
+            }
+            _ => {
+                eprintln!(
+                    "Unknown TTS_PROVIDER '{}'. Available: avspeech, kokoro",
+                    config.tts_provider
+                );
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    info!(target: "seneschal", "Language: {}", config.language);
+
+    // ── Plugin manager ────────────────────────────────────────────────────────
+    let plugin_manager = Arc::new(PluginManager::new(&config.plugins));
+    let plugin_manager_clone = Arc::clone(&plugin_manager);
+    let mut plugin_sections = PluginPromptSections::default();
+
+    // ── Standalone S-DREAM launch mode ────────────────────────────────────────
+    if std::env::args().any(|a| a == "--dream") {
+        return run_dream_mode(&config).await;
+    }
+
+    // ── Proactive event channel ───────────────────────────────────────────────
+    let (proactive_tx, proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
+    // Per-session flag: ensures L1Saturated is emitted at most once.
+    let l1_saturation_notified: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    // ── Pipeline events (barge-in broadcast + LLM post-finished notify) ──────
+    // Created early: the deep worker engine (issue #236) subscribes to the
+    // barge-in broadcast below, before the pipeline tasks are spawned.
+    let events = Arc::new(PipelineEvents::new());
+
+    // ── Tools ─────────────────────────────────────────────────────────────────
+    let mut tool_registry = ToolRegistry::new();
+
+    let conv_mode: Arc<Mutex<ConversationMode>> = Arc::new(Mutex::new(ConversationMode::Active));
+    tool_registry.register(CurrentTimeTool);
+    // Permission decision tool (issue #167). Lets the frontend LLM resolve a
+    // pending backend-agent `session/request_permission` request by its
+    // `authorization_id` (mirrors qwen-audio-agent's `respondAgentPermission`).
+    tool_registry.register(RespondAgentPermissionTool::new(Arc::clone(
+        &permission_gate,
+    )));
+    // DISABLED (temp)
+    // tool_registry.register(ReadFileTool);
+    // DISABLED (temp)
+    // tool_registry.register(ReadClipboardTool);
+    // DISABLED (temp)
+    // tool_registry.register(SetClipboardTool);
+    // DISABLED (temp)
+    // tool_registry.register(OpenAppTool);
+    tool_registry.register(SetConversationModeTool::new(Arc::clone(&conv_mode)));
+
+    let prompt_build_state: Arc<Mutex<PromptBuildState>> =
+        Arc::new(Mutex::new(PromptBuildState::Inactive));
+    // DISABLED (temp)
+    // tool_registry.register(SetPromptBuildTool::new(Arc::clone(&prompt_build_state)));
+
+    // DISABLED (temp)
+    // if config.apple_events_enabled {
+    //     tool_registry.register(AppleEventsTool);
+    //     info!(target: "seneschal", "apple_events tool enabled (Calendar & Reminders)");
+    // }
+
+    // DISABLED (temp)
+    // if config.shell_enabled {
+    //     tool_registry.register(RunShellTool::new(config.shell_timeout_secs));
+    //     info!(target: "seneschal", "run_shell tool enabled (timeout={}s)", config.shell_timeout_secs);
+    // }
+
+    // DISABLED (temp)
+    // tool_registry.register(TakeScreenshotTool::new(llm_client.clone()));
+    // info!(target: "seneschal", "Vision tool enabled via primary LLM");
+
+    // DISABLED (temp)
+    // if config.web_search_enabled
+    //     && let Some(ref searxng_url) = config.searxng_url
+    // {
+    //     let wst = WebSearchTool::new(searxng_url.clone(), config.searxng_secret.clone());
+    //     tool_registry.register(wst);
+    //     info!(target: "seneschal", "web_search tool enabled (url={})", searxng_url);
+    // }
+
+    // ── Agent delegation (multi-agent registry) ───────────────────────────────
+    let agent_registry = AgentRegistry::from_config_and_env(config.agents.clone());
+    let agent_registry_section = agent_registry.system_prompt_section();
+    // Session event channel: the manager and run_acp emit lifecycle/interaction
+    // events here; the TUI/Control bridge below consumes the receiver. Must be
+    // set before wrapping in Arc (set_event_tx takes &mut self).
+    let (session_event_tx, session_event_rx) = seneschal_agents::create_session_event_channel();
+    #[cfg(not(any(feature = "tui", feature = "control")))]
+    let _ = session_event_rx;
+    let worker_event_fwd_tx = session_event_tx.clone();
+    let mut session_manager_inner = AcpSessionManager::new();
+    session_manager_inner.set_event_tx(session_event_tx);
+    let session_manager = Arc::new(session_manager_inner);
+    let visible_session_manager = Arc::new(VisibleSessionManager::new());
+
+    // ── Deep Worker (native secondary LLM, issue #236) ───────────────────────
+    // Heavy subagent with its own endpoint/model/sampling. The voice model
+    // delegates through `run_deep_task`; MCP, agents and plugin tooling load
+    // into the worker pool instead of the voice registry.
+    let deep_worker_delegate = Arc::new(seneschal_extras::RunAgentToolDelegate::new());
+    let mut deep_worker: Option<DeepWorkerCtx> = None;
+    if config.deep_worker_enabled {
+        let provider = seneschal_core::llm::create_deep_worker_provider(&config)?;
+        let params = seneschal_worker::DeepWorkerParams::from_config(&config);
+        info!(
+            target: "deep_worker",
+            "Deep worker enabled (url={}, model={}, thinking={}, mode={})",
+            config.deep_worker_url,
+            config.deep_worker_model,
+            config.deep_worker_thinking,
+            config.deep_worker_thinking_mode
+        );
+
+        let mut worker_registry = ToolRegistry::new();
+        // Local management pool: fs + shell (shell stays opt-in via SHELL_ENABLED).
+        worker_registry.register(seneschal_tools_core::ReadFileTool);
+        worker_registry.register(seneschal_tools_core::WriteFileTool);
+        worker_registry.register(seneschal_tools_core::ListDirTool);
+        info!(target: "deep_worker", "fs tools (read_file/write_file/list_dir) enabled in the worker pool");
+        if config.shell_enabled {
+            worker_registry.register(seneschal_tools_core::RunShellTool::new(
+                config.shell_timeout_secs,
+            ));
+            info!(target: "deep_worker", "run_shell enabled in the worker pool (timeout={}s)", config.shell_timeout_secs);
+        }
+        // Search + deep research live in the worker pool (heavy path).
+        if let Some(search_provider) = seneschal_search::from_config(&config) {
+            let search_provider: Arc<dyn seneschal_search::SearchProvider> =
+                Arc::from(search_provider);
+            worker_registry.register(seneschal_tools_core::QuickSearchTool::new(Arc::clone(
+                &search_provider,
+            )));
+            info!(target: "deep_worker", "quick_search enabled in the worker pool (provider={})", search_provider.name());
+        }
+        if let Some(agent) = agent_registry.agents.first() {
+            worker_registry.register(seneschal_extras::DeepResearchTool::new(agent.clone()));
+            info!(target: "deep_worker", "deep_research enabled in the worker pool (agent={})", agent.name);
+        }
+        // Vision: describe screenshots against the worker endpoint (re-enables
+        // the take_screenshot tool inside the worker pool).
+        worker_registry.register(seneschal_extras::TakeScreenshotTool::new(provider.clone()));
+
+        let worker_registry = Arc::new(Mutex::new(worker_registry));
+        let (engine, worker_event_rx) = seneschal_worker::DeepWorkerEngine::new(
+            provider.clone(),
+            Arc::clone(&worker_registry),
+            proactive_tx.clone(),
+            params,
+        );
+
+        // Voice-facing single door to the worker.
+        tool_registry.register(seneschal_worker::RunDeepTaskTool::new(Arc::clone(&engine)));
+        info!(target: "deep_worker", "run_deep_task tool enabled for the voice model");
+
+        // Forward worker progress into the SessionEvent channel (same TUI rows
+        // as external agents, under the "deep_worker" agent name).
+        {
+            let fwd_tx = worker_event_fwd_tx.clone();
+            tokio::spawn(async move {
+                use seneschal_agents::session_manager::{SessionEvent, SessionStatus};
+                let mut rx = worker_event_rx;
+                while let Some(ev) = rx.recv().await {
+                    let se = match ev {
+                        seneschal_worker::WorkerEvent::TaskStarted { task_id, task_text } => {
+                            SessionEvent::TaskStarted {
+                                agent_name: seneschal_worker::WORKER_AGENT_NAME.to_string(),
+                                session_id: task_id.clone(),
+                                task_id,
+                                task_text,
+                            }
+                        }
+                        seneschal_worker::WorkerEvent::ToolCall { task_id, tool_name } => {
+                            SessionEvent::ToolCall {
+                                agent_name: seneschal_worker::WORKER_AGENT_NAME.to_string(),
+                                session_id: task_id.clone(),
+                                tool_name,
+                                task_id: task_id.clone(),
+                                correlation_id: task_id,
+                            }
+                        }
+                        seneschal_worker::WorkerEvent::ToolResult {
+                            task_id,
+                            tool_name,
+                            result,
+                        } => SessionEvent::ToolResult {
+                            agent_name: seneschal_worker::WORKER_AGENT_NAME.to_string(),
+                            session_id: task_id.clone(),
+                            tool_name,
+                            task_id: task_id.clone(),
+                            result,
+                            correlation_id: task_id,
+                        },
+                        seneschal_worker::WorkerEvent::Thinking { task_id, text } => {
+                            SessionEvent::AgentMessage {
+                                agent_name: seneschal_worker::WORKER_AGENT_NAME.to_string(),
+                                session_id: task_id.clone(),
+                                text,
+                                correlation_id: task_id,
+                            }
+                        }
+                        seneschal_worker::WorkerEvent::Done { task_id } => SessionEvent::Status {
+                            agent_name: seneschal_worker::WORKER_AGENT_NAME.to_string(),
+                            session_id: task_id.clone(),
+                            status: SessionStatus::Done,
+                            correlation_id: task_id,
+                        },
+                        seneschal_worker::WorkerEvent::Failed { task_id, message } => {
+                            SessionEvent::Error {
+                                agent_name: seneschal_worker::WORKER_AGENT_NAME.to_string(),
+                                session_id: task_id.clone(),
+                                message,
+                                correlation_id: task_id,
+                            }
+                        }
+                    };
+                    let _ = fwd_tx.try_send(se);
+                }
+            });
+        }
+
+        deep_worker = Some(DeepWorkerCtx {
+            engine,
+            tools: worker_registry,
+            provider,
+        });
+    }
+
+    // With the worker enabled, the voice prompt stops advertising external
+    // agents — they surface as the worker's nested `run_agent` tool instead.
+    let agent_section = if deep_worker.is_some() {
+        String::new()
+    } else {
+        agent_registry_section.clone()
+    };
+
+    // ── Search provider (fast path) ───────────────────────────────────────────
+    // DISABLED (temp)
+    // if let Some(provider) = seneschal_search::from_config(&config) {
+    //     let provider = Arc::from(provider);
+    //     tool_registry.register(QuickSearchTool::new(Arc::clone(&provider)));
+    //     info!(target: "seneschal", "quick_search tool enabled (provider={})", provider.name());
+    //
+    //     if let Some(agent) = agent_registry.agents.first() {
+    //         tool_registry.register(DeepResearchTool::new(agent.clone(), shared_history.clone()));
+    //         info!(target: "seneschal", "deep_research tool enabled (agent={})", agent.name);
+    //     }
+    // }
+
+    for agent in &agent_registry.agents {
+        info!(target: "seneschal", "Agent '{}' enabled (mode={})", agent.name, agent.mode);
+        let task_map: Arc<dashmap::DashMap<String, ActiveTask>> = Arc::new(dashmap::DashMap::new());
+        let mut run_agent_tool = RunAgentTool::new(agent.clone(), task_map, proactive_tx.clone());
+        // Issue #167: pass the shared gate so the agent task cancels any
+        // pending permissions for its scope at the end of every ACP prompt.
+        run_agent_tool = run_agent_tool.with_permission_gate(Arc::clone(&permission_gate));
+        if agent.mode == "remote" {
+            if !agent.remote_url.is_empty() {
+                let mut transport =
+                    OpenCodeHttpTransport::new(agent.remote_url.clone(), agent.remote_dir.clone());
+                if !agent.remote_api_key.is_empty() {
+                    transport = transport.with_api_key(agent.remote_api_key.clone());
+                    info!(target: "seneschal", "run_{} Hermes transport enabled (url={}, api_key=set)",
+                        agent.name, agent.remote_url);
+                } else {
+                    info!(target: "seneschal", "run_{} OpenCode remote transport enabled (url={})",
+                        agent.name, agent.remote_url);
+                }
+                run_agent_tool = run_agent_tool.with_opencode_transport(Arc::new(transport));
+            }
+        } else if agent.mode == "acp" {
+            run_agent_tool = run_agent_tool.with_session_manager(Arc::clone(&session_manager));
+        } else if agent.mode == "visible" {
+            run_agent_tool = run_agent_tool
+                .with_visible_manager(Arc::clone(&visible_session_manager))
+                .with_session_dir(config.session_dir.clone());
+            if let Some(command) = &agent.command {
+                info!(target: "seneschal", "run_{} visible mode enabled (command={})", agent.name, command);
+            } else {
+                warn!(target: "seneschal", "run_{} visible mode enabled but no command set", agent.name);
+            }
+        }
+        // Issue #236: with the deep worker enabled, agent tools live in the
+        // worker pool (reachable through the nested run_agent tool) instead
+        // of the voice registry. The same handle backs both surfaces.
+        let run_agent_arc = Arc::new(run_agent_tool);
+        let run_agent_dyn: Arc<dyn seneschal_common::tools::Tool> = run_agent_arc.clone();
+        match &deep_worker {
+            Some(ctx) => {
+                ctx.tools.lock().unwrap().register_arc(run_agent_dyn);
+            }
+            None => {
+                tool_registry.register_arc(run_agent_dyn);
+            }
+        }
+        deep_worker_delegate.add(Arc::clone(&run_agent_arc));
+    }
+
+    // Issue #236: with the deep worker enabled, expose the nested delegation
+    // tool in the worker pool and give the worker the agents section.
+    if let Some(ctx) = &deep_worker
+        && !deep_worker_delegate.is_empty()
+    {
+        seneschal_extras::deep_worker_bridge::register_nested_agent_tool(
+            &mut ctx.tools.lock().unwrap(),
+            Arc::clone(&deep_worker_delegate),
+        );
+        ctx.engine
+            .set_extra_sections(deep_worker_delegate.agents_section());
+        info!(target: "deep_worker", "nested run_agent tool enabled in the worker pool");
+    }
+
+    // ── ACP pre-warm (per-agent) — skipped for remote agents ────────────────
+    for agent in &agent_registry.agents {
+        if agent.mode != "acp" {
+            continue;
+        }
+        let mgr = Arc::clone(&session_manager);
+        let config = agent.clone();
+        let agent_name = agent.name.clone();
+
+        tokio::spawn(async move {
+            match mgr.prewarm_agent(&config).await {
+                Ok(sid) => {
+                    info!(target: "agent", "ACP pre-warm [{}]: session ready (sid={sid})", agent_name);
+                }
+                Err(e) => {
+                    warn!(target: "agent", "ACP pre-warm [{}]: init failed: {e}", agent_name);
+                }
+            }
+        });
+    }
+
+    // ── ACP keep-alive daemon ────────────────────────────────────────────────
+    if config.agent_acp_keepalive_enabled {
+        let acp_agents: Vec<_> = agent_registry
+            .agents
+            .iter()
+            .filter(|a| a.mode == "acp")
+            .cloned()
+            .collect();
+
+        if !acp_agents.is_empty() {
+            seneschal_extras::daemon::AcpKeepAliveDaemon {
+                interval_secs: config.agent_acp_keepalive_interval_secs,
+                manager: Arc::clone(&session_manager),
+                configs: acp_agents,
+            }
+            .spawn();
+
+            info!(target: "agent", "ACP keep-alive daemon started (interval={}s)",
+                  config.agent_acp_keepalive_interval_secs);
+        }
+    }
+
+    // ── MCP tools (multi-server) ──────────────────────────────────────────────
+    let mcp_registry =
+        seneschal_mcp::mcp::McpRegistry::from_config_and_env(config.mcp_servers.clone());
+    // Issue #236: with the deep worker enabled, MCP tools load into the
+    // worker pool — the voice model never sees them (it delegates instead).
+    let mut mcp_worker_guard = deep_worker.as_ref().map(|ctx| ctx.tools.lock().unwrap());
+    let mcp_target: &mut ToolRegistry = match &mut mcp_worker_guard {
+        Some(guard) => guard,
+        None => &mut tool_registry,
+    };
+    for server in &mcp_registry.servers {
+        info!(target: "mcp", "Spawning MCP server '{}': {}", server.name, server.command);
+
+        // Tag incoming notifications with the server name so the main loop can
+        // route them per-server (see Gap 1 in doc/ARCHITECTURE-MCP-LAYER.md).
+        let handler: std::sync::Arc<dyn seneschal_mcp::mcp::McpNotificationHandler> =
+            std::sync::Arc::new(seneschal_mcp::mcp::ForwardingNotificationHandler {
+                server_name: server.name.clone(),
+            });
+
+        let result = match &server.transport {
+            seneschal_mcp::mcp::McpTransportKind::Stdio { command } => {
+                seneschal_mcp::mcp::McpClient::spawn_and_init_with_handler(
+                    command,
+                    server.tool_timeout_secs,
+                    Some(handler),
+                    Some(proactive_tx.clone()),
+                )
+                .await
+            }
+            seneschal_mcp::mcp::McpTransportKind::Http { url } => {
+                seneschal_mcp::mcp::McpClient::connect_http(
+                    url,
+                    server.tool_timeout_secs,
+                    Some(handler),
+                    Some(proactive_tx.clone()),
+                )
+                .await
+            }
+        };
+
+        match result {
+            Ok((client, tool_defs)) => {
+                let client = std::sync::Arc::new(client);
+                let mut count = 0;
+                for def in tool_defs {
+                    let prefixed_name = format!("{}_mcp__{}", server.name, def.name);
+
+                    // Skip MCP tools that duplicate the built-in apple_events tool.
+                    // The apple-mcp npm package has known bugs (returns "Untitled List"
+                    // with 0 reminders instead of real data). The built-in AppleEventsTool
+                    // uses native AppleScript and works correctly.
+                    if config.apple_events_enabled
+                        && (def.name == "reminders" || def.name == "calendar")
+                    {
+                        info!(
+                            target: "mcp",
+                            "Skipping MCP tool `{}` — superseded by built-in apple_events",
+                            prefixed_name
+                        );
+                        continue;
+                    }
+
+                    let prefixed_desc =
+                        format!("[MCP server: {}] {}", server.name, def.description);
+                    info!(
+                        target: "mcp",
+                        "Tool `{}`: schema={}",
+                        prefixed_name,
+                        serde_json::to_string(&def.input_schema).unwrap_or_default(),
+                    );
+                    mcp_target.register(McpToolProxy::new(
+                        prefixed_name,
+                        def.name,
+                        prefixed_desc,
+                        def.input_schema,
+                        std::sync::Arc::clone(&client),
+                    ));
+                    count += 1;
+                }
+                info!(
+                    target: "mcp",
+                    "Registered {} MCP tool(s) from server '{}'",
+                    count, server.name
+                );
+            }
+            Err(e) => {
+                warn!(
+                    target: "mcp",
+                    "MCP server '{}' failed to start: {}", server.name, e
+                );
+            }
+        }
+    }
+
+    // Issue #236 follow-up: release the worker-pool registry lock NOW. The
+    // engine's run_loop locks it on every delegated task; a guard living in
+    // function scope (main never returns) would deadlock every task silently
+    // — a blocking std::Mutex::lock inside run_loop also starves the
+    // tokio::time::timeout wrapped around it, so the task hangs forever.
+    drop(mcp_worker_guard);
+
+    // ── Plugin activation, MCP spawn, agent registration ────────────────────
+    if let Some(ref active_plugin_id) = config.active_plugin {
+        let available = plugin_manager.list_available();
+        if !available.contains(active_plugin_id) {
+            warn!(
+                plugin_id = %active_plugin_id,
+                available = ?available,
+                "active_plugin is not available, ignoring"
+            );
+            config.active_plugin = None;
+        } else {
+            let activated = plugin_manager.activate(
+                active_plugin_id,
+                OriginalConfigSnapshot::from_config(&config),
+            );
+            if let Some(activated) = activated {
+                let activated_prompt_configs = activated.prompt.clone();
+                let activated_mcp_servers = activated.mcp_servers.clone();
+                let activated_agents = activated.agents.clone();
+
+                let prompt = &activated_prompt_configs;
+                plugin_sections = PluginPromptSections {
+                    replace: match prompt.mode {
+                        seneschal_plugins::PromptMode::Replace => prompt.content.clone() + "\n",
+                        _ => String::new(),
+                    },
+                    prepend: match prompt.mode {
+                        seneschal_plugins::PromptMode::Both if prompt.prepend => {
+                            prompt.content.clone() + "\n"
+                        }
+                        _ => String::new(),
+                    },
+                    append: match prompt.mode {
+                        seneschal_plugins::PromptMode::Append
+                        | seneschal_plugins::PromptMode::Both
+                            if !prompt.prepend =>
+                        {
+                            prompt.content.clone() + "\n"
+                        }
+                        _ => String::new(),
+                    },
+                };
+
+                let existing_agent_names: HashSet<String> = agent_registry
+                    .agents
+                    .iter()
+                    .map(|a| a.name.clone())
+                    .collect();
+                let (plugin_agents, skipped) =
+                    resolve_plugin_agents(&activated_agents, &existing_agent_names);
+                if !skipped.is_empty() {
+                    warn!(
+                        skipped = ?skipped,
+                        "Plugin agent names conflict with existing agents, skipping"
+                    );
+                }
+                if !plugin_agents.is_empty() {
+                    info!(agents = ?plugin_agents.iter().map(|a| &a.name).collect::<Vec<_>>(),
+                          "Resolved plugin agents");
+                }
+
+                // Spawn plugin MCP servers and register tools.
+                // Issue #236: plugin MCP tools load into the worker pool when
+                // the deep worker owns the heavy tooling.
+                if !activated_mcp_servers.is_empty() {
+                    let mut plugin_mcp_guard =
+                        deep_worker.as_ref().map(|ctx| ctx.tools.lock().unwrap());
+                    let plugin_mcp_target: &mut ToolRegistry = match &mut plugin_mcp_guard {
+                        Some(guard) => guard,
+                        None => &mut tool_registry,
+                    };
+                    let spawned = SpawnedMcpServers::spawn_and_register(
+                        &activated_mcp_servers,
+                        plugin_mcp_target,
+                    )
+                    .await;
+                    let tool_count = spawned.tool_names().len();
+                    if tool_count > 0 {
+                        info!(
+                            target: "plugin",
+                            count = tool_count,
+                            plugin_id = %active_plugin_id,
+                            "Registered plugin MCP tools"
+                        );
+                    }
+                    // Store spawned servers handle for potential cleanup later
+                    let _spawned_mcp_handles = spawned;
+                }
+
+                // Register plugin agent tools
+                if !plugin_agents.is_empty() {
+                    let mut plugin_agent_guard =
+                        deep_worker.as_ref().map(|ctx| ctx.tools.lock().unwrap());
+                    let plugin_agent_target: &mut ToolRegistry = match &mut plugin_agent_guard {
+                        Some(guard) => guard,
+                        None => &mut tool_registry,
+                    };
+                    let (registered_names, plugin_agent_handles) = register_plugin_agent_tools(
+                        &plugin_agents,
+                        plugin_agent_target,
+                        proactive_tx.clone(),
+                        Some(Arc::clone(&session_manager)),
+                    );
+                    // Issue #236: plugin agents join the worker delegate so
+                    // the nested run_agent tool can reach them.
+                    if deep_worker.is_some() {
+                        for handle in plugin_agent_handles {
+                            deep_worker_delegate.add(handle);
+                        }
+                        if let Some(ctx) = &deep_worker {
+                            ctx.engine
+                                .set_extra_sections(deep_worker_delegate.agents_section());
+                        }
+                    }
+                    info!(
+                        target: "plugin",
+                        count = registered_names.len(),
+                        names = ?registered_names,
+                        "Registered plugin agent tools"
+                    );
+                }
+
+                // Issue #236: plugin prompt sections target the worker's
+                // system prompt when the deep worker is enabled — the voice
+                // model stays lean ("el habla NO recibe las instrucciones").
+                if let Some(ctx) = &deep_worker {
+                    let mut sections = deep_worker_delegate.agents_section();
+                    sections.push_str(&build_plugin_prompt_section_text(&plugin_sections));
+                    ctx.engine.set_extra_sections(sections);
+                }
+
+                info!(
+                    target: "plugin",
+                    plugin_id = %active_plugin_id,
+                    "Plugin activated at startup"
+                );
+            }
+        }
+    }
+
+    // Plugin switch event channel — processed between conversation turns
+    let (plugin_switch_tx, mut plugin_switch_rx) =
+        tokio::sync::mpsc::channel::<PluginSwitchEvent>(8);
+    let mut pending_plugin_switch: Option<PluginSwitchEvent> = None;
+
+    // Register switch_plugin tool if any plugins are available
+    // DISABLED (temp)
+    // if !plugin_manager.list_available().is_empty() {
+    //     tool_registry.register(SwitchPluginTool::new(
+    //         (*plugin_manager).clone(),
+    //         plugin_switch_tx,
+    //     ));
+    //     info!(target: "seneschal", "switch_plugin tool enabled");
+    // }
+
+    // ── Database ──────────────────────────────────────────────────────────────
+    let db = Database::new(&config.db_path).await?;
+    let is_first_launch = match db.is_first_launch().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(target: "db", "Failed to check first launch status: {} — assuming not first launch", e);
+            false
+        }
+    };
+    let session_id = db.get_or_create_session().await?;
+    config.llm_system_prompt = db
+        .ensure_active_system_prompt(session_id, &config.llm_system_prompt)
+        .await?;
+    let (summary, history) = db
+        .get_session_context(session_id, config.llm_history_load_limit)
+        .await?;
+    info!(
+        target: "db",
+        "Loaded {} messages from history (summary: {})",
+        history.len(),
+        if summary.is_some() { "yes" } else { "no" }
+    );
+
+    let profile_facts: Vec<ProfileFact> = db
+        .load_user_profile()
+        .await?
+        .into_iter()
+        .map(|(key, value, confidence)| ProfileFact {
+            key,
+            value,
+            confidence,
+        })
+        .collect();
+    if !profile_facts.is_empty() {
+        info!(target: "profile", "Loaded {} user profile facts", profile_facts.len());
+    }
+
+    let memories: Vec<Memory> = db.load_active_memories().await?;
+    if !memories.is_empty() {
+        info!(target: "memory", "Loaded {} persistent memories", memories.len());
+    }
+
+    // DISABLED (temp)
+    // tool_registry.register(RecoverHistoricalContextTool::new(Some(db.clone())));
+    // info!(target: "seneschal", "recover_historical_context tool enabled");
+
+    // Register list_tasks tool for subtask tracking
+    // DISABLED (temp)
+    // tool_registry.register_list_tasks();
+    // info!(target: "seneschal", "list_tasks tool enabled");
+
+    let tools = Arc::new(std::sync::Mutex::new(tool_registry));
+
+    // ── LLM session ───────────────────────────────────────────────────────────
+    let immutable_rules: Vec<seneschal_core::profile::Correction> = db
+        .get_immutable_rules()
+        .await?
+        .into_iter()
+        .map(
+            |(key, value, confidence)| seneschal_core::profile::Correction {
+                topic: key,
+                correction_text: value,
+                confidence,
+            },
+        )
+        .collect();
+
+    let tool_section = tools.lock().unwrap().system_prompt_section();
+    // Issue #236: with the deep worker enabled, plugin prompt sections go to
+    // the worker's system prompt — the voice model stays lean.
+    let voice_plugin_sections = if deep_worker.is_some() {
+        PluginPromptSections::default()
+    } else {
+        plugin_sections.clone()
+    };
+    let system_prompt = build_system_prompt(
+        &config.llm_system_prompt,
+        config.primary_wake_word(),
+        &profile_facts,
+        &memories,
+        &agent_section,
+        &tool_section,
+        &immutable_rules,
+        &voice_plugin_sections,
+    );
+
+    // Check if the initial context is already saturated and emit event if so.
+    check_system_prompt_saturation(
+        &profile_facts,
+        &memories,
+        &proactive_tx,
+        &l1_saturation_notified,
+    );
+
+    let llm_session = Arc::new(Mutex::new(LlmSession::from_history(
+        &system_prompt,
+        summary.as_deref(),
+        &history,
+    )));
+
+    // ── Self-managed LLM process ──────────────────────────────────────────────
+    if config.llm_self_managed {
+        let command = config.llm_command.as_deref().unwrap();
+        let child = seneschal_core::llm::manager::start_and_wait_ready(command, &config.llm_url)
+            .await
+            .context("Failed to start self-managed LLM server")?;
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(1);
+        let cmd = command.to_string();
+        let url = config.llm_url.clone();
+        tokio::spawn(seneschal_core::llm::manager::supervise(
+            child, cmd, url, notify_tx,
+        ));
+        tokio::spawn(async move {
+            if let Some(msg) = notify_rx.recv().await {
+                error!(target: "llm_manager", "{}", msg);
+            }
+        });
+    }
+
+    // ── LLM client ────────────────────────────────────────────────────────────
+    let llm_client = seneschal_core::llm::create_provider(&config)?;
+    info!(target: "llm", "LLM endpoint: {}", config.llm_url);
+
+    let background_client = llm_client.clone();
+
+    // ── Inference daemon ──────────────────────────────────────────────────────
+    if config.daemon_enabled {
+        info!(
+            target: "daemon",
+            "Inference daemon enabled (interval={}s)",
+            config.daemon_interval_secs
+        );
+        seneschal_extras::daemon::InferenceDaemon {
+            interval_secs: config.daemon_interval_secs,
+            llm_client: llm_client.clone(),
+            llm_session: Arc::clone(&llm_session),
+            proactive_tx: proactive_tx.clone(),
+        }
+        .spawn();
+    }
+
+    // ── EYES (visual awareness) ───────────────────────────────────────────────
+    if config.eyes_interval_secs > 0 {
+        info!(
+            target: "eyes",
+            "EYES enabled (interval={}s)",
+            config.eyes_interval_secs
+        );
+        // Issue #236: with the deep worker enabled and vision routed to it,
+        // screen analysis hits the worker endpoint (pays down the old
+        // `vision_client: llm_client.clone()` debt). Otherwise the voice
+        // LLM serves vision, as before.
+        let vision_client: Arc<dyn seneschal_core::llm::LlmProvider> =
+            match (&deep_worker, config.deep_worker_vision_enabled) {
+                (Some(ctx), true) => {
+                    info!(target: "eyes", "vision routed to the deep worker endpoint");
+                    Arc::clone(&ctx.provider)
+                }
+                _ => llm_client.clone(),
+            };
+        seneschal_extras::eyes::EyesDaemon {
+            interval_secs: config.eyes_interval_secs,
+            vision_client,
+            proactive_tx: proactive_tx.clone(),
+        }
+        .spawn();
+    }
+
+    // ── STT + VAD unified processor ────────────────────────────────────────────
+    let mut stt_provider: Box<dyn SttProvider> = create_provider(&config)?;
+    info!(
+        target: "stt",
+        "Initialized STT provider '{}' (configured: {})",
+        stt_provider.provider_name(),
+        config.stt_provider
+    );
+
+    // ── NoSpeechGate: post-STT quality filter ──────────────────────────────────
+    let no_speech_gate = NoSpeechGate {
+        no_speech_threshold: config.stt_no_speech_threshold,
+        logprob_threshold: config.stt_logprob_threshold,
+        compression_threshold: config.stt_compression_threshold,
+    };
+    info!(
+        target: "nospeechgate",
+        "NoSpeechGate ready (ns={:.2}, lp={:.2}, cr={:.2})",
+        no_speech_gate.no_speech_threshold,
+        no_speech_gate.logprob_threshold,
+        no_speech_gate.compression_threshold
+    );
+
+    // ── Analysis Ring: ContextLens + IdentityAnalyzer ─────────────────────────
+    // ContextLens is the shared blackboard for all analyzers. It is injected
+    // into the LLM task so fresh context (speaker identity, emotion, etc.)
+    // enriches every LLM call without being persisted to the session.
+    let context_lens = Arc::new(Mutex::new(ContextLens::new()));
+
+    let identity_analyzer: Option<Arc<Mutex<IdentityAnalyzer>>> = if !config.speaker_enabled {
+        info!(
+            target: "speaker",
+            "Speaker verification disabled by config"
+        );
+        None
+    } else if let Some(ref model_path) = config.speaker_model {
+        match SpeakerVerifier::new(
+            model_path,
+            std::path::Path::new(&config.speaker_enrollment_path),
+            config.speaker_similarity_min,
+            config.speaker_max_profiles,
+        ) {
+            Ok(sv) => {
+                info!(
+                    target: "speaker",
+                    "Speaker verification enabled (threshold={})",
+                    config.speaker_similarity_min
+                );
+                Some(Arc::new(Mutex::new(IdentityAnalyzer::new(
+                    sv,
+                    Arc::clone(&context_lens),
+                ))))
+            }
+            Err(e) => {
+                warn!(target: "speaker", "Speaker verification disabled — model load failed: {e}");
+                None
+            }
+        }
+    } else {
+        info!(
+            target: "speaker",
+            "Speaker verification disabled \
+             (place model at models/speaker_embedding.onnx to enable)"
+        );
+        None
+    };
+
+    // ── Ambient context buffer ────────────────────────────────────────────────
+    let ambient_buffer = Arc::new(std::sync::Mutex::new(AmbientBuffer::new(
+        config.ambient_buffer_max_entries,
+        config.ambient_buffer_minutes,
+    )));
+    info!(
+        target: "pipeline",
+        "Ambient buffer: {}min / {} entries max",
+        config.ambient_buffer_minutes,
+        config.ambient_buffer_max_entries
+    );
+
+    // ── TTS ───────────────────────────────────────────────────────────────────
+    let tts: TtsEngine = match config.tts_provider.as_str() {
+        #[cfg(feature = "avspeech")]
+        "avspeech" => {
+            info!(target: "tts", "TTS provider: AVSpeechSynthesizer (voice={}, rate={:.2})", config.avspeech_voice, config.avspeech_rate);
+            let voice = config.avspeech_voice.clone();
+            let rate = config.avspeech_rate;
+            let t = tokio::task::spawn_blocking(move || AvSpeechTts::new(&voice, rate)).await??;
+            TtsEngine::AvSpeech(t)
+        }
+        #[cfg(not(feature = "avspeech"))]
+        "avspeech" => {
+            anyhow::bail!(
+                "TTS_PROVIDER=avspeech requires the 'avspeech' feature: cargo run --features avspeech"
+            );
+        }
+        #[cfg(feature = "kokoro")]
+        "kokoro" => {
+            info!(target: "tts", "TTS provider: Kokoro (voice={}, lang={}, speed={})", config.kokoro_voice, config.kokoro_language, config.kokoro_speed);
+            let k = KokoroTts::new(
+                &config.kokoro_model,
+                &config.kokoro_voices,
+                &config.kokoro_voice,
+                &config.kokoro_language,
+                config.kokoro_speed,
+            )
+            .await?;
+            TtsEngine::Kokoro(k)
+        }
+        #[cfg(not(feature = "kokoro"))]
+        "kokoro" => {
+            anyhow::bail!(
+                "TTS_PROVIDER=kokoro requires the 'kokoro' feature: cargo run --features kokoro"
+            );
+        }
+        _ => {
+            anyhow::bail!(
+                "Unknown TTS_PROVIDER '{}'. Available: avspeech, kokoro",
+                config.tts_provider
+            );
+        }
+    };
+    let tts_sample_rate = tts.sample_rate();
+    let tts = Arc::new(tts);
+
+    // ── Audio output ──────────────────────────────────────────────────────────
+    let audio_output = Arc::new(AudioOutput::new_or_null(
+        config.audio_output_device.as_deref(),
+    ));
+    info!(
+        target: "audio",
+        "Audio output: {}Hz, {}ch",
+        audio_output.sample_rate(),
+        audio_output.channels()
+    );
+
+    // ── Filler controller (background sound during tool calls) ─────────────────
+    let filler_controller = Arc::new(seneschal_core::audio::filler::FillerController::new(
+        Arc::clone(&audio_output),
+        tts_sample_rate,
+    ));
+
+    // ── Audio capture ─────────────────────────────────────────────────────────
+    // Try to start capture immediately; if no input device is available yet,
+    // defer until the device monitor signals DeviceConnected.
+    let samples_per_chunk = config.samples_per_chunk();
+    let (tx, rx) = bounded(AUDIO_CHANNEL_CAPACITY);
+    let mut capture_stream: Option<cpal::Stream> = None;
+    let mut source_sample_rate = config.sample_rate;
+    // Tells the device monitor whether capture is currently running, so it only
+    // signals DeviceConnected when the device is present AND capture is idle.
+    let capture_active = Arc::new(AtomicBool::new(false));
+    match AudioCapture::try_new(config.audio_input_device.as_deref()) {
+        Some(ac) => {
+            source_sample_rate = ac.sample_rate();
+            info!(target: "audio", "Audio input: {}Hz", source_sample_rate);
+            match ac.start_capture(
+                tx.clone(),
+                samples_per_chunk,
+                Some(Arc::clone(&capture_active)),
+            ) {
+                Ok(stream) => {
+                    capture_active.store(true, Ordering::SeqCst);
+                    capture_stream = Some(stream);
+                }
+                Err(e) => {
+                    warn!(target: "audio", "Failed to start audio capture: {}. Deferring until device connects.", e);
+                }
+            }
+        }
+        None => {
+            warn!(target: "audio", "No input device available at startup — deferring capture until device connects");
+        }
+    }
+
+    let (stt_tx, mut stt_rx) = mpsc::channel::<SpeechEvent>(32);
+
+    let mut speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
+    let mut t_speech_start: Option<Instant> = None;
+
+    let turn_commit_counter = Arc::new(AtomicU64::new(0));
+    let mut last_cleared_commit: u64 = 0;
+    let mut speech_buffer_start_offset: usize = 0;
+
+    let non_user_streak = Arc::new(Mutex::new(0u8));
+    let last_speech_at = Arc::new(Mutex::new(Instant::now()));
+
+    // ── Pipeline timing context & events ─────────────────────────────────────
+    let t_vad_end: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let t_llm_post_send: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let play_cancel = Arc::new(AtomicBool::new(false));
+    let tts_muted = Arc::new(AtomicBool::new(false));
+    let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Pipeline FSM state — replaces AtomicBool flags (llm_busy, consolidation_active, etc.)
+    // Each actor that owns a transition writes it directly; observers subscribe read-only.
+    let (pipeline_state_tx, pipeline_state_rx) = tokio::sync::watch::channel(PipelineState::Idle);
+    let pipeline_state_tx = Arc::new(pipeline_state_tx);
+
+    #[cfg(feature = "control")]
+    let control_broadcast = seneschal_control::control::broadcast::ControlBroadcast::new(256);
+
+    // Supervisor observer: logs every state transition (off the hot path).
+    {
+        let mut rx = pipeline_state_rx.clone();
+        #[cfg(feature = "control")]
+        let ctrl = control_broadcast.clone();
+        tokio::spawn(async move {
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let state = rx.borrow().clone();
+                tracing::debug!(target: "fsm", "Pipeline state → {:?}", state);
+                #[cfg(feature = "control")]
+                ctrl.send(
+                    seneschal_control::control::broadcast::ControlEvent::StateChanged {
+                        state: state.control_wire_state().to_string(),
+                        utterance_id: state.utterance_id(),
+                        pause_reason: state.control_pause_reason().map(str::to_string),
+                    },
+                );
+            }
+        });
+    }
+    // pipeline_state_rx is kept alive and cloned for each consumer below.
+
+    // ── Stuck-state watchdog (issue #220, defense in depth) ─────────────────
+    // The TUI status bar is driven solely by `StateChange` events on the tui
+    // channel, and the channel is consumed by the TUI (no tap). So we run an
+    // instrumented tap: producers send to an internal channel, a forwarder
+    // records each `StateChange` in `tui_state` below and re-sends to the
+    // real TUI. The watchdog task (spawned after the ambient checker) reads
+    // the tracker and, when `Transcribing`/`Thinking` has persisted past
+    // `STUCK_STATE_TIMEOUT_SECS` with no further state change, force-resets
+    // the TUI to `Idle` and warns. It is a safety net, not the fix — the
+    // primary fix is the explicit `StateChange(Idle)` in the SpeechEnd
+    // rejection branches above. Without feature "tui" there is no bar to
+    // stick, so the whole mechanism is compiled out.
+    const STUCK_STATE_TIMEOUT_SECS: u64 = 30;
+    const STUCK_STATE_POLL_SECS: u64 = 5;
+    #[cfg(feature = "tui")]
+    #[derive(Clone)]
+    struct TuiStateTracker {
+        /// Current state of the TUI status bar (last StateChange seen).
+        state: seneschal_common::tui_events::PipelineState,
+        /// Bumped on every StateChange, so the watchdog can tell one stuck
+        /// period from the next (and reset each one at most once).
+        generation: u64,
+        /// Last pipeline activity (a state change, or an LLM token while
+        /// Thinking). The watchdog clock measures silence since this instant.
+        last_activity: Instant,
+        /// Generation that was already reset; a new stuck period (new
+        /// generation) can reset again, the same one cannot.
+        reset_generation: Option<u64>,
+    }
+    #[cfg(feature = "tui")]
+    let tui_state: Arc<Mutex<TuiStateTracker>> = Arc::new(Mutex::new(TuiStateTracker {
+        state: seneschal_common::tui_events::PipelineState::Idle,
+        generation: 0,
+        last_activity: Instant::now(),
+        reset_generation: None,
+    }));
+
+    // Periodic Ambient timeout checker — replaces dead SpeechEvent::Silence handler
+    {
+        let conv_mode_clone = conv_mode.clone();
+        let last_speech_at_clone = last_speech_at.clone();
+        let non_user_streak_clone = non_user_streak.clone();
+        let shutdown_clone = shutdown.clone();
+        let clear_secs = config.ambient_clear_secs;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                if shutdown_clone.load(Ordering::SeqCst) {
+                    break;
+                }
+                let elapsed = last_speech_at_clone.lock().unwrap().elapsed().as_secs();
+                if elapsed >= clear_secs {
+                    let mut mode = conv_mode_clone.lock().unwrap();
+                    if *mode == ConversationMode::Active {
+                        *mode = ConversationMode::Ambient;
+                        *non_user_streak_clone.lock().unwrap() = 0;
+                        drop(mode);
+                        info!(
+                            target: "pipeline",
+                            "Ambient mode: {}s of silence — returning to Ambient",
+                            clear_secs
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    // Shared slot for remote TTS routing. Always created so `tts_task` can check it
+    // without a feature gate in seneschal-core. The remote WebSocket server installs a
+    // sender while a companion client is connected; otherwise it stays None → local CPAL.
+    let remote_tts_tx: seneschal_core::pipeline::RemoteTtsTx =
+        Arc::new(tokio::sync::Mutex::new(None));
+
+    #[cfg(feature = "tui")]
+    let (tui_tx, mut tui_internal_rx) =
+        tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
+
+    #[cfg(feature = "tui")]
+    let (tui_tx_out, tui_rx) =
+        tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
+
+    #[cfg(feature = "tui")]
+    {
+        // Forwarder: records StateChange (and LLM-token activity) in
+        // `tui_state`, then re-sends every event to `tui_rx` for the TUI.
+        let tracker = tui_state.clone();
+        let out = tui_tx_out;
+        tokio::spawn(async move {
+            use seneschal_common::tui_events::{PipelineState as TuiPs, TuiEvent};
+            let mut out = out;
+            let mut tracker = tracker;
+            while let Some(event) = tui_internal_rx.recv().await {
+                match &event {
+                    TuiEvent::StateChange(s) => {
+                        let mut t = tracker.lock().unwrap();
+                        t.state = s.clone();
+                        t.generation += 1;
+                        t.last_activity = Instant::now();
+                    }
+                    // Activity while Thinking: the LLM is alive and
+                    // streaming — keep the watchdog clock fresh.
+                    TuiEvent::AssistantToken(_) => {
+                        let mut t = tracker.lock().unwrap();
+                        if matches!(t.state, TuiPs::Thinking) {
+                            t.last_activity = Instant::now();
+                        }
+                    }
+                    _ => {}
+                }
+                if out.send(event).is_err() {
+                    break; // TUI gone — stop forwarding
+                }
+            }
+        });
+    }
+
+    #[cfg(feature = "tui")]
+    let tui_tx_llm: Option<seneschal_common::tui_events::TuiEventTx> = Some(tui_tx.clone());
+    #[cfg(not(feature = "tui"))]
+    let tui_tx_llm: Option<seneschal_common::tui_events::TuiEventTx> = None;
+
+    #[cfg(feature = "tui")]
+    let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = Some(tui_tx.clone());
+    #[cfg(not(feature = "tui"))]
+    let tui_tx_tts: Option<seneschal_common::tui_events::TuiEventTx> = None;
+
+    // ── Stuck-state watchdog task (issue #220, defense in depth) ────────────
+    // Every `STUCK_STATE_POLL_SECS`, check the TUI state tracker: if the bar
+    // has been on `Transcribing` or `Thinking` for longer than
+    // `STUCK_STATE_TIMEOUT_SECS` with no state change or LLM-token activity,
+    // force it back to `Idle` (once per stuck period) and warn. It is the
+    // safety net for any future rejection branch that forgets to reset —
+    // the explicit resets in the SpeechEnd handler are the primary fix.
+    #[cfg(feature = "tui")]
+    {
+        let tracker = tui_state.clone();
+        let tui_tx_wd = tui_tx.clone();
+        let shutdown_clone = shutdown.clone();
+        let poll = STUCK_STATE_POLL_SECS;
+        let timeout = STUCK_STATE_TIMEOUT_SECS;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(poll));
+            loop {
+                interval.tick().await;
+                if shutdown_clone.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut t = tracker.lock().unwrap();
+                let idle_secs = t.last_activity.elapsed().as_secs();
+                let already = t.reset_generation == Some(t.generation);
+                if seneschal_common::tui_events::should_reset_stuck_state(
+                    &t.state, idle_secs, timeout, already,
+                ) {
+                    let stuck_state = format!("{:?}", t.state);
+                    t.reset_generation = Some(t.generation);
+                    t.state = seneschal_common::tui_events::PipelineState::Idle;
+                    t.generation += 1;
+                    t.last_activity = Instant::now();
+                    drop(t);
+                    warn!(
+                        target: "pipeline",
+                        "Stuck-state watchdog: TUI was {stuck_state} for {idle_secs}s \
+                         (no LLM/TTS activity) — resetting to Idle"
+                    );
+                    tui_tx_wd
+                        .send(seneschal_tui::events::TuiEvent::StateChange(
+                            seneschal_tui::events::PipelineState::Idle,
+                        ))
+                        .ok();
+                }
+            }
+        });
+    }
+
+    // ── Bridge ACP session events → TUI + Control agent task events ───────────
+    #[cfg(any(feature = "tui", feature = "control"))]
+    {
+        let mut session_rx = session_event_rx;
+        #[cfg(feature = "tui")]
+        let tui_tx_bridge = tui_tx.clone();
+        #[cfg(feature = "control")]
+        let ctrl_bridge = control_broadcast.clone();
+        tokio::spawn(async move {
+            use seneschal_agents::session_manager::{SessionEvent, SessionStatus};
+            let mut buffers: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            // session_id → task_id (per-task UUID) so follow-up prompts and
+            // session-level status events can be tied to the current task row.
+            let mut session_tasks: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            while let Some(event) = session_rx.recv().await {
+                // Map to a small internal enum so both surfaces stay in lockstep.
+                // task_id is the per-task UUID wherever available (TaskStarted,
+                // ToolCall, ToolResult, AgentMessage, UserMessage, Error carry
+                // correlation_id = task UUID); it falls back to the persistent
+                // session_id only for legacy/unknown emitters.
+                enum AgentUi {
+                    Started {
+                        task_id: String,
+                        agent_name: String,
+                        objective: String,
+                    },
+                    Prompt {
+                        task_id: String,
+                        text: String,
+                    },
+                    Running {
+                        task_id: String,
+                        objective: String,
+                    },
+                    Finalizing {
+                        task_id: String,
+                        objective: String,
+                    },
+                    Failed {
+                        task_id: String,
+                        message: String,
+                    },
+                }
+
+                let mapped = match &event {
+                    // Task-level identity: each delegation gets its own UUID,
+                    // so every task gets its own TUI row even on a persistent
+                    // session.
+                    SessionEvent::TaskStarted {
+                        agent_name,
+                        session_id,
+                        task_id,
+                        task_text,
+                    } => {
+                        session_tasks.insert(session_id.clone(), task_id.clone());
+                        Some(AgentUi::Started {
+                            task_id: task_id.clone(),
+                            agent_name: agent_name.clone(),
+                            objective: seneschal_core::pipeline::truncate_chars(task_text, 120),
+                        })
+                    }
+                    SessionEvent::Status {
+                        agent_name: _,
+                        session_id,
+                        status,
+                        ..
+                    } => match status {
+                        // Busy is announced by TaskStarted; Idle/Started/
+                        // NeedsInput/Closed are not displayed.
+                        SessionStatus::Busy => None,
+                        SessionStatus::Done => {
+                            session_tasks
+                                .get(session_id)
+                                .map(|task_id| AgentUi::Finalizing {
+                                    task_id: task_id.clone(),
+                                    objective: String::new(),
+                                })
+                        }
+                        SessionStatus::Error => {
+                            session_tasks
+                                .get(session_id)
+                                .map(|task_id| AgentUi::Failed {
+                                    task_id: task_id.clone(),
+                                    message: "Error de sesión ACP".to_string(),
+                                })
+                        }
+                        _ => None,
+                    },
+                    SessionEvent::ToolCall {
+                        agent_name: _,
+                        session_id,
+                        tool_name,
+                        correlation_id,
+                        ..
+                    } => Some(AgentUi::Running {
+                        task_id: if correlation_id.is_empty() {
+                            session_id.clone()
+                        } else {
+                            correlation_id.clone()
+                        },
+                        objective: format!("llamando a {tool_name}..."),
+                    }),
+                    SessionEvent::ToolResult {
+                        session_id,
+                        tool_name,
+                        result,
+                        correlation_id,
+                        ..
+                    } => {
+                        let summary = seneschal_core::pipeline::truncate_chars(result, 80);
+                        Some(AgentUi::Running {
+                            task_id: if correlation_id.is_empty() {
+                                session_id.clone()
+                            } else {
+                                correlation_id.clone()
+                            },
+                            objective: format!("✅ {tool_name}: {summary}"),
+                        })
+                    }
+                    SessionEvent::AgentMessage {
+                        session_id,
+                        text,
+                        correlation_id,
+                        ..
+                    } => {
+                        let buf = buffers.entry(session_id.clone()).or_default();
+                        buf.push_str(text);
+                        buf.push(' ');
+                        let should_emit = buf.len() > 200
+                            || text.ends_with('.')
+                            || text.ends_with('!')
+                            || text.ends_with('?')
+                            || text.ends_with('\n');
+                        if should_emit {
+                            let msg = buf.clone();
+                            buf.clear();
+                            Some(AgentUi::Running {
+                                task_id: if correlation_id.is_empty() {
+                                    session_id.clone()
+                                } else {
+                                    correlation_id.clone()
+                                },
+                                objective: msg,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    // Prompt sent to the subagent (outbound user→agent message).
+                    SessionEvent::UserMessage {
+                        session_id,
+                        text,
+                        correlation_id,
+                        ..
+                    } => {
+                        let task_id = if !correlation_id.is_empty() {
+                            correlation_id.clone()
+                        } else if let Some(task_id) = session_tasks.get(session_id) {
+                            task_id.clone()
+                        } else {
+                            session_id.clone()
+                        };
+                        Some(AgentUi::Prompt {
+                            task_id,
+                            text: seneschal_core::pipeline::truncate_chars(text, 200),
+                        })
+                    }
+                    SessionEvent::Error {
+                        session_id,
+                        message,
+                        correlation_id,
+                        ..
+                    } => Some(AgentUi::Failed {
+                        task_id: if correlation_id.is_empty() {
+                            session_id.clone()
+                        } else {
+                            correlation_id.clone()
+                        },
+                        message: message.clone(),
+                    }),
+                };
+
+                if let Some(ui) = mapped {
+                    #[cfg(feature = "tui")]
+                    {
+                        let tui_ev = match &ui {
+                            AgentUi::Started {
+                                task_id,
+                                agent_name,
+                                objective,
+                            } => seneschal_tui::events::TuiEvent::AgentTaskStarted {
+                                task_id: task_id.clone(),
+                                agent_name: agent_name.clone(),
+                                objective: objective.clone(),
+                            },
+                            AgentUi::Prompt { task_id, text } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskPrompt {
+                                    task_id: task_id.clone(),
+                                    text: text.clone(),
+                                }
+                            }
+                            AgentUi::Running { task_id, objective } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                    task_id: task_id.clone(),
+                                    objective: objective.clone(),
+                                }
+                            }
+                            AgentUi::Finalizing { task_id, objective } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                    task_id: task_id.clone(),
+                                    objective: objective.clone(),
+                                }
+                            }
+                            AgentUi::Failed { task_id, message } => {
+                                seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                                    task_id: task_id.clone(),
+                                    message: message.clone(),
+                                }
+                            }
+                        };
+                        if tui_tx_bridge.send(tui_ev).is_err() {
+                            // TUI closed — keep Control bridge alive if enabled.
+                            #[cfg(not(feature = "control"))]
+                            break;
+                        }
+                    }
+                    #[cfg(feature = "control")]
+                    {
+                        use seneschal_control::control::broadcast::ControlEvent;
+                        // AgentTaskPrompt is TUI-only; the Control wire
+                        // protocol keeps the existing lifecycle event set.
+                        let ctrl_ev = match ui {
+                            AgentUi::Started {
+                                task_id,
+                                agent_name,
+                                objective,
+                            } => Some(ControlEvent::AgentTaskStarted {
+                                task_id,
+                                agent_name,
+                                objective,
+                            }),
+                            AgentUi::Running { task_id, objective } => {
+                                Some(ControlEvent::AgentTaskRunning { task_id, objective })
+                            }
+                            AgentUi::Finalizing { task_id, objective } => {
+                                Some(ControlEvent::AgentTaskFinalizing { task_id, objective })
+                            }
+                            AgentUi::Failed { task_id, message } => {
+                                Some(ControlEvent::AgentTaskFailed { task_id, message })
+                            }
+                            AgentUi::Prompt { .. } => None,
+                        };
+                        if let Some(ctrl_ev) = ctrl_ev {
+                            ctrl_bridge.send(ctrl_ev);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    let announcement_window = Arc::new(std::sync::Mutex::new(
+        seneschal_core::pipeline::AnnouncementWindow::new(),
+    ));
+    // `permission_gate` is created earlier (right after Config::from_env) so
+    // it can be shared with the tool/agent setup that runs before this point.
+
+    let utterance_epoch = Arc::new(AtomicU64::new(0));
+
+    // ── Sentences channel: sen_task + llm_task(errors) → tts_task ───────────
+    let (sentences_tx, sentences_rx) = tokio::sync::mpsc::channel::<PipelineFrame>(64);
+    // ── LLM token channel: llm_task → sen_task ────────────────────────────────
+    let (llm_tx, llm_rx) = tokio::sync::mpsc::channel::<PipelineFrame>(256);
+    // ── Transcript channel: audio loop + proactive → llm_task ────────────────
+    let (transcript_tx, transcript_rx) = tokio::sync::mpsc::channel::<PipelineFrame>(16);
+
+    // ── Spawn permanent pipeline tasks ────────────────────────────────────────
+    {
+        let events_c = Arc::clone(&events);
+        let pipeline_state_tx_c = Arc::clone(&pipeline_state_tx);
+        let pipeline_state_rx_c = pipeline_state_rx.clone();
+        let sentences_tx_c = sentences_tx.clone();
+        let llm_tx_c = llm_tx.clone();
+        let t_llm_post_send_c = Arc::clone(&t_llm_post_send);
+        let llm_session_c = Arc::clone(&llm_session);
+        let llm_client_c = llm_client.clone();
+        let db_c = db.clone();
+        let tools_c = Arc::clone(&tools);
+        let turn_commit_c = Arc::clone(&turn_commit_counter);
+        let proactive_tx_c = proactive_tx.clone();
+        let filler_controller_c = Arc::clone(&filler_controller);
+        let llm_temperature = config.llm_temperature;
+        let llm_thinking = config.llm_thinking;
+        #[cfg(feature = "control")]
+        let control_broadcast_llm = Some(control_broadcast.clone());
+        #[cfg(not(feature = "control"))]
+        let control_broadcast_llm = None;
+        tokio::spawn(async move {
+            llm_task(
+                events_c,
+                pipeline_state_tx_c,
+                pipeline_state_rx_c,
+                sentences_tx_c,
+                llm_tx_c,
+                transcript_rx,
+                t_llm_post_send_c,
+                llm_session_c,
+                llm_client_c,
+                db_c,
+                session_id,
+                tools_c,
+                turn_commit_c,
+                proactive_tx_c,
+                filler_controller_c,
+                llm_temperature,
+                llm_thinking,
+                tui_tx_llm,
+                control_broadcast_llm,
+            )
+            .await;
+        });
+    }
+    {
+        let events_c = Arc::clone(&events);
+        let sentences_c = sentences_tx.clone();
+        let t_vad_end_c = Arc::clone(&t_vad_end);
+        let t_llm_post_send_c = Arc::clone(&t_llm_post_send);
+        tokio::spawn(async move {
+            sen_task(
+                events_c,
+                llm_rx,
+                sentences_c,
+                t_vad_end_c,
+                t_llm_post_send_c,
+            )
+            .await;
+        });
+    }
+    {
+        let events_c = Arc::clone(&events);
+        let pipeline_state_tx_c = Arc::clone(&pipeline_state_tx);
+        let t_vad_end_c = Arc::clone(&t_vad_end);
+        let tts_c = Arc::clone(&tts);
+        let audio_out_c = Arc::clone(&audio_output);
+        let play_cancel_c = Arc::clone(&play_cancel);
+        let tts_muted_c = Arc::clone(&tts_muted);
+        let announcement_window_c = Arc::clone(&announcement_window);
+        let remote_tts_tx_c = Arc::clone(&remote_tts_tx);
+        tokio::spawn(async move {
+            let has_audio_device = audio_out_c.has_device();
+            tts_task(
+                events_c,
+                pipeline_state_tx_c,
+                t_vad_end_c,
+                sentences_rx,
+                tts_c,
+                audio_out_c,
+                tts_sample_rate,
+                play_cancel_c,
+                tts_muted_c,
+                has_audio_device,
+                tui_tx_tts,
+                announcement_window_c,
+                remote_tts_tx_c,
+            )
+            .await;
+        });
+    }
+    {
+        let events_c = Arc::clone(&events);
+        let pipeline_state_tx_c = Arc::clone(&pipeline_state_tx);
+        let pipeline_state_rx_c = pipeline_state_rx.clone();
+        let transcript_tx_c = transcript_tx.clone();
+        let llm_session_c = Arc::clone(&llm_session);
+        let background_c = background_client.clone();
+        let db_c = db.clone();
+        let context_tokens = config.llm_context_tokens;
+        let keep_turns = config.llm_summary_keep_turns;
+        let threshold_pct = config.llm_consolidation_threshold_pct;
+        let idle_secs = config.llm_idle_consolidation_secs;
+        let idle_min_pct = config.llm_idle_min_context_pct;
+        let base_prompt = config.llm_system_prompt.clone();
+        let wake_word_c = config.primary_wake_word().to_string();
+        let agent_section_c = agent_section.clone();
+        let tool_section_c = tool_section.clone();
+        let language_c = config.language.clone();
+        let proactive_tx_c = proactive_tx.clone();
+        let already_notified_c = Arc::clone(&l1_saturation_notified);
+        let prompt_build_c = Arc::clone(&prompt_build_state);
+        tokio::spawn(async move {
+            consolidation_task(
+                events_c,
+                pipeline_state_tx_c,
+                pipeline_state_rx_c,
+                transcript_tx_c,
+                llm_session_c,
+                prompt_build_c,
+                background_c,
+                db_c,
+                session_id,
+                context_tokens,
+                keep_turns,
+                threshold_pct,
+                idle_secs,
+                idle_min_pct,
+                base_prompt,
+                wake_word_c,
+                agent_section_c,
+                tool_section_c,
+                language_c,
+                proactive_tx_c,
+                already_notified_c,
+            )
+            .await;
+        });
+    }
+
+    info!(target: "seneschal", "Ready. Speak to interact...");
+
+    // ── TUI ───────────────────────────────────────────────────────────────────
+    #[cfg(feature = "tui")]
+    {
+        let transcript_tx_c = transcript_tx.clone();
+        let tts_muted_c = Arc::clone(&tts_muted);
+        let conv_mode_c = Arc::clone(&conv_mode);
+        let prompt_build_c = Arc::clone(&prompt_build_state);
+        // Same history slice loaded into LlmSession — UI hard-caps inside seed_history.
+        let tui_history = history.clone();
+        if !tui_history.is_empty() {
+            info!(
+                target: "tui",
+                count = tui_history.len(),
+                "Passing {} history messages to TUI for rehydration",
+                tui_history.len()
+            );
+        }
+        tokio::spawn(async move {
+            if let Err(e) = seneschal_tui::run(
+                tui_rx,
+                transcript_tx_c,
+                tts_muted_c,
+                conv_mode_c,
+                prompt_build_c,
+                tui_history,
+            )
+            .await
+            {
+                tracing::error!("TUI error: {e}");
+            }
+            std::process::exit(0);
+        });
+    }
+
+    // ── Remote device WebSocket server ────────────────────────────────────────
+    #[cfg(feature = "remote")]
+    if let Some(ws_port) = config.ws_port {
+        let remote_state = Arc::new(seneschal_remote::remote::server::RemoteState {
+            audio_tx: tx.clone(),
+            samples_per_chunk,
+            barge_in_tx: events.barge_in_tx.clone(),
+            play_cancel: Arc::clone(&play_cancel),
+            tts_audio_tx: Arc::clone(&remote_tts_tx),
+            connected: AtomicBool::new(false),
+            #[cfg(feature = "control")]
+            control_broadcast_tx: control_broadcast.tx.clone(),
+        });
+        tokio::spawn(async move {
+            if let Err(e) =
+                seneschal_remote::remote::server::start_server(ws_port, remote_state).await
+            {
+                error!(target: "remote", "WebSocket server error: {e}");
+            }
+        });
+    }
+
+    // ── Control API (HTTP + SSE) ──────────────────────────────────────────────
+    #[cfg(feature = "control")]
+    if let Some(ctrl_port) = config.control_port {
+        let ctrl_state = Arc::new(seneschal_control::control::state::ControlState {
+            broadcast: control_broadcast.clone(),
+            pipeline_state_rx: pipeline_state_rx.clone(),
+            tts_muted: Arc::clone(&tts_muted),
+            play_cancel: Arc::clone(&play_cancel),
+            barge_in_tx: events.barge_in_tx.clone(),
+            transcript_tx: transcript_tx.clone(),
+            llm_session: Arc::clone(&llm_session),
+            db: db.clone(),
+            permission_gate: Arc::clone(&permission_gate),
+        });
+        tokio::spawn(async move {
+            if let Err(e) =
+                seneschal_control::control::api::start_control_server(ctrl_port, ctrl_state).await
+            {
+                error!(target: "control", "Control API error: {e}");
+            }
+        });
+    }
+
+    // ── Startup consolidation ─────────────────────────────────────────────────
+    {
+        let needs = {
+            let s = llm_session.lock().unwrap();
+            s.needs_consolidation(config.llm_context_tokens, config.llm_idle_min_context_pct)
+        };
+        if needs {
+            info!(target: "memory", "Startup: context exceeds idle threshold — running silent consolidation before greeting");
+            run_consolidation_cycle(
+                background_client.as_ref(),
+                &db,
+                session_id,
+                &llm_session,
+                &prompt_build_state,
+                config.llm_summary_keep_turns,
+                &config.llm_system_prompt,
+                config.primary_wake_word(),
+                &agent_section,
+                &tool_section,
+                &proactive_tx,
+                &l1_saturation_notified,
+            )
+            .await;
+        }
+    }
+
+    // ── Startup greeting / first-time introduction ─────────────────────────────
+    // If audio capture is active, send the full greeting (first_launch or startup
+    // with time/date). Otherwise send a brief notification that the system started;
+    // the device monitor will send the full greeting when a device connects later.
+    if capture_stream.is_some() {
+        let first = is_first_launch;
+        let key = if first { "first_launch" } else { "startup" };
+        let notification = seneschal_common::i18n::get_notification(key, &config.language);
+        let notification = if first {
+            notification.to_string()
+        } else {
+            let now = chrono::Local::now();
+            let time_str = now.format("%H:%M").to_string();
+            let date_str = now.format("%d/%m/%Y").to_string();
+            notification
+                .replace("{time_str}", &time_str)
+                .replace("{date_str}", &date_str)
+        };
+        transcript_tx
+            .send(PipelineFrame::SystemNotification { text: notification })
+            .await
+            .ok();
+    } else {
+        let msg = seneschal_common::i18n::get_notification("no_device_startup", &config.language);
+        transcript_tx
+            .send(PipelineFrame::SystemNotification {
+                text: msg.to_string(),
+            })
+            .await
+            .ok();
+    }
+
+    // Greet at most once per session: when capture is running at startup the
+    // full greeting was already sent above; otherwise the device monitor will
+    // start capture later and only then (once) send the full greeting.
+    let mut startup_greeted = capture_stream.is_some();
+
+    // ── Device monitor ─────────────────────────────────────────────────────────
+    // Polls for the configured input device (or default if none specified);
+    // sends a DeviceConnected event when the device transitions from unavailable →
+    // available (e.g. Bluetooth headset reconnect). The main loop then starts
+    // capture, swaps the output device, and sends the startup greeting.
+    if config.device_monitor_enabled {
+        seneschal_extras::device_monitor::spawn(
+            config.audio_input_device.clone(),
+            Arc::clone(&capture_active),
+            proactive_tx.clone(),
+            config.device_monitor_poll_secs,
+            shutdown.clone(),
+        );
+    }
+
+    // Plugin runtime state — tracks active plugin resources for cleanup on switch
+    let mut plugin_runtime_active_id: Option<String> = config.active_plugin.clone();
+    let mut plugin_runtime_spawned_mcp: Option<SpawnedMcpServers> = None;
+
+    let mut proactive_rx = proactive_rx;
+    tokio::select! {
+            _ = async {
+                loop {
+                    // Inject pending agent results when AnnouncementWindow allows it.
+                    let maybe_announcement = announcement_window.lock().unwrap().pop_announcement();
+                    if let Some(announcement) = maybe_announcement {
+                        // issue #221: the announcement previously injected the FULL
+                        // rewritten task into the LLM history (a third copy — the
+                        // tool-call args and this one already carry it). Keep the
+                        // announcement to a short task label (≤80 chars) + the
+                        // result, which is enough for the model to announce it
+                        // naturally without dragging the whole task around.
+                        let task_short =
+                            seneschal_core::pipeline::truncate_chars(&announcement.task, 80);
+                        let notification = seneschal_common::i18n::get_notification("background_task_done", &config.language)
+                            .replace("{task}", &task_short)
+                            .replace("{result}", &announcement.result);
+                        transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                    }
+
+                    let chunk: AudioChunk = tokio::select! {
+                        result = rx.recv() => match result {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!(target: "audio", "Audio channel closed: {}", e);
+                                #[cfg(feature = "tui")]
+                                tui_tx.send(seneschal_tui::events::TuiEvent::Error(format!("Audio channel closed: {e}"))).ok();
+                                break;
+                            }
+                        },
+                        Some(event) = proactive_rx.recv() => {
+                            match event {
+    ProactiveEvent::AgentResult {
+                                    task,
+                                    result,
+                                    tool_call_id,
+                                    correlation_id,
+                                } => {
+                                    // Stop background processing sound
+                                    filler_controller.stop();
+
+                                    // Only real results (no tool_call_id) are shown as agent-task
+                                    // completion/failed. The `bg_` placeholder from a background
+                                    // tool call arrives as its own event, and the gray Tool row
+                                    // already shows the delegation ack.
+                                    let is_real = tool_call_id.is_none();
+                                    if is_real {
+                                        let task_key = if correlation_id.is_empty() {
+                                            task.clone()
+                                        } else {
+                                            correlation_id.clone()
+                                        };
+                                        const ERROR_PREFIXES: &[&str] = &[
+                                            "ACP error:",
+                                            "ACP spawn error:",
+                                            "ACP init error:",
+                                            "ACP send error:",
+                                            "Agent error:",
+                                            "Deep worker error:",
+                                            "Deep worker timeout",
+                                            "Hermes",
+                                            "Visible session error:",
+                                            "Visible agent send error:",
+                                            "OpenCode session error:",
+                                        ];
+                                        let is_error = ERROR_PREFIXES
+                                            .iter()
+                                            .any(|p| result.starts_with(p));
+                                        #[cfg(feature = "tui")]
+                                        {
+                                            if is_error {
+                                                tui_tx
+                                                    .send(seneschal_tui::events::TuiEvent::AgentTaskFailed {
+                                                        task_id: task_key.clone(),
+                                                        message: result.clone(),
+                                                    })
+                                                    .ok();
+                                            } else {
+                                                tui_tx
+                                                    .send(
+                                                        seneschal_tui::events::TuiEvent::AgentTaskCompleted {
+                                                            task_id: task_key.clone(),
+                                                            objective: task.clone(),
+                                                            result: result.clone(),
+                                                        },
+                                                    )
+                                                    .ok();
+                                            }
+                                        }
+                                        #[cfg(feature = "control")]
+                                        {
+                                            use seneschal_control::control::broadcast::ControlEvent;
+                                            const MAX_RESULT: usize = 32 * 1024;
+                                            let wire_result = if result.len() > MAX_RESULT {
+                                                format!(
+                                                    "{}…[truncated]",
+                                                    &result[..MAX_RESULT]
+                                                )
+                                            } else {
+                                                result.clone()
+                                            };
+                                            let ctrl_ev = if is_error {
+                                                ControlEvent::AgentTaskFailed {
+                                                    task_id: task_key,
+                                                    message: wire_result,
+                                                }
+                                            } else {
+                                                ControlEvent::AgentTaskCompleted {
+                                                    task_id: task_key,
+                                                    objective: task.clone(),
+                                                    result: wire_result,
+                                                }
+                                            };
+                                            control_broadcast.send(ctrl_ev);
+                                        }
+                                    }
+
+                                    if let Some(id) = tool_call_id {
+                                        // Background tools (id starts with "bg_"): do NOT persist
+                                        // the placeholder tool result to session/DB, and do NOT
+                                        // send a PipelineFrame::AgentResult. The model already
+                                        // emitted an ack text and the pipeline has ended cleanly.
+                                        // The actual agent result will arrive later as a separate
+                                        // ProactiveEvent::AgentResult (without tool_call_id) and
+                                        // be delivered as an announcement.
+                                        let is_background = id.starts_with("bg_");
+                                        if !is_background {
+                                            let tool_msg = serde_json::json!({
+                                                "role": "tool",
+                                                "tool_call_id": id,
+                                                "content": result,
+                                            });
+                                            {
+                                                let mut s = llm_session.lock().unwrap();
+                                                s.add_tool_exchange(vec![tool_msg.clone()]);
+                                            }
+                                            {
+                                                let db_c = db.clone();
+                                                let exchange = vec![tool_msg];
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = db_c.save_tool_exchanges(session_id, &exchange).await {
+                                                        warn!(target: "db", "Failed to save tool_result exchange: {}", e);
+                                                    }
+                                                });
+                                            }
+                                            // Channel buffers this if llm_task is busy; it will pick it up when idle.
+                                            transcript_tx.send(PipelineFrame::AgentResult {
+                                                task,
+                                                result,
+                                                tool_call_id: Some(id),
+                                            }).await.ok();
+                                        }
+                                    } else {
+                                        announcement_window.lock().unwrap().queue_announcement(task, result);
+                                    }
+                                }
+                                ProactiveEvent::InferenceDaemon { .. } => {}
+                                ProactiveEvent::L1Saturated { total_chars, threshold } => {
+                                    let prompt = seneschal_common::i18n::get_notification("l1_saturated", &config.language)
+                                        .replace("{total_chars}", &total_chars.to_string())
+                                        .replace("{threshold}", &threshold.to_string());
+                                    transcript_tx.send(PipelineFrame::SystemNotification { text: prompt }).await.ok();
+                                }
+                                ProactiveEvent::AgentQuestion { task_id, agent_name, question, options, response_tx } => {
+                                    // ── Mode "full" (issue #167) ────────────────────────
+                                    // Auto-approve without enqueuing or speaking. Mirrors
+                                    // qwen-audio-agent's `permissionMode === 'full'` and the
+                                    // `acp_agent_chat` test binary's `PermissionMode::Auto`.
+                                    if config.permission_mode == "full" {
+                                        let option_id = find_allow_option_id(&options)
+                                            .unwrap_or_else(|| "cancelled".to_string());
+                                        info!(
+                                            target: "acp",
+                                            "Auto-allowing permission (full mode) task={task_id} agent={agent_name} → {option_id}",
+                                        );
+                                        let _ = response_tx.send(option_id.clone());
+                                        #[cfg(feature = "control")]
+                                        control_broadcast.send(
+                                            seneschal_control::control::broadcast::ControlEvent::AgentPermissionResolved {
+                                                task_id: task_id.clone(),
+                                                option_id,
+                                            },
+                                        );
+                                        continue;
+                                    }
+
+                                    #[cfg(feature = "tui")]
+                                    {
+                                        let display_opts: Vec<String> = options
+                                            .iter()
+                                            .map(|o| o.display_label())
+                                            .collect();
+                                        tui_tx
+                                            .send(
+                                                seneschal_tui::events::TuiEvent::AgentTaskPermissionRequested {
+                                                    task_id: task_id.clone(),
+                                                    agent_name: agent_name.clone(),
+                                                    description: question.clone(),
+                                                    options: display_opts,
+                                                },
+                                            )
+                                            .ok();
+                                    }
+                                    #[cfg(feature = "control")]
+                                    control_broadcast.send(
+                                        seneschal_control::control::broadcast::ControlEvent::AgentPermissionRequested {
+                                            task_id: task_id.clone(),
+                                            agent_name: agent_name.clone(),
+                                            description: question.clone(),
+                                            options: options.clone(),
+                                        },
+                                    );
+
+                                    if pipeline_state_rx.borrow().is_busy() {
+                                        events.barge_in_tx.send(0).ok();
+                                        announcement_window.lock().unwrap().interrupt();
+                                    }
+                                    let opts_str = options
+                                        .iter()
+                                        .map(|o| o.display_label())
+                                        .collect::<Vec<_>>()
+                                        .join(" / ");
+                                    let prompt_template = seneschal_common::i18n::get_notification(
+                                        "acp_permission",
+                                        &config.language,
+                                    );
+                                    let spoken_prompt = prompt_template
+                                        .replace("{question}", &question)
+                                        .replace("{opts_str}", &opts_str);
+
+                                    // Mint the permission id (also used as scope) and enqueue.
+                                    let authorization_id = permission_gate.enqueue(
+                                        task_id,
+                                        agent_name,
+                                        question.clone(),
+                                        options,
+                                        response_tx,
+                                    );
+
+                                    // Compose the LLM-visible notification: the natural
+                                    // spoken prompt PLUS the `<backend_permission_request>`
+                                    // block with the authorization_id so the LLM can call
+                                    // `respond_agent_permission` after hearing the user.
+                                    // The model sees the id but won't read it aloud (it
+                                    // generates its own natural question from `spoken_prompt`).
+                                    let llm_prompt = format!(
+                                        "{spoken_prompt}\n\n\
+                                         <backend_permission_request>\n\
+                                         authorization_id={authorization_id}\n\
+                                         operation={question}\n\
+                                         </backend_permission_request>\n\n\
+                                         Cuando el usuario responda en esta vuelta, llama a\n\
+                                         la herramienta `respond_agent_permission` con ese\n\
+                                         `authorization_id` y la `decision` que corresponda\n\
+                                         (`always` si consintió, `reject` si rechazó)."
+                                    );
+                                    transcript_tx
+                                        .send(PipelineFrame::SystemNotification { text: llm_prompt })
+                                        .await
+                                        .ok();
+                                }
+                                ProactiveEvent::PluginSwitch { .. } => {
+                                    // No-op: handled via dedicated plugin_switch_rx channel
+                                }
+                                ProactiveEvent::DeviceConnected => {
+                                    // Audio device present and capture idle —
+                                    // (re)start capture, swap output, and greet
+                                    // at most once per session.
+                                    info!(target: "audio", "DeviceConnected received — starting audio pipeline");
+                                    // A dead stream leaves a ZOMBIE handle here:
+                                    // err_fn clears capture_active on stream
+                                    // errors (POLLERR-class ones log only at
+                                    // TRACE), but nothing drops the Stream, so the
+                                    // old `capture_stream.is_none()` guard could
+                                    // never rebuild → permanent deafness. Rebuild
+                                    // whenever capture is not actually running.
+                                    if !capture_active.load(Ordering::SeqCst) {
+                                        // Dropping joins the old audio thread, so
+                                        // its stale err_fn cannot clear the flag
+                                        // after the new stream starts.
+                                        capture_stream = None;
+                                        match AudioCapture::new(config.audio_input_device.as_deref()) {
+                                            Ok(ac) => {
+                                                source_sample_rate = ac.sample_rate();
+                                                speech_buffer = AudioBuffer::new(source_sample_rate, MAX_SPEECH_BUFFER_SECS);
+                                                info!(target: "audio", "Audio input connected: {}Hz", source_sample_rate);
+                                                match ac.start_capture(tx.clone(), samples_per_chunk, Some(Arc::clone(&capture_active))) {
+                                                    Ok(stream) => {
+                                                        capture_active.store(true, Ordering::SeqCst);
+                                                        capture_stream = Some(stream);
+                                                    }
+                                                    Err(e) => {
+                                                        error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
+                                            }
+                                        }
+                                        // Swap output device (spawn_blocking — may wait for in-flight playback)
+                                        let out = Arc::clone(&audio_output);
+                                        let out_name = config.audio_output_device.clone();
+                                        tokio::task::spawn_blocking(move || out.swap_device(out_name.as_deref()))
+                                            .await
+                                            .ok();
+                                    }
+                                    // Send the full greeting exactly once, only once capture is actually running.
+                                    if !startup_greeted && capture_stream.is_some() {
+                                        let key = if is_first_launch { "first_launch" } else { "startup" };
+                                        let notification = seneschal_common::i18n::get_notification(key, &config.language);
+                                        let notification = if is_first_launch {
+                                            notification.to_string()
+                                        } else {
+                                            let now = chrono::Local::now();
+                                            let time_str = now.format("%H:%M").to_string();
+                                            let date_str = now.format("%d/%m/%Y").to_string();
+                                            notification
+                                                .replace("{time_str}", &time_str)
+                                                .replace("{date_str}", &date_str)
+                                        };
+                                        transcript_tx.send(PipelineFrame::SystemNotification { text: notification }).await.ok();
+                                        startup_greeted = true;
+                                    }
+                                }
+                                ProactiveEvent::AgentMilestone { agent_name: _, milestone, .. } => {
+                                    // Heuristic ES/EN substring mapping is known quality debt (design #190).
+                                    let milestone_text = milestone.clone();
+                                    let lower = milestone_text.to_lowercase();
+                                    let kind = if lower.contains("ejecución")
+                                        || lower.contains("running")
+                                        || lower.contains("procesando")
+                                    {
+                                        "running"
+                                    } else if lower.contains("finalizando")
+                                        || lower.contains("organizando")
+                                        || lower.contains("complet")
+                                    {
+                                        "finalizing"
+                                    } else if lower.contains("delegación")
+                                        || lower.contains("delegated")
+                                        || lower.contains("proyecto")
+                                    {
+                                        "delegated"
+                                    } else {
+                                        "running"
+                                    };
+                                    #[cfg(feature = "tui")]
+                                    {
+                                        let tui_ev = match kind {
+                                            "finalizing" => {
+                                                seneschal_tui::events::TuiEvent::AgentTaskFinalizing {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                }
+                                            }
+                                            "delegated" => {
+                                                seneschal_tui::events::TuiEvent::AgentTaskDelegated {
+                                                    task_id: milestone_text.clone(),
+                                                    objective: milestone_text.clone(),
+                                                }
+                                            }
+                                            _ => seneschal_tui::events::TuiEvent::AgentTaskRunning {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                        };
+                                        tui_tx.send(tui_ev).ok();
+                                    }
+                                    #[cfg(feature = "control")]
+                                    {
+                                        use seneschal_control::control::broadcast::ControlEvent;
+                                        let ctrl_ev = match kind {
+                                            "finalizing" => ControlEvent::AgentTaskFinalizing {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                            "delegated" => ControlEvent::AgentTaskDelegated {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                            _ => ControlEvent::AgentTaskRunning {
+                                                task_id: milestone_text.clone(),
+                                                objective: milestone_text.clone(),
+                                            },
+                                        };
+                                        control_broadcast.send(ctrl_ev);
+                                    }
+
+                                    // Speak the milestone text via TTS so the user hears progress.
+                                    if !pipeline_state_rx.borrow().is_busy() {
+                                        transcript_tx
+                                            .send(PipelineFrame::SystemNotification {
+                                                text: milestone,
+                                            })
+                                            .await
+                                            .ok();
+                                    } else {
+                                        debug!(target: "pipeline", "AgentMilestone skipped (pipeline busy): {milestone}");
+                                    }
+                                }
+                                ProactiveEvent::McpNotification { server_name, method, params } => {
+                                    info!(
+                                        target: "mcp",
+                                        "Notification from MCP server '{server_name}': {method} {params}"
+                                    );
+                                    #[cfg(feature = "control")]
+                                    control_broadcast.send(
+                                        seneschal_control::control::broadcast::ControlEvent::McpNotification {
+                                            server_name: server_name.clone(),
+                                            method: method.clone(),
+                                            params: params.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            continue;
+                        },
+                        Some(switch_event) = plugin_switch_rx.recv() => {
+                            // Queue switch event — apply between turns only
+                            pending_plugin_switch = Some(switch_event);
+                            continue;
+                        },
+                    };
+
+                    // Process pending plugin switch when pipeline is idle
+                    if !pipeline_state_rx.borrow().is_busy()
+                        && let Some(switch_event) = pending_plugin_switch.take()
+                    {
+                         match switch_event {
+                            PluginSwitchEvent::Activate { plugin_id } => {
+                                if let Some(activated) = plugin_manager.activate(
+                                    &plugin_id,
+                                    OriginalConfigSnapshot::from_config(&config),
+                                ) {
+                                    // Issue #236: plugin tools live in the worker
+                                    // pool when the deep worker is enabled —
+                                    // unregister/register there.
+                                    let target_reg: Arc<Mutex<ToolRegistry>> = match &deep_worker {
+                                        Some(ctx) => Arc::clone(&ctx.tools),
+                                        None => Arc::clone(&tools),
+                                    };
+                                    // Cleanup previous plugin's tools
+                                    for name in &activated.previous_tool_names {
+                                        target_reg.lock().unwrap().unregister(name);
+                                    }
+                                    for name in &activated.previous_agent_names {
+                                        target_reg.lock().unwrap().unregister(name);
+                                    }
+                                    // Drop previous MCP servers (they die when handle is dropped)
+                                    plugin_runtime_spawned_mcp = None;
+
+                                    // Spawn new MCP servers and register tools
+                                    if !activated.mcp_servers.is_empty() {
+                                        let (clients, proxies, names) =
+                                            SpawnedMcpServers::spawn_clients(&activated.mcp_servers).await;
+                                        let spawned = {
+                                            let mut tools_guard = target_reg.lock().unwrap();
+                                            SpawnedMcpServers::from_parts(
+                                                clients,
+                                                proxies,
+                                                names,
+                                                &mut tools_guard,
+                                            )
+                                        };
+                                        plugin_runtime_spawned_mcp = Some(spawned);
+                                    }
+
+                                    // Rebuild system prompt with new plugin sections
+                                    let p_sections = build_plugin_prompt_section(&[&activated.prompt]);
+                                    if let Some(ctx) = &deep_worker {
+                                        // Voice stays lean; the worker gets the
+                                        // fresh plugin sections (issue #236).
+                                        let mut sections = deep_worker_delegate.agents_section();
+                                        sections.push_str(&build_plugin_prompt_section_text(&p_sections));
+                                        ctx.engine.set_extra_sections(sections);
+                                    }
+                                    let voice_sections = if deep_worker.is_some() {
+                                        PluginPromptSections::default()
+                                    } else {
+                                        p_sections
+                                    };
+                                    // The voice prompt's tool section always
+                                    // reflects the VOICE registry.
+                                    let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                    let new_sys_prompt = build_system_prompt(
+                                        &config.llm_system_prompt,
+                                        config.primary_wake_word(),
+                                        &profile_facts,
+                                        &memories,
+                                        &agent_section,
+                                        &tool_sec,
+                                        &immutable_rules,
+                                        &voice_sections,
+                                    );
+                                    llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+                                    plugin_runtime_active_id = Some(plugin_id);
+
+                                    info!(target: "pipeline", plugin = %activated.id, "Plugin activated between turns");
+                                }
+                            }
+                            PluginSwitchEvent::Deactivate => {
+                                if let Some(deactivated) = plugin_manager.deactivate(
+                                    OriginalConfigSnapshot::from_config(&config),
+                                ) {
+                                    let target_reg: Arc<Mutex<ToolRegistry>> = match &deep_worker {
+                                        Some(ctx) => Arc::clone(&ctx.tools),
+                                        None => Arc::clone(&tools),
+                                    };
+                                    // Unregister plugin tools
+                                    for name in &deactivated.tool_names {
+                                        target_reg.lock().unwrap().unregister(name);
+                                    }
+                                    for name in &deactivated.agent_names {
+                                        target_reg.lock().unwrap().unregister(name);
+                                    }
+                                    // Drop MCP servers
+                                    plugin_runtime_spawned_mcp = None;
+
+                                    // Rebuild system prompt without plugin sections
+                                    let empty_sections = PluginPromptSections::default();
+                                    if let Some(ctx) = &deep_worker {
+                                        ctx.engine
+                                            .set_extra_sections(deep_worker_delegate.agents_section());
+                                    }
+                                    // The voice prompt's tool section always
+                                    // reflects the VOICE registry.
+                                    let tool_sec = tools.lock().unwrap().system_prompt_section();
+                                    let new_sys_prompt = build_system_prompt(
+                                        &config.llm_system_prompt,
+                                        config.primary_wake_word(),
+                                        &profile_facts,
+                                        &memories,
+                                        &agent_section,
+                                        &tool_sec,
+                                        &immutable_rules,
+                                        &empty_sections,
+                                    );
+                                    llm_session.lock().unwrap().set_system_prompt(new_sys_prompt);
+
+                                    info!(target: "pipeline", plugin = %deactivated.id, "Plugin deactivated between turns");
+                                }
+                            }
+                        }
+                    }
+
+                    let mono: Vec<f32> = if chunk.channels > 1 {
+                        chunk.samples
+                            .chunks(chunk.channels as usize)
+                            .map(|f| f.iter().sum::<f32>() / chunk.channels as f32)
+                            .collect()
+                    } else {
+                        chunk.samples
+                    };
+                    let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
+
+                    stt_provider.process_audio(&mono, &stt_tx).await.ok();
+
+                    // Collect pending STT events, then process each one.
+                    // Using a Vec + for loop allows .await inside SpeechEnd handling.
+                    let pending_events: Vec<SpeechEvent> = std::iter::from_fn(|| stt_rx.try_recv().ok()).collect();
+                    for event in pending_events {
+                        match event {
+                            SpeechEvent::SpeechStart => {
+                                t_speech_start = Some(Instant::now());
+                                info!(target: "performance", "[+0ms] SpeechStart");
+                                #[cfg(feature = "tui")]
+                                tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                    seneschal_tui::events::PipelineState::Listening,
+                                )).ok();
+                                *last_speech_at.lock().unwrap() = Instant::now();
+
+                                info!(target: "pipeline", "SpeechStart — firing BARGE_IN");
+                                events.barge_in_tx.send(utterance_epoch.load(Ordering::SeqCst)).ok();
+                                announcement_window.lock().unwrap().set_user_speaking(true);
+                                announcement_window.lock().unwrap().interrupt();
+                                info!(target: "pipeline", "SpeechStart — interrupted pending announcements");
+
+                                let current_commits = turn_commit_counter.load(Ordering::SeqCst);
+                                if current_commits > last_cleared_commit {
+                                    speech_buffer.clear();
+                                    last_cleared_commit = current_commits;
+                                }
+                                speech_buffer_start_offset = speech_buffer.sample_count();
+                                speech_buffer.push(&mono);
+
+                                utterance_epoch.fetch_add(1, Ordering::SeqCst);
+                            }
+                            SpeechEvent::Speech(partial_text) => {
+                                speech_buffer.push(&mono);
+                                debug!(target: "stt", "Partial: {}", partial_text);
+                            }
+                            SpeechEvent::SpeechEnd(quality) => {
+                                speech_buffer.push(&mono);
+
+                                // NoSpeechGate: reject non-speech transcriptions
+                                if no_speech_gate.should_reject(&quality) {
+                                    debug!(target: "nospeechgate", "NoSpeechGate rejected transcription, skipping");
+                                    t_speech_start = None;
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
+                                    )).ok();
+                                    continue;
+                                }
+
+                                let segment_duration_ms = t_speech_start.as_ref()
+                                    .map(|t| t.elapsed().as_millis() as u32)
+                                    .unwrap_or(0);
+
+                                // Wall-clock duration can be tiny on the short-utterance
+                                // path (SpeechStart fires at finalize, Apple returns in
+                                // ~50–200ms). NoSpeechGate already rejected empty/junk;
+                                // accept non-empty gated text even if wall duration is low.
+                                if segment_duration_ms < MIN_SPEECH_DURATION_MS
+                                    && quality.text.trim().is_empty()
+                                {
+                                    debug!(target: "pipeline", "Too short ({}ms), skipping", segment_duration_ms);
+                                    t_speech_start = None;
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
+                                    )).ok();
+                                    continue;
+                                }
+
+                                let current_commits = turn_commit_counter.load(Ordering::SeqCst);
+                                if current_commits > last_cleared_commit {
+                                    last_cleared_commit = current_commits;
+                                }
+                                let audio = speech_buffer.get_samples_from(speech_buffer_start_offset);
+                                let duration_ms = audio.len() as u32 * 1000 / source_sample_rate;
+
+                                info!(target: "pipeline", "Speech: {}ms (segment {}ms)", duration_ms, segment_duration_ms);
+
+                                let mut segment_text = quality.text;
+
+                                #[cfg(feature = "tui")]
+                                tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                    seneschal_tui::events::PipelineState::Transcribing,
+                                )).ok();
+
+                                let vad_elapsed = t_speech_start.take()
+                                    .map(|t| t.elapsed().as_millis()).unwrap_or(0);
+                                info!(target: "performance", "[+{}ms] VAD end ({}ms speech)", vad_elapsed, duration_ms);
+                                *t_vad_end.lock().unwrap() = Some(Instant::now());
+
+                                *last_speech_at.lock().unwrap() = Instant::now();
+
+                                // ── Speaker verification (synchronous, CPU-blocking) ──
+                                // issue #220: the verification is best-effort. A failed
+                                // JoinHandle used to `.unwrap()` — panicking the audio
+                                // loop and killing the whole pipeline (no state events
+                                // ever reach the TUI again). On failure, fall back to the
+                                // default speaker identity so the utterance still flows.
+                                let (is_main_speaker, speaker_label) =
+                                    if let Some(ref analyzer) = identity_analyzer {
+                                        let analyzer = Arc::clone(analyzer);
+                                        let audio_c = audio.clone();
+                                        let sample_rate = config.sample_rate;
+                                        match tokio::task::spawn_blocking(move || {
+                                            let mut a = analyzer.lock().unwrap();
+                                            let result = a.verify(sample_rate, &audio_c);
+                                            (result.is_main_speaker, result.speaker_label)
+                                        })
+                                        .await
+                                        {
+                                            Ok(result) => result,
+                                            Err(e) => {
+                                                warn!(
+                                                    target: "pipeline",
+                                                    "Speaker verification task failed ({e}) — \
+                                                     defaulting to main speaker",
+                                                );
+                                                (true, "Usuario".to_string())
+                                            }
+                                        }
+                                    } else {
+                                        (true, "Usuario".to_string())
+                                    };
+
+                                // ── Mode-change side effects (streak, ambient buffer) ──
+                                if !is_main_speaker {
+                                    let mut streak = non_user_streak.lock().unwrap();
+                                    *streak = streak.saturating_add(1);
+                                    if *streak >= config.speaker_ambient_trigger {
+                                        let mut mode = conv_mode.lock().unwrap();
+                                        if *mode == ConversationMode::Active {
+                                            *mode = ConversationMode::Ambient;
+                                            drop(mode);
+                                            info!(
+                                                target: "pipeline",
+                                                "Ambient mode: {} consecutive non-user voices",
+                                                *streak
+                                            );
+                                        }
+                                    }
+                                    drop(streak);
+                                    // Buffer non-main-speaker transcript regardless of mode.
+                                    ambient_buffer.lock().unwrap()
+                                        .push(speaker_label.clone(), segment_text.clone());
+                                    debug!(
+                                        target: "pipeline",
+                                        "Ambient buffer ← {speaker_label}: {}",
+                                        segment_text
+                                    );
+                                } else {
+                                    *non_user_streak.lock().unwrap() = 0;
+                                }
+
+                                // ── Permission gate (issue #167) ────────────────────────
+                                // Previously this branch re-transcribed the audio and
+                                // mapped keywords (sí/no) to the ACP option. The voice
+                                // path no longer intercepts permissions: the user's
+                                // spoken answer flows through the normal transcript
+                                // pipeline and the frontend LLM resolves the pending
+                                // permission by calling `respond_agent_permission`. The
+                                // gate itself is still drained by `cancel_scope` at the
+                                // end of every ACP prompt and by the HTTP control API.
+
+                                let stt_elapsed_ms = segment_duration_ms as u128;
+                                info!(
+                                    target: "performance",
+                                    "[+{}ms] STT transcription complete (audio={}samples, {}chars)",
+                                    stt_elapsed_ms, audio.len(), segment_text.len()
+                                );
+                                debug!(target: "stt", "Segment final: {}", segment_text);
+
+                                if segment_text.trim().is_empty() {
+                                    debug!(target: "pipeline", "Empty transcription — skipping");
+                                    // issue #220: the TUI was set to Transcribing above;
+                                    // this rejection branch must return it to Idle or the
+                                    // status bar stays stuck on TRANSCRIBING.
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
+                                    )).ok();
+                                    continue;
+                                }
+
+                                // ── Ambient/Active mode gating with wake word ─────────
+                                let mode_snapshot = conv_mode.lock().unwrap().clone();
+                                let is_ambient = matches!(
+                                    mode_snapshot,
+                                    ConversationMode::Ambient | ConversationMode::AmbientLocked
+                                );
+                                // issue #228: WAKE_WORD may hold a comma-separated
+                                // list; any entry triggers a response.
+                                let has_wake_word = config.has_wake_word(&segment_text);
+
+                                if is_ambient {
+                                    if has_wake_word && is_main_speaker {
+                                        // Main user + wake word → respond AND switch to Active
+                                        *conv_mode.lock().unwrap() = ConversationMode::Active;
+                                        info!(target: "pipeline", "Main user wake word — switching to Active");
+                                        // Fall through → respond normally
+                                    } else if has_wake_word {
+                                        // Secondary voice + wake word → respond BUT stay Ambient
+                                        info!(target: "pipeline", "Secondary voice wake word — responding, staying Ambient");
+                                        // Fall through → respond normally (mode unchanged)
+                                    } else {
+                                        // No wake word → buffer (already buffered for
+                                        // non-main above) and skip LLM pipeline.
+                                        if is_main_speaker {
+                                            ambient_buffer.lock().unwrap()
+                                                .push(speaker_label.clone(), segment_text.clone());
+                                            debug!(target: "pipeline", "Ambient: main user without wake word — buffered");
+                                        }
+                                        // issue #220: this `continue` leaves the LLM
+                                        // pipeline cold, so Transcribing is never
+                                        // resolved by llm_task — reset the TUI here.
+                                        #[cfg(feature = "tui")]
+                                        tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                            seneschal_tui::events::PipelineState::Idle,
+                                        )).ok();
+                                        continue;
+                                    }
+                                } else {
+                                    // Active mode
+                                    if !is_main_speaker {
+                                        // Non-main user in Active → discard (already buffered
+                                        // above in the mode-change side effects section).
+                                        // issue #220: same as the Ambient no-wake-word branch
+                                        // — the turn dies here, so return the TUI to Idle.
+                                        #[cfg(feature = "tui")]
+                                        tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                            seneschal_tui::events::PipelineState::Idle,
+                                        )).ok();
+                                        continue;
+                                    }
+                                    // Main user in Active → respond normally (fall through)
+                                }
+
+                                // ── Ambient context injection ──────────────────────────
+                                let mut final_text = segment_text;
+                                final_text = {
+                                    let buf = ambient_buffer.lock().unwrap();
+                                    if seneschal_core::audio::ambient_buffer::has_referential(&final_text) {
+                                        if let Some(ctx) = buf.format_context() {
+                                            format!("{ctx}\n---\n{final_text}")
+                                        } else {
+                                            final_text
+                                        }
+                                    } else {
+                                        final_text
+                                    }
+                                };
+
+                                if final_text.trim().is_empty() {
+                                    debug!(target: "pipeline", "Empty after context injection — skipping");
+                                    // issue #220: last rejection branch before the LLM
+                                    // hand-off — return the TUI to Idle so the bar
+                                    // doesn't stay stuck on TRANSCRIBING.
+                                    #[cfg(feature = "tui")]
+                                    tui_tx.send(seneschal_tui::events::TuiEvent::StateChange(
+                                        seneschal_tui::events::PipelineState::Idle,
+                                    )).ok();
+                                    continue;
+                                }
+
+                                if let Some(t0) = t_vad_end.lock().unwrap().as_ref() {
+                                    info!(
+                                        target: "performance",
+                                        "[+{}ms] STT done → transcript channel",
+                                        t0.elapsed().as_millis()
+                                    );
+                                }
+                                let uid = utterance_epoch.load(Ordering::SeqCst);
+                                announcement_window.lock().unwrap().set_user_speaking(false);
+                                announcement_window.lock().unwrap().begin_turn();
+                                transcript_tx.send(PipelineFrame::TranscriptReady {
+                                    utterance_id: uid,
+                                    text: final_text,
+                                }).await.ok();
+                            }
+                        }
+                    }
+                }
+            } => {}
+            _ = tokio::signal::ctrl_c() => {
+                info!(target: "seneschal", "Shutting down...");
+                events.barge_in_tx.send(0).ok();
+                play_cancel.store(true, Ordering::SeqCst);
+                shutdown.store(true, Ordering::SeqCst);
+            }
+        }
+
+    Ok(())
+}
+
+/// Deep worker wiring context (issue #236). Present only when
+/// `deep_worker_enabled` — every consumer branches on `Option<DeepWorkerCtx>`
+/// so the disabled path stays byte-for-byte identical to the old behavior.
+struct DeepWorkerCtx {
+    engine: Arc<seneschal_worker::DeepWorkerEngine>,
+    /// The worker's own tool pool (MCP, agents, plugins, local tools).
+    tools: Arc<Mutex<ToolRegistry>>,
+    /// The worker's LLM provider (also used for vision when
+    /// `deep_worker_vision_enabled`).
+    provider: Arc<dyn seneschal_core::llm::LlmProvider>,
+}
+
+/// Flatten plugin prompt sections into a text block for the deep worker's
+/// system prompt (issue #236). Replace-mode content is voice-persona
+/// specific and is not forwarded; prepend/append carry task instructions.
+fn build_plugin_prompt_section_text(sections: &PluginPromptSections) -> String {
+    let mut out = String::new();
+    if !sections.prepend.is_empty() {
+        out.push_str(sections.prepend.trim_end());
+        out.push('\n');
+    }
+    if !sections.append.is_empty() {
+        out.push_str(sections.append.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// Runs a single S-DREAM consolidation cycle and exits.
+///
+/// This is the implementation of `cargo run -- --dream`. It constructs the
+/// minimum dependencies needed by the daemon (database, LLM client, proactive
+/// channel, idle tracker), runs one cycle, and returns so the process can
+/// terminate.
+async fn run_dream_mode(config: &Config) -> Result<()> {
+    info!(target: "seneschal", "S-DREAM standalone mode");
+
+    let db = Database::new(&config.db_path).await?;
+
+    let llm_client = seneschal_core::llm::create_provider(config)?;
+
+    let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(32);
+    let last_activity = Arc::new(AtomicU64::new(0));
+
+    let dream_config = SDreamConfig {
+        interval_secs: config.s_dream_interval_secs,
+        on_idle: config.s_dream_on_idle,
+        idle_threshold_secs: config.s_dream_idle_threshold_secs,
+        scheduled_hour: config.s_dream_scheduled_hour,
+        l2_min_messages: config.s_dream_l2_min_messages,
+        jsonl_dir: config.s_dream_jsonl_dir.clone(),
+    };
+
+    SDreamDaemon {
+        config: dream_config,
+        db,
+        client: Some(llm_client),
+        proactive_tx,
+        last_activity,
+    }
+    .run_once()
+    .await?;
+
+    info!(target: "seneschal", "S-DREAM standalone cycle complete; exiting");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use seneschal_core::llm::LlmProvider;
+
+    /// Integration test for summarization using a real LLM server.
+    ///
+    /// Requires a running LLM server (default http://localhost:8000, e.g. mlx-lm or oMLX).
+    /// Run manually:
+    /// ```sh
+    /// cargo test test_summarize_real_llm -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore]
+    async fn test_summarize_real_llm() {
+        let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db_path = db_dir.path().join("test_summarize.db");
+        let db = crate::db::Database::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+        let session_id = db.get_or_create_session().await.unwrap();
+
+        let _ = dotenvy::dotenv();
+        let llm_url =
+            std::env::var("LLM_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
+        let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
+        let llm_client: Arc<dyn LlmProvider> = Arc::new(
+            seneschal_core::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
+                .with_api_key(&llm_api_key),
+        );
+
+        let system_prompt = "You are a helpful assistant.";
+        let mut session = seneschal_core::llm::LlmSession::new(system_prompt);
+
+        let turns = vec![
+            (
+                "What is the capital of France?",
+                "The capital of France is Paris, a city known for the Eiffel Tower and its rich cultural heritage.",
+            ),
+            (
+                "Tell me about the Rust programming language.",
+                "Rust is a systems programming language focused on safety, speed, and concurrency. It was created by Mozilla.",
+            ),
+            (
+                "What is photosynthesis?",
+                "Photosynthesis is the process by which plants convert sunlight, water, and carbon dioxide into glucose and oxygen.",
+            ),
+            (
+                "Who wrote Don Quixote?",
+                "Don Quixote was written by Miguel de Cervantes and published in two parts in 1605 and 1615.",
+            ),
+            (
+                "Explain quantum computing briefly.",
+                "Quantum computing uses quantum bits or qubits that can exist in superposition, enabling parallel computation for certain problems.",
+            ),
+            (
+                "What is the tallest mountain on Earth?",
+                "Mount Everest is the tallest mountain on Earth at 8,849 meters above sea level, located in the Himalayas.",
+            ),
+            (
+                "How does a combustion engine work?",
+                "A combustion engine burns fuel in cylinders, creating expanding gases that push pistons connected to a crankshaft to produce rotary motion.",
+            ),
+            (
+                "What is the speed of light?",
+                "The speed of light in a vacuum is approximately 299,792,458 meters per second, often rounded to 300,000 km/s.",
+            ),
+        ];
+
+        for (user_msg, assistant_msg) in &turns {
+            session.add_user_turn(user_msg);
+            session.add_assistant_turn(assistant_msg);
+            db.save_message(session_id, "User", user_msg).await.unwrap();
+            db.save_message(session_id, "Assistant", assistant_msg)
+                .await
+                .unwrap();
+        }
+
+        let msg_count_before = session.messages.len();
+        let context_tokens: usize = 300;
+        let keep_turns: usize = 2;
+
+        assert!(
+            session.needs_consolidation(context_tokens, 75),
+            "Session should need consolidation with context_tokens={} but doesn't.",
+            context_tokens
+        );
+
+        let prompt = session.build_summary_prompt(keep_turns).unwrap();
+        let summary = llm_client.complete(&prompt).await.unwrap();
+        assert!(!summary.is_empty(), "Summary should not be empty");
+
+        let turns_to_summarize = session.summarizable_turn_count(keep_turns);
+        let through_id = db
+            .get_message_id_at_offset(session_id, 0, turns_to_summarize - 1)
+            .await
+            .unwrap()
+            .unwrap();
+        db.save_summary(session_id, &summary, through_id)
+            .await
+            .unwrap();
+        session.apply_summary(&summary, keep_turns);
+
+        let msg_count_after = session.messages.len();
+        assert!(msg_count_after < msg_count_before);
+        assert_eq!(msg_count_after, keep_turns);
+
+        let all_msgs = session.all_messages_api();
+        let system_content = all_msgs[0]["content"].as_str().unwrap();
+        assert!(system_content.contains("[CONVERSATION SUMMARY]"));
+
+        let (db_summary, db_recent) = db.get_session_context(session_id, 0).await.unwrap();
+        assert!(db_summary.is_some());
+        assert!(!db_recent.is_empty());
+
+        println!("\n✓ summarize integration test passed");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_kv_cache_after_summarize() {
+        let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+
+        let _ = dotenvy::dotenv();
+        let llm_url =
+            std::env::var("LLM_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let llm_model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "local-model".to_string());
+        let llm_api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
+        let llm_client: Arc<dyn LlmProvider> = Arc::new(
+            seneschal_core::llm::OpenAiLlmProvider::new(&llm_url, &llm_model, 400, 0.3)
+                .with_api_key(&llm_api_key),
+        );
+
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db_path = db_dir.path().join("bench_kv.db");
+        let db = crate::db::Database::new(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+        let session_id = db.get_or_create_session().await.unwrap();
+
+        let system_prompt = "You are a helpful assistant. Answer briefly.";
+        let mut session = seneschal_core::llm::LlmSession::new(system_prompt);
+
+        println!("\n✓ kv_cache test setup complete (extend as needed)");
+    }
+}

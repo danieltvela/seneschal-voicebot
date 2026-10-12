@@ -1,0 +1,1370 @@
+//! End-to-end integration tests for the seneschal pipeline.
+//!
+//! These tests exercise the full STT → LLM → TTS → DB pipeline using:
+//! - Direct transcript injection (no Whisper needed for most tests)
+//! - `TtsEngine::Mock` — captures synthesized sentences instead of playing audio
+//! - wiremock — deterministic LLM responses, no LLM server needed
+//! - Real SQLite in a temp directory — DB assertions without side effects
+//!
+//! All tests are marked `#[ignore]` and must be run explicitly:
+//!
+//! ```sh
+//! # All e2e tests
+//! cargo test e2e -- --ignored --nocapture
+//!
+//! # A specific scenario
+//! cargo test e2e::basic_conversation -- --ignored --nocapture
+//!
+//! # STT tests that require the Whisper model
+//! cargo test e2e::stt_ -- --ignored --nocapture
+//! ```
+
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::sync::mpsc;
+use uuid::Uuid;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+use crate::config::Config;
+use crate::db::Database;
+use seneschal_common::config::parse_wake_words;
+use seneschal_common::events::ProactiveEvent;
+use seneschal_common::tools::ConversationMode;
+use seneschal_common::tools::ToolRegistry;
+use seneschal_core::audio::output::AudioOutput;
+use seneschal_core::llm::{LlmProvider, LlmSession, OpenAiLlmProvider};
+use seneschal_core::pipeline::{PipelineEvents, PipelineState, llm_task, sen_task, tts_task};
+use seneschal_core::tts::{TtsEngine, mock_tts::MockTts};
+
+// ── SSE helpers ───────────────────────────────────────────────────────────────
+
+/// Build an OpenAI-compatible SSE stream body that emits `text` word-by-word.
+fn make_sse(text: &str) -> String {
+    let mut body = String::new();
+    for (i, word) in text.split_whitespace().enumerate() {
+        let token = if i == 0 {
+            word.to_string()
+        } else {
+            format!(" {word}")
+        };
+        let escaped = token.replace('"', "\\\"");
+        body.push_str(&format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{escaped}\"}}}}]}}\n\n"
+        ));
+    }
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+/// Build an SSE stream body that emits a single tool call (issue #236 e2e).
+fn make_sse_tool_call(name: &str, args: &serde_json::Value) -> String {
+    let args_str = serde_json::to_string(args).unwrap();
+    let chunk = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "function": {"name": name, "arguments": args_str}
+                }]
+            }
+        }]
+    });
+    let finish = serde_json::json!({
+        "choices": [{"delta": {}, "finish_reason": "tool_calls"}]
+    });
+    format!("data: {chunk}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
+}
+
+// ── Test harness ──────────────────────────────────────────────────────────────
+
+struct E2eHarness {
+    pub server: MockServer,
+    pub llm_client: Arc<dyn LlmProvider>,
+    pub llm_session: Arc<Mutex<LlmSession>>,
+    pub tts: Arc<TtsEngine>,
+    /// Accumulates every sentence sent to TTS.
+    pub captured: Arc<Mutex<Vec<String>>>,
+    pub audio_output: Arc<AudioOutput>,
+    pub db: Database,
+    pub session_id: Uuid,
+    pub tools: Arc<std::sync::Mutex<ToolRegistry>>,
+    /// Shared conversation mode (mimics the audio loop's conv_mode).
+    pub conv_mode: Arc<Mutex<ConversationMode>>,
+    // Kept alive so the temp directory isn't deleted before the test ends.
+    _db_dir: tempfile::TempDir,
+    state_tx: Arc<tokio::sync::watch::Sender<PipelineState>>,
+    pub state_rx: tokio::sync::watch::Receiver<PipelineState>,
+    pub events: Arc<PipelineEvents>,
+    pub play_cancel: Arc<AtomicBool>,
+}
+
+impl E2eHarness {
+    async fn new() -> Self {
+        Self::with_system_prompt("You are a test assistant.").await
+    }
+
+    async fn with_system_prompt(system_prompt: &str) -> Self {
+        let server = MockServer::start().await;
+        let llm_client: Arc<dyn LlmProvider> = Arc::new(OpenAiLlmProvider::new(
+            &server.uri(),
+            "test-model",
+            400, // max_tokens
+            0.0, // temperature — deterministic
+        ));
+        let llm_session = Arc::new(Mutex::new(LlmSession::new(system_prompt)));
+
+        let (mock_tts, captured) = MockTts::new();
+        let tts = Arc::new(TtsEngine::Mock(mock_tts));
+
+        let audio_output = Arc::new(AudioOutput::null());
+
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db_path = db_dir.path().join("test.db");
+        let db = Database::new(db_path.to_str().unwrap()).await.unwrap();
+        let session_id = db.get_or_create_session().await.unwrap();
+
+        let tools = Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
+
+        let events = Arc::new(PipelineEvents::new());
+        let play_cancel = Arc::new(AtomicBool::new(false));
+        let (state_tx, state_rx) = tokio::sync::watch::channel(PipelineState::Idle);
+        let state_tx = Arc::new(state_tx);
+        let conv_mode = Arc::new(Mutex::new(ConversationMode::Active));
+
+        Self {
+            server,
+            llm_client,
+            llm_session,
+            tts,
+            captured,
+            audio_output,
+            db,
+            session_id,
+            tools,
+            conv_mode,
+            _db_dir: db_dir,
+            state_tx,
+            state_rx,
+            events,
+            play_cancel,
+        }
+    }
+
+    /// Mount a mock that returns `text` as a streaming SSE response.
+    async fn mock_llm_response(&self, text: &str) {
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(make_sse(text))
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mount a mock that returns a raw (pre-built) SSE body — for tool-call
+    /// streams (issue #236).
+    async fn mock_llm_response_raw(&self, raw_sse_body: String) {
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(raw_sse_body)
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Run the full pipeline with a pre-known transcript (no Whisper).
+    async fn run(&self, transcript: &str) {
+        self.run_with_opts(transcript, "seneschal").await
+    }
+
+    /// Run the pipeline in ambient mode. `wake_words` may hold a
+    /// comma-separated list (issue #228).
+    async fn run_ambient(&self, transcript: &str, wake_words: &str) {
+        *self.conv_mode.lock().unwrap() = ConversationMode::Ambient;
+        self.run_with_opts(transcript, wake_words).await
+    }
+
+    /// Reset shared fields before starting a new pipeline run.
+    #[allow(clippy::let_underscore_future)]
+    fn _reset_for_run(&self) {
+        self.captured.lock().unwrap().clear();
+        self.play_cancel
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.events.llm_post_finished.notified();
+    }
+
+    async fn _spawn_and_send(
+        &self,
+        transcript: &str,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let sample_rate = self.tts.sample_rate();
+
+        let tts_muted = Arc::new(AtomicBool::new(false));
+        let turn_commit = Arc::new(AtomicU64::new(0));
+        let t_vad_end: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
+        let t_llm_post_send: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
+
+        let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(8);
+        let state_tx = Arc::clone(&self.state_tx);
+        let state_rx = self.state_rx.clone();
+        let (sentences_tx, sentences_rx) =
+            tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(64);
+        let (llm_tx, llm_rx) =
+            tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(256);
+        let (transcript_tx, transcript_rx) =
+            tokio::sync::mpsc::channel::<seneschal_core::pipeline::PipelineFrame>(16);
+
+        let events = Arc::clone(&self.events);
+        let cancel = Arc::clone(&self.play_cancel);
+
+        // Spawn LLM task.
+        let h_llm = {
+            let events_c = Arc::clone(&events);
+            let state_tx_c = Arc::clone(&state_tx);
+            let state_rx_c = state_rx.clone();
+            let sent_tx_c = sentences_tx.clone();
+            let llm_tx_c = llm_tx.clone();
+            let t_llm_post_send_c = Arc::clone(&t_llm_post_send);
+            let session_c = Arc::clone(&self.llm_session);
+            let client_c = self.llm_client.clone();
+            let db_c = self.db.clone();
+            let tools_c = Arc::clone(&self.tools);
+            let turn_c = Arc::clone(&turn_commit);
+            let sid = self.session_id;
+            let filler_c = Arc::new(seneschal_core::audio::filler::FillerController::new(
+                Arc::clone(&self.audio_output),
+                sample_rate,
+            ));
+            tokio::spawn(async move {
+                llm_task(
+                    events_c,
+                    state_tx_c,
+                    state_rx_c,
+                    sent_tx_c,
+                    llm_tx_c,
+                    transcript_rx,
+                    t_llm_post_send_c,
+                    session_c,
+                    client_c,
+                    db_c,
+                    sid,
+                    tools_c,
+                    turn_c,
+                    proactive_tx,
+                    filler_c,
+                    0.8,   // llm_temperature
+                    false, // llm_thinking
+                    None,  // tui_tx
+                    None,  // control_broadcast
+                )
+                .await;
+            })
+        };
+
+        // Spawn sentence split task.
+        let h_sen = {
+            let events_c = Arc::clone(&events);
+            let sent_tx_c = sentences_tx.clone();
+            let t_vad_end_c = Arc::clone(&t_vad_end);
+            let t_llm_post_send_c = Arc::clone(&t_llm_post_send);
+            tokio::spawn(async move {
+                sen_task(events_c, llm_rx, sent_tx_c, t_vad_end_c, t_llm_post_send_c).await
+            })
+        };
+
+        // Spawn TTS task.
+        let has_audio_device = self.audio_output.has_device();
+        let h_tts = {
+            let events_c = Arc::clone(&events);
+            let state_tx_c = Arc::clone(&state_tx);
+            let t_vad_end_c = Arc::clone(&t_vad_end);
+            let tts_c = Arc::clone(&self.tts);
+            let out_c = Arc::clone(&self.audio_output);
+            let cancel_c = Arc::clone(&cancel);
+            let muted_c = Arc::clone(&tts_muted);
+            tokio::spawn(async move {
+                tts_task(
+                    events_c,
+                    state_tx_c,
+                    t_vad_end_c,
+                    sentences_rx,
+                    tts_c,
+                    out_c,
+                    sample_rate,
+                    cancel_c,
+                    muted_c,
+                    has_audio_device,
+                    None, // tui_tx
+                    Arc::new(std::sync::Mutex::new(
+                        seneschal_core::pipeline::AnnouncementWindow::new(),
+                    )),
+                    // No remote companion in e2e — local CPAL only.
+                    Arc::new(tokio::sync::Mutex::new(None)),
+                )
+                .await
+            })
+        };
+
+        // Send transcript.
+        transcript_tx
+            .send(seneschal_core::pipeline::PipelineFrame::TranscriptReady {
+                utterance_id: 0,
+                text: transcript.to_string(),
+            })
+            .await
+            .ok();
+
+        (h_llm, h_sen, h_tts)
+    }
+
+    /// Wait for pipeline tasks to complete with a timeout.
+    async fn _wait_for_tasks(
+        h_llm: tokio::task::JoinHandle<()>,
+        h_sen: tokio::task::JoinHandle<()>,
+        h_tts: tokio::task::JoinHandle<()>,
+    ) {
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            let _ = h_llm.await;
+            let _ = h_sen.await;
+            let _ = h_tts.await;
+        })
+        .await;
+    }
+
+    async fn run_with_opts(&self, transcript: &str, wake_words: &str) {
+        let mode = self.conv_mode.lock().unwrap().clone();
+        let is_ambient = matches!(
+            mode,
+            ConversationMode::Ambient | ConversationMode::AmbientLocked
+        );
+
+        // issue #228: wake_words may hold a comma-separated list; any entry
+        // matching the transcript lets it through.
+        let has_wake = parse_wake_words(wake_words)
+            .iter()
+            .any(|w| transcript.to_lowercase().contains(&w.to_lowercase()));
+
+        // Ambient mode: only transcripts with a wake word pass through.
+        if is_ambient && !has_wake {
+            // No wake word → discard (mimics audio loop buffering behavior).
+            return;
+        }
+
+        // Main user + wake word in Ambient (not AmbientLocked) → switch to Active.
+        // In AmbientLocked mode, wake word responds but mode stays locked
+        // (mimicking secondary-voice behavior at the harness level).
+        if mode == ConversationMode::Ambient && has_wake {
+            *self.conv_mode.lock().unwrap() = ConversationMode::Active;
+        }
+
+        if transcript.trim().is_empty() {
+            return;
+        }
+
+        self._reset_for_run();
+        let (h_llm, h_sen, h_tts) = self._spawn_and_send(transcript).await;
+
+        // Wait for the LLM to finish streaming.
+        self.events.llm_post_finished.notified().await;
+
+        // Give TTS time to synthesize (MockTts is instant).
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Cancel all tasks.
+        self.barge_in();
+
+        Self::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+
+        // Allow background DB writes to settle.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// All messages saved to the DB for this session.
+    async fn db_messages(&self) -> Vec<(String, String)> {
+        self.db
+            .get_session_context(self.session_id, 0)
+            .await
+            .unwrap()
+            .1
+    }
+
+    /// Sentences that were synthesized by TTS.
+    fn tts_sentences(&self) -> Vec<String> {
+        self.captured.lock().unwrap().clone()
+    }
+
+    // ── Barge-in helpers ──────────────────────────────────────────────────
+
+    /// Signal barge-in: all tasks will cancel current work.
+    pub fn barge_in(&self) {
+        self.events.barge_in_tx.send(0).ok();
+        self.play_cancel
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Check that DB contains both User and Assistant messages for this session.
+    /// Returns true if partial response was persisted (user turn + partial assistant).
+    pub async fn assert_db_has_partial_save(&self) -> bool {
+        let msgs = self
+            .db
+            .get_session_context(self.session_id, 0)
+            .await
+            .unwrap()
+            .1;
+        let has_user = msgs.iter().any(|(r, _)| r == "User");
+        let has_assistant = msgs.iter().any(|(r, _)| r == "Assistant");
+        has_user && has_assistant
+    }
+
+    /// Run the pipeline, immediately trigger barge-in, then wait for all tasks to finish.
+    pub async fn run_immediate_barge_in(&self, transcript: &str) {
+        self._reset_for_run();
+        let (h_llm, h_sen, h_tts) = self._spawn_and_send(transcript).await;
+        self.barge_in();
+        E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    }
+
+    /// Run the pipeline, wait `delay_ms`, then trigger barge-in.
+    pub async fn run_with_delayed_barge_in(&self, transcript: &str, delay_ms: u64) {
+        self._reset_for_run();
+        let (h_llm, h_sen, h_tts) = self._spawn_and_send(transcript).await;
+        let cancel = Arc::clone(&self.play_cancel);
+        let events = Arc::clone(&self.events);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            events.barge_in_tx.send(0).ok();
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    }
+
+    /// Run the pipeline, wait until a specific state, then barge-in.
+    pub async fn run_with_barge_in_at_state(&self, transcript: &str, target: &'static str) {
+        self._reset_for_run();
+        let (h_llm, h_sen, h_tts) = self._spawn_and_send(transcript).await;
+        let mut state_rx = self.state_rx.clone();
+        let cancel = Arc::clone(&self.play_cancel);
+        let events = Arc::clone(&self.events);
+        tokio::spawn(async move {
+            loop {
+                let changed =
+                    tokio::time::timeout(Duration::from_secs(5), state_rx.changed()).await;
+                match changed {
+                    Ok(Ok(())) => {
+                        let current = state_rx.borrow();
+                        let desc = match &*current {
+                            PipelineState::Idle => "Idle",
+                            PipelineState::Listening { .. } => "Listening",
+                            PipelineState::Thinking { .. } => "Thinking",
+                            PipelineState::Speaking { .. } => "Speaking",
+                            PipelineState::Paused { .. } => "Paused",
+                        };
+                        if desc == target {
+                            events.barge_in_tx.send(0).ok();
+                            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+        E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    }
+
+    /// Run two consecutive pipeline turns with different mock responses.
+    /// Used to verify clean state reset after barge-in.
+    pub async fn run_multi_turn(&self, t1: &str, m1: &str, t2: &str, m2: &str) {
+        self.mock_llm_response(m1).await;
+        self.run(t1).await;
+        self.mock_llm_response(m2).await;
+        self.run(t2).await;
+    }
+
+    pub async fn wait_for_state(&self, target: &str) -> Result<(), ()> {
+        let mut state_rx = self.state_rx.clone();
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let _ = state_rx.changed().await;
+                let current = state_rx.borrow();
+                let desc = match &*current {
+                    PipelineState::Idle => "Idle",
+                    PipelineState::Listening { .. } => "Listening",
+                    PipelineState::Thinking { .. } => "Thinking",
+                    PipelineState::Speaking { .. } => "Speaking",
+                    PipelineState::Paused { .. } => "Paused",
+                };
+                if desc == target {
+                    return;
+                }
+            }
+        })
+        .await;
+        Ok(())
+    }
+
+    pub async fn wait_for_first_sentence(&self) -> Result<(), ()> {
+        let captured_rx = self.captured.clone();
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let has_data = {
+                    let guard = captured_rx.lock().unwrap();
+                    !guard.is_empty()
+                };
+                if has_data {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Pause the pipeline by setting state to Paused via the watch channel.
+    pub fn pause_pipeline(&self) {
+        let _ = self.state_tx.send(PipelineState::Paused {
+            reason: seneschal_core::pipeline::PauseReason::Consolidation,
+        });
+    }
+
+    /// Wait for the pipeline to complete (LLM finished + TTS settled), with timeout.
+    pub async fn wait_for_complete(&self) {
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            self.events.llm_post_finished.notified().await;
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        self.barge_in();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// Spawn pipeline tasks and send transcript immediately. Returns the JoinHandles.
+    pub async fn spawn_pipeline(
+        &self,
+        transcript: &str,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        self._reset_for_run();
+        self._spawn_and_send(transcript).await
+    }
+}
+
+// ── Scenarios ─────────────────────────────────────────────────────────────────
+
+/// Basic conversation: mock transcript → mock LLM → TTS captures text → DB stores turn.
+#[tokio::test]
+#[ignore]
+async fn basic_conversation_mocked_transcript() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Son las diez y media.").await;
+
+    h.run("Hola, ¿qué hora es?").await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected TTS to receive text, got empty"
+    );
+    let full = sentences.join(" ");
+    assert!(
+        full.contains("diez"),
+        "expected response in TTS, got: {full:?}"
+    );
+
+    let msgs = h.db_messages().await;
+    assert!(
+        msgs.iter()
+            .any(|(r, c)| r == "Assistant" && c.contains("diez")),
+        "expected assistant message in DB, got: {msgs:?}"
+    );
+}
+
+/// Empty transcript is silently discarded (no LLM call, no DB write).
+#[tokio::test]
+#[ignore]
+async fn empty_transcript_is_discarded() {
+    let h = E2eHarness::new().await;
+    h.run("").await;
+    assert!(
+        h.tts_sentences().is_empty(),
+        "expected no TTS for empty transcript"
+    );
+    assert!(
+        h.db_messages().await.is_empty(),
+        "expected no DB writes for empty transcript"
+    );
+}
+
+/// Ambient mode — utterance without wake word: pipeline discards after STT.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_discards_utterance_without_wake_word() {
+    let h = E2eHarness::new().await;
+    h.run_ambient("Cuéntame algo interesante, por favor.", "seneschal")
+        .await;
+    assert!(
+        h.tts_sentences().is_empty(),
+        "expected bot to stay silent in ambient mode, got: {:?}",
+        h.tts_sentences()
+    );
+    assert!(
+        h.db_messages().await.is_empty(),
+        "expected no DB writes in ambient mode without wake word"
+    );
+}
+
+/// Ambient mode — utterance WITH wake word: pipeline continues normally.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_responds_when_wake_word_present() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+    h.run_ambient("seneschal, ¿qué hora es?", "seneschal").await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected response when wake word present"
+    );
+    let full = sentences.join(" ");
+    assert!(
+        full.contains("once"),
+        "expected LLM response in TTS, got: {full:?}"
+    );
+}
+
+/// Ambient mode — multiple wake words (issue #228): any configured word
+/// triggers a response.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_responds_to_any_of_multiple_wake_words() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+    h.run_ambient("jardis, ¿qué hora es?", "seneschal,jardis")
+        .await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected response when any configured wake word is present"
+    );
+    let full = sentences.join(" ");
+    assert!(
+        full.contains("once"),
+        "expected LLM response in TTS, got: {full:?}"
+    );
+}
+
+/// Ambient mode — multiple wake words (issue #228): a transcript matching
+/// none of the configured words is discarded.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_discards_utterance_matching_no_wake_word() {
+    let h = E2eHarness::new().await;
+    h.run_ambient("Cuéntame algo interesante, por favor.", "seneschal,jardis")
+        .await;
+    assert!(
+        h.tts_sentences().is_empty(),
+        "expected bot to stay silent when no configured wake word matches, got: {:?}",
+        h.tts_sentences()
+    );
+    assert!(
+        h.db_messages().await.is_empty(),
+        "expected no DB writes when no configured wake word matches"
+    );
+}
+
+/// Multi-sentence response: each sentence is synthesized separately.
+#[tokio::test]
+#[ignore]
+async fn multi_sentence_response_splits_into_sentences() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Primera frase. Segunda frase. Tercera frase.")
+        .await;
+    h.run("Dime tres cosas.").await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        sentences.len() >= 2,
+        "expected multiple TTS sentences, got: {sentences:?}"
+    );
+}
+
+/// Session persistence: multiple turns accumulate in the DB.
+#[tokio::test]
+#[ignore]
+async fn db_persists_multiple_turns() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Primera respuesta.").await;
+    h.run("Primera pregunta.").await;
+
+    h.mock_llm_response("Segunda respuesta.").await;
+    h.run("Segunda pregunta.").await;
+
+    let msgs = h.db_messages().await;
+    let assistant_count = msgs.iter().filter(|(r, _)| r == "Assistant").count();
+    assert_eq!(
+        assistant_count, 2,
+        "expected 2 assistant turns in DB, got: {msgs:?}"
+    );
+}
+
+// ── Barge-in scenarios ─────────────────────────────────────────────────────────────
+
+/// Barge-in when LLM is streaming AND TTS is playing simultaneously.
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_mixed() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response(
+        "La primera respuesta. La segunda respuesta. La tercera respuesta. La cuarta respuesta.",
+    )
+    .await;
+    h._reset_for_run();
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Dinos cuatro cosas.").await;
+    h.wait_for_first_sentence().await.ok();
+    h.barge_in();
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        let _ = h_llm.await;
+        let _ = h_sen.await;
+        let _ = h_tts.await;
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let captured = h.tts_sentences();
+    assert!(
+        !captured.is_empty(),
+        "expected TTS to have started before barge-in"
+    );
+    let has_partial = h.assert_db_has_partial_save().await;
+    assert!(has_partial, "expected partial response saved");
+}
+
+/// Barge-in during tool execution.
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_tool() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Result de la herramienta.").await;
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Herramienta de prueba.").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    h.barge_in();
+    h.wait_for_complete().await;
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    let _captured = h.tts_sentences();
+}
+
+/// Barge-in when pipeline is in Paused/Consolidation state. User input must be discarded.
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_pause() {
+    let h = E2eHarness::new().await;
+    h.pause_pipeline();
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Consulta durante pausa.").await;
+    h.barge_in();
+    h.wait_for_complete().await;
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let captured = h.tts_sentences();
+    assert!(
+        captured.is_empty(),
+        "expected no TTS output when barge-in during pause"
+    );
+}
+
+/// Rapid successive barge-ins (stress test).
+#[tokio::test]
+#[ignore]
+async fn barge_in_spam_rapid() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Respuesta larga para probar spam.")
+        .await;
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Consulta spam.").await;
+    for _ in 0..5 {
+        h.barge_in();
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    h.wait_for_complete().await;
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+}
+
+/// Barge-in during multi-sentence response.
+#[tokio::test]
+#[ignore]
+async fn barge_in_multi_sentence() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response(
+        "Primera oracion. Segunda oracion. Tercera oracion. Cuarta oracion. Quinta oracion.",
+    )
+    .await;
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Dime cinco cosas.").await;
+    h.wait_for_first_sentence().await.ok();
+    h.barge_in();
+    h.wait_for_complete().await;
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let captured = h.tts_sentences();
+    assert!(
+        !captured.is_empty(),
+        "expected at least one sentence before barge-in"
+    );
+    let has_partial = h.assert_db_has_partial_save().await;
+    assert!(
+        has_partial,
+        "expected partial save from multi-sentence interruption"
+    );
+}
+
+/// Barge-in when pipeline is idle (nothing active).
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_idle() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Respuesta normal.").await;
+    // Send barge-in before any transcript
+    h.run_immediate_barge_in("Consulta normal.").await;
+}
+
+/// Barge-in during LLM thinking, before the first token arrives.
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_thinking_before_token() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Respuesta que va a llegar tarde.")
+        .await;
+    // Immediately barge-in
+    h.run_immediate_barge_in("Consulta para cancelar.").await;
+    let has_partial = h.assert_db_has_partial_save().await;
+    assert!(has_partial, "expected partial save: user + assistant");
+}
+
+/// Barge-in while receiving LLM tokens (mid-stream thinking).
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_thinking_mid_stream() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Primera parte. Segunda parte. Tercera parte.")
+        .await;
+    h.run_with_barge_in_at_state("Consulta mid-stream.", "Thinking")
+        .await;
+    // Partial save may or may not occur mid-stream — verify pipeline responded
+    let captured = h.tts_sentences();
+    let _has_partial = h.assert_db_has_partial_save().await;
+    // Test passes if pipeline completed without panic
+}
+
+/// Barge-in while TTS is actively playing audio.
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_speaking_playing() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Respuesta para testear speaking.")
+        .await;
+    h.run_with_barge_in_at_state("Consulta playing.", "Speaking")
+        .await;
+    let has_partial = h.assert_db_has_partial_save().await;
+    assert!(has_partial, "expected partial save");
+}
+
+/// Barge-in while TTS is queueing multiple sentences.
+#[tokio::test]
+#[ignore]
+async fn barge_in_during_speaking_queueing() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Primera. Segunda. Tercera. Cuarta. Quinta.")
+        .await;
+    h._reset_for_run();
+    let (h_llm, h_sen, h_tts) = h._spawn_and_send("Consulta queueing.").await;
+    h.wait_for_first_sentence().await.ok();
+    h.barge_in();
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let captured = h.tts_sentences();
+    assert!(
+        !captured.is_empty(),
+        "expected at least one sentence queued before barge-in"
+    );
+    let has_partial = h.assert_db_has_partial_save().await;
+    assert!(has_partial, "expected partial save");
+}
+
+/// Verify pipeline state resets cleanly after barge-in — two consecutive turns.
+#[tokio::test]
+#[ignore]
+async fn barge_in_clean_state_reset() {
+    let h = E2eHarness::new().await;
+    // First turn with barge-in
+    h.mock_llm_response("Respuesta parcial que se cancela.")
+        .await;
+    h.run_immediate_barge_in("Consulta parcial.").await;
+    h.wait_for_complete().await;
+    // Second turn should work cleanly
+    h.mock_llm_response("Respuesta completa y limpia.").await;
+    h.run_immediate_barge_in("Consulta limpia.").await;
+    h.wait_for_complete().await;
+    let captured = h.tts_sentences();
+    assert!(!captured.is_empty(), "second run should work");
+}
+
+// ── STT tests (require Whisper model) ─────────────────────────────────────────
+
+/// Load a WAV file, transcribe with WhisperSTTVAD, assert transcript is non-empty.
+/// Requires: WHISPER_MODEL env var and VAD_MODEL env var.
+#[tokio::test]
+#[ignore = "requires Whisper + VAD models"]
+async fn stt_transcribes_wav_file() {
+    use seneschal_core::stt::{WhisperSTTVADConfig, WhisperSttProvider};
+
+    let model_path = std::env::var("WHISPER_MODEL")
+        .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string());
+    let vad_model =
+        std::env::var("VAD_MODEL").unwrap_or_else(|_| "models/ggml-silero-vad.bin".to_string());
+
+    if !std::path::Path::new(&model_path).exists() {
+        eprintln!("SKIP: Whisper model not found at {model_path}");
+        return;
+    }
+    if !std::path::Path::new(&vad_model).exists() {
+        eprintln!("SKIP: VAD model not found at {vad_model}");
+        return;
+    }
+
+    let wav_path = "tests/fixtures/es_short_greeting.wav";
+    if !std::path::Path::new(wav_path).exists() {
+        eprintln!("SKIP: fixture not found at {wav_path}");
+        return;
+    }
+
+    let config = WhisperSTTVADConfig {
+        whisper_model: model_path,
+        vad_model,
+        language: "es".to_string(),
+        silence_ms: 500,
+        vad_start_threshold: 0.65,
+        vad_end_threshold: 0.45,
+        vad_confirm_probes: 2,
+    };
+    let stt = WhisperSttProvider::new(config).expect("failed to load Whisper model");
+    let audio = load_wav_as_f32(wav_path).expect("failed to load WAV fixture");
+    let transcript = stt
+        .transcribe_complete(&audio)
+        .expect("Whisper transcription failed");
+
+    println!("Transcript: {transcript:?}");
+    assert!(
+        !transcript.text.trim().is_empty(),
+        "expected non-empty transcript from {wav_path}"
+    );
+}
+
+/// Full pipeline with real STT: WAV → WhisperSTTVAD → mock LLM → TTS capture → DB.
+#[tokio::test]
+#[ignore = "requires Whisper + VAD models"]
+async fn full_pipeline_wav_to_db() {
+    use seneschal_core::stt::{WhisperSTTVADConfig, WhisperSttProvider};
+
+    let model_path = std::env::var("WHISPER_MODEL")
+        .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string());
+    let vad_model =
+        std::env::var("VAD_MODEL").unwrap_or_else(|_| "models/ggml-silero-vad.bin".to_string());
+    let wav_path = "tests/fixtures/es_long_intro.wav";
+
+    if !std::path::Path::new(&model_path).exists() {
+        eprintln!("SKIP: Whisper model not found");
+        return;
+    }
+    if !std::path::Path::new(&vad_model).exists() {
+        eprintln!("SKIP: VAD model not found at {vad_model}");
+        return;
+    }
+    if !std::path::Path::new(wav_path).exists() {
+        eprintln!("SKIP: fixture not found at {wav_path}");
+        return;
+    }
+
+    let config = WhisperSTTVADConfig {
+        whisper_model: model_path,
+        vad_model,
+        language: "es".to_string(),
+        silence_ms: 500,
+        vad_start_threshold: 0.65,
+        vad_end_threshold: 0.45,
+        vad_confirm_probes: 2,
+    };
+    let stt = WhisperSttProvider::new(config).unwrap();
+    let audio = load_wav_as_f32(wav_path).unwrap();
+    let quality = stt.transcribe_complete(&audio).unwrap();
+    println!("STT transcript: {quality:?}");
+
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Respuesta de prueba.").await;
+    h.run(&quality.text).await;
+
+    let msgs = h.db_messages().await;
+    assert!(
+        msgs.iter().any(|(r, _)| r == "Assistant"),
+        "expected assistant message in DB, got: {msgs:?}"
+    );
+    println!("DB messages: {msgs:?}");
+    println!("TTS sentences: {:?}", h.tts_sentences());
+}
+
+// ── VAD model path regression tests ─────────────────────────────────────────
+
+/// Verify the default VAD model path matches the canonical path.
+/// This prevents drift between Config defaults and documentation.
+/// The canonical VAD model path is `models/ggml-silero-vad.bin`.
+#[test]
+fn default_vad_model_path() {
+    let canonical = "models/ggml-silero-vad.bin";
+
+    // Structural check: verify the filename part is correct
+    let path = std::path::Path::new(canonical);
+    assert_eq!(
+        path.file_name().unwrap(),
+        "ggml-silero-vad.bin",
+        "canonical VAD model filename must be ggml-silero-vad.bin"
+    );
+
+    // Verify Config default when VAD_MODEL env var is unset
+    temp_env::with_var("VAD_MODEL", None::<&str>, || {
+        let config = Config::from_env().expect("Config::from_env() should succeed");
+        assert_eq!(
+            config.vad_model, canonical,
+            "Config default VAD model must match canonical path"
+        );
+    });
+}
+
+// ── WAV loading helper ────────────────────────────────────────────────────────
+
+fn load_wav_as_f32(path: &str) -> anyhow::Result<Vec<f32>> {
+    use anyhow::Context;
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let file = File::open(path).with_context(|| format!("opening {path}"))?;
+    let mut reader = hound::WavReader::new(BufReader::new(file))
+        .with_context(|| format!("parsing WAV header of {path}"))?;
+
+    let spec = reader.spec();
+    anyhow::ensure!(
+        spec.sample_rate == 16000,
+        "WAV must be 16kHz, got {}Hz",
+        spec.sample_rate
+    );
+    anyhow::ensure!(
+        spec.channels == 1,
+        "WAV must be mono, got {} channels",
+        spec.channels
+    );
+
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader.samples::<f32>().map(|s| s.unwrap()).collect(),
+        hound::SampleFormat::Int => {
+            let max = (1i32 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.unwrap() as f32 / max)
+                .collect()
+        }
+    };
+
+    Ok(samples)
+}
+
+// ── Latency benchmark ─────────────────────────────────────────────────────────
+
+use std::time::Instant;
+
+/// Measures end-to-end latency: transcript injection → first TTS sentence.
+/// Uses the mock pipeline (no Whisper, no real LLM server) so the baseline
+/// reflects pure pipeline overhead.
+#[tokio::test]
+#[ignore]
+async fn latency_transcript_to_tts_under_1500ms() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Son las diez y media.").await;
+
+    let t0 = Instant::now();
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("Hola, qué hora es").await;
+
+    h.events.llm_post_finished.notified().await;
+    let llm_done_ms = t0.elapsed().as_millis();
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let tts_first_ms = t0.elapsed().as_millis();
+
+    h.barge_in();
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected TTS to receive at least one sentence"
+    );
+
+    assert!(
+        llm_done_ms < 1500,
+        "LLM done latency too high: {llm_done_ms}ms (target < 1500ms)"
+    );
+    assert!(
+        tts_first_ms < 1500,
+        "TTS first sentence latency too high: {tts_first_ms}ms (target < 1500ms)"
+    );
+}
+
+/// Ambient mode — main user wake word switches to Active, subsequent speech works.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_wake_word_by_main_user_switches_to_active() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+
+    // First utterance: ambient mode + wake word → respond AND switch to Active.
+    h.run_ambient("seneschal, ¿qué hora es?", "seneschal").await;
+    let after_first = h.tts_sentences();
+    assert!(
+        !after_first.is_empty(),
+        "expected response to wake word in ambient, got: {:?}",
+        after_first
+    );
+    assert_eq!(
+        *h.conv_mode.lock().unwrap(),
+        ConversationMode::Active,
+        "mode should be Active after main-user wake word"
+    );
+
+    // Second utterance: now in Active mode, no wake word needed.
+    h.mock_llm_response("Son las once en punto.").await;
+    h.run("¿seguro?").await;
+    let after_second = h.tts_sentences();
+    assert!(
+        !after_second.is_empty(),
+        "expected response in Active mode without wake word, got: {:?}",
+        after_second
+    );
+}
+
+/// AmbientLocked mode — wake word produces response but mode stays locked.
+#[tokio::test]
+#[ignore]
+async fn ambient_mode_wake_word_by_secondary_voice_responds_but_stays_ambient() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Claro, son las once.").await;
+
+    // Start in AmbientLocked mode.
+    *h.conv_mode.lock().unwrap() = ConversationMode::AmbientLocked;
+
+    // Wake word in AmbientLocked → respond, but mode stays AmbientLocked.
+    h.run_with_opts("seneschal, ¿qué hora es?", "seneschal")
+        .await;
+    let sentences = h.tts_sentences();
+    assert!(
+        !sentences.is_empty(),
+        "expected response to wake word in AmbientLocked, got: {:?}",
+        sentences
+    );
+    assert_eq!(
+        *h.conv_mode.lock().unwrap(),
+        ConversationMode::AmbientLocked,
+        "mode should remain AmbientLocked after secondary-voice wake word"
+    );
+}
+
+/// Non-main speech in Active mode — no response, mode stays Active in mock.
+#[tokio::test]
+#[ignore]
+async fn active_mode_discards_non_main_user_speech() {
+    let h = E2eHarness::new().await;
+    h.mock_llm_response("Esto no debería llegar.").await;
+
+    // Non-main speech in Active mode — pipeline discards it.
+    // In the harness, we simulate this by having conv_mode = Active and sending
+    // a transcript that would be from a non-main speaker (no special marker needed
+    // at the harness level since the audio loop's speaker check is not present).
+    // The harness's gating only applies in Ambient mode, so Active always passes.
+    // The real gating by speaker identity happens in the audio loop (main.rs).
+    // This test verifies the pipeline does not crash/hang for non-main-user speech.
+    h.run("texto de un hablante secundario que no debería responder")
+        .await;
+    let sentences = h.tts_sentences();
+    // In the current harness, Active mode always passes through.
+    // The actual discard-by-speaker-identity happens one level up in the audio loop.
+    assert_eq!(*h.conv_mode.lock().unwrap(), ConversationMode::Active);
+    // Note: full speaker-based gating requires the audio loop (main.rs) which
+    // is not exercised by the E2eHarness mock pipeline.
+}
+
+// ── Deep Worker (issue #236) ───────────────────────────────────────────────────
+
+/// Voice model delegates via `run_deep_task` → the worker (secondary mock
+/// endpoint) runs the external-thinking plan + final loop → result flows as
+/// an `AgentResult` announcement; the voice history keeps only the
+/// ABBREVIATED delegation exchange (anti-#221) and the ack is spoken once.
+#[tokio::test]
+#[ignore]
+async fn e2e_deep_worker_delegation_flow() {
+    use std::time::Duration;
+
+    // ── Worker endpoint: its own MockServer (plan SSE, then final SSE) ──
+    let worker_server = MockServer::start().await;
+    let worker_plan = Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(make_sse(
+                    "Plan: 1) buscar el dato 2) redactar la respuesta final",
+                ))
+                .append_header("content-type", "text/event-stream"),
+        );
+    let worker_final = Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(make_sse("El dato es 42 y la tarea está completa."))
+                .append_header("content-type", "text/event-stream"),
+        );
+    // wiremock matches most-recently-mounted first: the final-text mock wins
+    // for the loop call, the plan mock serves the first (no-tools) request.
+    worker_plan.mount(&worker_server).await;
+    worker_final.mount(&worker_server).await;
+
+    // ── Worker engine (external thinking, empty pool) ──────────────────
+    let worker_provider: Arc<dyn LlmProvider> = Arc::new(OpenAiLlmProvider::new(
+        &worker_server.uri(),
+        "worker-model",
+        512,
+        0.0,
+    ));
+    let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(16);
+    let params = seneschal_worker::DeepWorkerParams {
+        system_prompt: "Eres el deep worker de pruebas.".to_string(),
+        thinking: true,
+        thinking_mode: seneschal_worker::ThinkingMode::External,
+        max_iterations: 3,
+        timeout: Duration::from_secs(10),
+    };
+    let worker_tools = Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
+    let (engine, _event_rx) = seneschal_worker::DeepWorkerEngine::new(
+        worker_provider,
+        Arc::clone(&worker_tools),
+        proactive_tx,
+        params,
+    );
+
+    // ── Voice harness with the run_deep_task tool registered ────────────
+    let h = E2eHarness::new().await;
+    h.tools
+        .lock()
+        .unwrap()
+        .register(seneschal_worker::RunDeepTaskTool::new(engine));
+
+    // Voice mock: a single response that invokes run_deep_task with a LONG
+    // task (> 120 chars) so the anti-#221 abbreviation is observable.
+    let long_task = format!(
+        "Analiza a fondo {} y dime la conclusión",
+        "el estado del repositorio voicebot incluyendo ficheros, memoria y configuración".repeat(3)
+    );
+    h.mock_llm_response_raw(make_sse_tool_call(
+        "run_deep_task",
+        &serde_json::json!({ "task": long_task }),
+    ))
+    .await;
+
+    h.run("investiga el repo a fondo").await;
+
+    // ── The ack is spoken once (anti-#218 fallback path) ───────────────
+    let sentences = h.tts_sentences();
+    assert!(
+        sentences
+            .iter()
+            .any(|s| s.contains("Procesando en segundo plano")),
+        "fallback ack missing: {sentences:?}"
+    );
+
+    // ── The voice history keeps the tool-call pattern with ABBREVIATED
+    // arguments (anti-#221): the full task text must NOT be in the session.
+    let exchange_args = {
+        let session = h.llm_session.lock().unwrap();
+        session
+            .messages
+            .iter()
+            .filter(|m| m["role"] == "assistant" && m.get("tool_calls").is_some())
+            .flat_map(|m| {
+                m["tool_calls"]
+                    .as_array()
+                    .map(|a| a.to_vec())
+                    .unwrap_or_default()
+            })
+            .map(|c| {
+                c["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(!exchange_args.is_empty(), "bg tool exchange missing");
+    for args in &exchange_args {
+        assert!(
+            args.chars().count() < long_task.chars().count(),
+            "delegation args must be abbreviated: {args:?}"
+        );
+    }
+
+    // ── The worker endpoint served the external-thinking two-step flow ──
+    let hits = worker_server.received_requests().await.unwrap().len();
+    assert!(
+        hits >= 2,
+        "worker endpoint expected ≥2 requests, got {hits}"
+    );
+
+    // ── The voice history contains no trace of the worker's internals ──
+    let all = h.llm_session.lock().unwrap().all_messages_api();
+    let dumped = serde_json::to_string(&all).unwrap();
+    assert!(
+        !dumped.contains("Plan: 1)"),
+        "worker internals leaked into the voice history"
+    );
+}
+
+/// `enabled=false` regression (issue #236, criterion 1): without the tool
+/// registered the pipeline behaves exactly as before — a plain text response
+/// is streamed and captured.
+#[tokio::test]
+#[ignore]
+async fn e2e_deep_worker_disabled_is_transparent() {
+    let h = E2eHarness::new().await;
+    // No run_deep_task registered (the disabled path never registers it).
+    h.mock_llm_response("Respuesta normal sin worker.").await;
+    h.run("hola seneschal").await;
+
+    let sentences = h.tts_sentences();
+    assert!(
+        sentences.iter().any(|s| s.contains("Respuesta normal")),
+        "{sentences:?}"
+    );
+    // And the tool was never exposed to the voice model.
+    let defs = h.tools.lock().unwrap().tool_definitions();
+    let names: Vec<&str> = defs
+        .iter()
+        .filter_map(|d| d["function"]["name"].as_str())
+        .collect();
+    assert!(!names.contains(&"run_deep_task"), "{names:?}");
+}

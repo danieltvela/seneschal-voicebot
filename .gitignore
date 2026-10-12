@@ -1,0 +1,58 @@
+# Build artifacts
+/target
+/patches/*/target
+/models
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Database and runtime data
+data/seneschal.db
+data/speaker.emb
+data/*.db
+data/dev/*.db
+data/pro/*.db
+data/*.emb
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude / AI assistant artifacts
+.claude/
+.hermes/
+.opencode/
+.sisyphus/
+.sisyphus/
+.slim/deepwork/
+
+# Project-owned opencode skills (ship with the repo for AI agents)
+!.opencode/
+!.opencode/skill/
+!.opencode/skill/**
+
+# Development logs
+seneschal.log
+*.log
+
+# macOS
+.DS_Store
+.DS_Store?
+
+# Python / venv
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+npm-debug.log
+
+# Cache
+.cache/
+.rustfmt.toml

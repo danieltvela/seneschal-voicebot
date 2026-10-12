@@ -1,0 +1,8 @@
+# Todo el peso del casting queda fuera de git
+.venv/
+bin/
+model/
+voices/
+out/
+__pycache__/
+.uv/

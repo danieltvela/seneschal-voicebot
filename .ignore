@@ -1,0 +1,4 @@
+# Allow OpenCode to read deepwork progress files (gitignored but readable by agents)
+!.slim/
+!.slim/deepwork/
+!.slim/deepwork/**

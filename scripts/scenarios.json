@@ -1,0 +1,689 @@
+[
+  {
+    "_comment": "══════════════════════════════════════════════════════════",
+    "_comment2": "20 multi-turn scenarios — 5 easy / 5 medium / 5 hard / 5 very hard.",
+    "_comment3": "Every scenario carries a `difficulty` field. Goal checks evaluate",
+    "_comment4": "the whole conversation; *_final variants target the closing turn.",
+    "_comment5": "No real subagent server; run_agent_async results are mock-defined",
+    "_comment6": "and injected at the scenario-specified turn."
+  },
+  {
+    "id": "scn_easy_hora",
+    "group": "scenarios",
+    "description": "Hora — pregunta directa de tiempo; consulta current_time y la dice de forma hablada",
+    "difficulty": "easy",
+    "max_turns": 4,
+    "seed_messages": [
+      {"role": "user", "content": "¿Qué hora es?"}
+    ],
+    "tool_mocks": {
+      "current_time": [
+        {"args_contains": "", "result": "10:15:32, viernes 15 de agosto de 2025"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM consulta la hora y la comunica de forma hablada",
+      "must_call_tools": ["current_time"],
+      "goal_patterns": {
+        "required_any_strings": ["10:15", "diez y cuarto"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_easy_agenda",
+    "group": "scenarios",
+    "description": "Agenda — enumera los eventos de hoy tras consultar get_calendar_events",
+    "difficulty": "easy",
+    "max_turns": 4,
+    "seed_messages": [
+      {"role": "user", "content": "¿Qué tengo hoy en la agenda?"}
+    ],
+    "tool_mocks": {
+      "get_calendar_events": [
+        {
+          "args_contains": "",
+          "result": "Eventos para el viernes 15 de agosto de 2025:\n- 09:00-10:00 Revisión de sprint\n- 13:00-14:00 Comida con Juan\n- 18:30-19:30 Fisioterapia"
+        }
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM lee la agenda del día y enumera los eventos reales sin inventar ninguno",
+      "must_call_tools": ["get_calendar_events"],
+      "goal_patterns": {
+        "required_any_strings": ["Fisioterapia", "Comida con Juan"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_easy_recordatorio",
+    "group": "scenarios",
+    "description": "Recordatorio — crea el evento del dentista con fecha y hora correctas",
+    "difficulty": "easy",
+    "max_turns": 4,
+    "seed_messages": [
+      {"role": "user", "content": "Recuérdame llamar al dentista el jueves a las nueve."}
+    ],
+    "tool_mocks": {
+      "create_calendar_event": [
+        {"args_contains": "", "result": "Evento creado: Llamar al dentista, jueves a las 09:00."}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM crea el recordatorio del dentista con los datos correctos",
+      "must_call_tools": ["create_calendar_event"],
+      "tool_arg_must_contain": {
+        "create_calendar_event": ["dentista"]
+      },
+      "goal_patterns": {
+        "required_any_strings": ["jueves", "dentista"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_easy_portapapeles",
+    "group": "scenarios",
+    "description": "Portapapeles — copia una frase exacta sin alterar el texto",
+    "difficulty": "easy",
+    "max_turns": 4,
+    "seed_messages": [
+      {"role": "user", "content": "Pon en el portapapeles la frase: reunión movida al martes a las doce."}
+    ],
+    "tool_mocks": {
+      "set_clipboard": [
+        {"args_contains": "", "result": "Portapapeles actualizado: reunión movida al martes a las doce."}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM copia la frase pedida al portapapeles sin alterar el texto",
+      "must_call_tools": ["set_clipboard"],
+      "tool_arg_must_contain": {
+        "set_clipboard": ["martes", "doce"]
+      },
+      "goal_patterns": {
+        "required_any_strings": ["portapapeles", "copiado"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_easy_leer_fichero",
+    "group": "scenarios",
+    "description": "Leer fichero — lee version.txt y comunica el número de versión",
+    "difficulty": "easy",
+    "max_turns": 4,
+    "seed_messages": [
+      {"role": "user", "content": "Lee el fichero /Users/senor/notas/version.txt y dime qué versión hay."}
+    ],
+    "tool_mocks": {
+      "read_file": [
+        {"args_contains": "", "result": "# notas\nversion=4.2.1\nbuild 2025-08-14\n"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM lee el fichero de versión y comunica el número de versión",
+      "must_call_tools": ["read_file"],
+      "tool_arg_must_contain": {
+        "read_file": ["version.txt"]
+      },
+      "goal_patterns": {
+        "required_any_strings": ["4.2.1", "cuatro punto dos"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_medium_hueco_libre",
+    "group": "scenarios",
+    "description": "Hueco libre — cruza hora actual y agenda para deducir un hueco de media hora (razonamiento, no repetición)",
+    "difficulty": "medium",
+    "max_turns": 6,
+    "seed_messages": [
+      {"role": "user", "content": "Necesito media hora libre hoy para una llamada importante. ¿Cuándo puedo?"}
+    ],
+    "tool_mocks": {
+      "current_time": [
+        {"args_contains": "", "result": "10:15:32, viernes 15 de agosto de 2025"}
+      ],
+      "get_calendar_events": [
+        {
+          "args_contains": "",
+          "result": "Eventos para hoy:\n- 09:00-10:00 Revisión de sprint\n- 11:00-12:00 Call de diseño\n- 13:00-14:00 Comida con Juan\n- 16:00-17:00 Demo de producto"
+        }
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM consulta hora y agenda, y propone un hueco real de al menos media hora deducido del calendario",
+      "must_call_tools": ["current_time", "get_calendar_events"],
+      "goal_patterns": {
+        "required_any_strings": ["10:30", "diez y media", "11:00", "once", "12:00", "doce", "12:30", "dos y media", "14:00", "catorce"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_medium_disco",
+    "group": "scenarios",
+    "description": "Disco — analiza df/du, identifica consumidores y recomienda por dónde empezar",
+    "difficulty": "medium",
+    "max_turns": 8,
+    "seed_messages": [
+      {"role": "user", "content": "Me está avisando macOS de que el disco está casi lleno. ¿Puedes mirar qué está pasando y decirme qué puedo hacer?"}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 4, "content": "¿Y por dónde empiezo?"}
+    ],
+    "tool_mocks": {
+      "run_shell": [
+        {"args_contains": "df -h", "result": "Filesystem      Size   Used  Avail Capacity iused ifree %iused  Mounted on\n/dev/disk3s1   460Gi  435Gi   20Gi    95%   2.1M  214M    1%   /\n"},
+        {"args_contains": "du", "result": "120G    /Users/senor/Library/Developer/Xcode\n 85G    /Users/senor/Library/Caches\n 54G    /Users/senor/Movies\n 38G    /Users/senor/Downloads\n 23G    /Users/senor/.Trash\n"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM identifica los mayores consumidores de disco y propone un orden concreto de limpieza",
+      "must_call_tools": ["run_shell"],
+      "goal_patterns": {
+        "required_patterns": ["(?i)(Xcode|Cach|Papelera|Descargas)"],
+        "required_strings": ["120", "85"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_medium_viaje",
+    "group": "scenarios",
+    "description": "Viaje — busca vuelos, comprueba calendario, crea el evento y recomienda aerolínea concreta",
+    "difficulty": "medium",
+    "max_turns": 10,
+    "seed_messages": [
+      {"role": "user", "content": "Estoy organizando un viaje a Suiza del 15 al 22 de septiembre. Busca vuelos, comprueba mi agenda para esas fechas y agéndame el viaje."}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 5, "content": "¿Qué compañías has encontrado y cuál me recomiendas?"}
+    ],
+    "tool_mocks": {
+      "web_search": [
+        {"args_contains": "", "result": "Resultados de vuelos Madrid-Zúrich sep 15-22:\nSWISS LX2025: 245€ directo; Iberia IB3450: 280€ directo; Vueling VY8320: 190€ con escala; easyJet: 155€ directo a Ginebra"}
+      ],
+      "get_calendar_events": [
+        {"args_contains": "", "result": "Eventos septiembre 2025:\n- 14 sep: Cena con clientes 20:00\n- resto del mes sin eventos registrados"}
+      ],
+      "create_calendar_event": [
+        {"args_contains": "", "result": "Evento creado: Viaje a Suiza, 15-22 septiembre 2025."}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM busca vuelos, comprueba el calendario, crea el evento del viaje y nombra aerolíneas concretas",
+      "must_call_tools": ["web_search", "create_calendar_event"],
+      "goal_patterns": {
+        "required_strings": ["15", "septiembre"],
+        "required_patterns": ["(?i)(SWISS|Iberia|Vueling|easyJet)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_medium_reunion",
+    "group": "scenarios",
+    "description": "Reunión ejecutiva — crea el evento del lunes y copia la agenda al portapapeles en la misma respuesta",
+    "difficulty": "medium",
+    "max_turns": 8,
+    "seed_messages": [
+      {"role": "user", "content": "Agéndame una reunión ejecutiva el próximo lunes a las 10:00 con la agenda copiada en el portapapeles: revisión de Q3, presupuesto 2026 y contrataciones."}
+    ],
+    "tool_mocks": {
+      "get_calendar_events": [
+        {"args_contains": "", "result": "Eventos para el próximo lunes:\n- 09:00-09:30 Daily standup\n- 10:00-11:00 libre\n- 16:00-17:00 Revisión con legal"}
+      ],
+      "create_calendar_event": [
+        {"args_contains": "", "result": "Evento creado: Reunión ejecutiva, lunes 10:00-11:00, sala principal."}
+      ],
+      "set_clipboard": [
+        {"args_contains": "", "result": "Portapapeles actualizado con la agenda."}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM crea la reunión del lunes y copia la agenda con Q3 al portapapeles",
+      "must_call_tools": ["create_calendar_event", "set_clipboard"],
+      "tool_arg_must_contain": {
+        "set_clipboard": ["Q3"]
+      },
+      "goal_patterns": {
+        "required_any_strings": ["portapapeles", "copiada"],
+        "required_strings": ["lunes"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_medium_noticias",
+    "group": "scenarios",
+    "description": "Noticias — resumen hablado en tres frases; el cierre debe nombrar al BCE",
+    "difficulty": "medium",
+    "max_turns": 6,
+    "seed_messages": [
+      {"role": "user", "content": "Dame un resumen de las noticias más importantes de hoy en tres frases."}
+    ],
+    "tool_mocks": {
+      "web_search": [
+        {"args_contains": "", "result": "1. El BCE mantiene los tipos de interés en el 3.25% tras la reunión de agosto, señalando riesgos de inflación persistente en servicios.\n2. La OMS declara el fin de la emergencia sanitaria por el brote de ébola en Uganda tras 42 días sin nuevos casos.\n3. España alcanza un récord de 92 millones de turistas en lo que va de año, superando las cifras prepandemia."}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM resume las noticias del día en voz hablada y nombra al BCE en su respuesta final",
+      "must_call_tools": ["web_search"],
+      "goal_patterns": {
+        "required_strings": ["BCE"],
+        "required_any_strings": ["ébola", "Uganda"],
+        "required_strings_final": ["BCE"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 4,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_hard_debug_async",
+    "group": "scenarios",
+    "description": "Depuración asíncrona — lee el fichero, delega al agente y transmite el veredicto técnico en la respuesta final",
+    "difficulty": "hard",
+    "max_turns": 10,
+    "seed_messages": [
+      {"role": "user", "content": "Tengo un panic en src/main.rs en la línea 42. ¿Puedes investigar qué está pasando?"}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 4, "content": "¿Ha terminado ya el agente con el análisis?"}
+    ],
+    "tool_mocks": {
+      "read_file": [
+        {"args_contains": "", "result": "// main.rs\nlet v: Vec<i32> = vec![];\nlet x = v[0];  // line 42\n"}
+      ],
+      "run_agent_async": [
+        {
+          "task_contains": "investig",
+          "immediate_response": "[Tarea delegada al agente. El resultado llegará en breve.]",
+          "result": "Análisis completado: el panic ocurre porque se indexa v[0] sobre un vector vacío; usar v.get(0) con if let o comprobar is_empty antes de indexar.",
+          "delivered_at_turn": 5
+        }
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM localiza la línea 42, delega al agente y transmite la corrección (get/if let) en su turno final",
+      "must_call_tools": ["read_file", "run_agent_async"],
+      "expected_tool_sequence": ["read_file", "run_agent_async"],
+      "goal_patterns": {
+        "required_strings": ["42"],
+        "required_patterns_final": ["(?i)(42|cuarenta y dos)"],
+        "required_any_strings": ["get", "if let", "is_empty", "vacío"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 5,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_hard_salud",
+    "group": "scenarios",
+    "description": "Salud del sistema — diagnostica CPU y memoria con top/ps y propone una acción concreta",
+    "difficulty": "hard",
+    "max_turns": 8,
+    "seed_messages": [
+      {"role": "user", "content": "El Mac va muy lento hoy. Hazme un diagnóstico y dime qué hacer."}
+    ],
+    "tool_mocks": {
+      "run_shell": [
+        {"args_contains": "top", "result": "Processes: 342 total, 3 running\nCPU usage: 87.4% user, 10.2% sys\nLoad Avg: 4.21, 3.89, 3.12\nPID    COMMAND      %CPU\n43921  com.docker.h  45.2\n54231  Xcode         32.1\n12103  WindowServer  18.7\n"},
+        {"args_contains": "ps", "result": "  PID   %CPU %MEM COMMAND\n43921  45.2  12.4  Docker\n54231  32.1  10.8  Xcode\n12103  18.7   4.2  WindowServer\n"},
+        {"args_contains": "memory", "result": "Memory: 24.3 GB used / 32 GB total (76%)\nSwap: 8.2 GB used"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM nombra a Docker y Xcode como culpables y da una acción concreta (cerrar/reiniciar/detener)",
+      "must_call_tools": ["run_shell"],
+      "goal_patterns": {
+        "required_all_strings": ["Docker", "Xcode"],
+        "required_patterns_final": ["(?i)(cerrar|reiniciar|matar|detener|parar)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 5,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_hard_seguridad",
+    "group": "scenarios",
+    "description": "Seguridad — audita puertos y firewall, delega el análisis al agente y transmite el veredicto con la acción recomendada",
+    "difficulty": "hard",
+    "max_turns": 10,
+    "seed_messages": [
+      {"role": "user", "content": "Tengo la sensación de que algo raro pasa con la red del Mac. Hazme una auditoría de seguridad básica."}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 5, "content": "¿El agente ha encontrado algo que deba preocuparme?"}
+    ],
+    "tool_mocks": {
+      "run_shell": [
+        {"args_contains": "lsof -i", "result": "COMMAND    PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\nnginx     5432 root    6u  IPv4 0x...      0t0  TCP *:8080 (LISTEN)\nSSH        1234 senor   3u  IPv4 0x...      0t0  TCP *:22 (LISTEN)\n"},
+        {"args_contains": "firewall", "result": "Firewall status: OFF\nStealth mode: Disabled\nBlock all incoming connections: No\nAllowed applications: (none configured)"}
+      ],
+      "run_agent_async": [
+        {
+          "task_contains": "auditor",
+          "immediate_response": "[Tarea delegada al agente. El resultado llegará en breve.]",
+          "result": "CRÍTICO: firewall desactivado; nginx corre como root en el puerto 8080; SSH sin restricción de origen. Recomienda ejecutar sudo pfctl -E y restringir el acceso.",
+          "delivered_at_turn": 6
+        }
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM detecta firewall apagado y nginx como root, delega al agente y transmite la recomendación pfctl en el turno final",
+      "must_call_tools": ["run_shell", "run_agent_async"],
+      "expected_tool_sequence": ["run_shell", "run_agent_async"],
+      "goal_patterns": {
+        "required_all_strings": ["firewall", "nginx"],
+        "required_patterns_final": ["(?i)(pfctl|activar|restringir)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 5,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_hard_regalo",
+    "group": "scenarios",
+    "description": "Regalo — busca ideas, copia la mejor al portapapeles, delega investigación extra y transmite los hallazgos del agente",
+    "difficulty": "hard",
+    "max_turns": 8,
+    "seed_messages": [
+      {"role": "user", "content": "El cumpleaños de mi mujer es pronto y le encanta la fotografía y el senderismo. Busca ideas de regalo, cópiame la mejor al portapapeles y pide al agente más opciones originales."}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 4, "content": "¿Ha encontrado algo interesante el agente?"}
+    ],
+    "tool_mocks": {
+      "web_search": [
+        {"args_contains": "", "result": "Ideas de regalo para fotógrafa senderista:\nMochila Peak Design Everyday 20L: 259€ — impermeable, acceso rápido a la cámara\nTrípode Gitzo Traveler: 180€ — ultraligero para montaña\nFiltro Hoya ProND: 45€ — esencial para paisajes\nLibro Fotografía de Naturaleza: 32€"}
+      ],
+      "set_clipboard": [
+        {"args_contains": "", "result": "Portapapeles actualizado."}
+      ],
+      "run_agent_async": [
+        {
+          "task_contains": "investig",
+          "immediate_response": "[Tarea delegada al agente. El resultado llegará en breve.]",
+          "result": "Investigación completada: Curso de fotografía de paisaje en Domestika por 49€; cámara Fujifilm Instax con funda de senderismo por 89€; combo AllTrails Pro + mochila Osprey Talon 22 por 160€.",
+          "delivered_at_turn": 5
+        }
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM busca, copia la opción elegida al portapapeles y transmite los hallazgos del agente en su turno final",
+      "must_call_tools": ["web_search", "set_clipboard", "run_agent_async"],
+      "tool_arg_must_contain": {
+        "set_clipboard": ["Peak Design"]
+      },
+      "goal_patterns": {
+        "required_patterns_final": ["(?i)(Domestika|Instax|AllTrails|Osprey)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 5,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_hard_conflicto",
+    "group": "scenarios",
+    "description": "Conflicto de agenda — detecta la colisión a las 10:00 y propone alternativa SIN crear el evento",
+    "difficulty": "hard",
+    "max_turns": 6,
+    "seed_messages": [
+      {"role": "user", "content": "Agéndame una llamada con la proveedora mañana a las 10:00, media hora."}
+    ],
+    "tool_mocks": {
+      "get_calendar_events": [
+        {"args_contains": "", "result": "Eventos para mañana:\n- 10:00-11:00 Call con inversores\n- 11:00-12:30 libre\n- 12:30-14:00 libre"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM detecta que las 10:00 está ocupada por la llamada con inversores y propone otra hora sin crear el evento",
+      "must_call_tools": ["get_calendar_events"],
+      "must_not_call_tools": ["create_calendar_event"],
+      "goal_patterns": {
+        "required_patterns": ["(?i)(ocupado|ocupada|conflicto|coincide|colisiona|reprogram|mover|propon|recomiendo|otra hora|otro hueco)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 5,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_vhard_suma",
+    "group": "scenarios",
+    "description": "Aritmética sobre herramienta — suma el total liberable y luego calcula el ahorro de dos categorías",
+    "difficulty": "very_hard",
+    "max_turns": 8,
+    "seed_messages": [
+      {"role": "user", "content": "El disco está lleno. Mira qué ocupa más espacio y dime el total que podríamos liberar."}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 4, "content": "¿Y si borro la papelera y las cachés, cuánto liberas?"}
+    ],
+    "tool_mocks": {
+      "run_shell": [
+        {"args_contains": "du", "result": "120G    /Users/senor/Library/Developer/Xcode\n 85G    /Users/senor/Library/Caches\n 54G    /Users/senor/Movies\n 38G    /Users/senor/Downloads\n 23G    /Users/senor/.Trash\n"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM suma 120+85+54+38+23 = 320 GB y luego calcula 85+23 = 108 GB para papelera y cachés",
+      "must_call_tools": ["run_shell"],
+      "goal_patterns": {
+        "required_any_strings": ["320", "trescientos veinte"],
+        "required_patterns_final": ["(?i)(108|ciento ocho)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 6,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_vhard_vuelo_restricciones",
+    "group": "scenarios",
+    "description": "Vuelo con restricciones — el más barato de los directos a Zúrich por la mañana; descarta escala y ciudad equivocada",
+    "difficulty": "very_hard",
+    "max_turns": 6,
+    "seed_messages": [
+      {"role": "user", "content": "Vuelo a Zúrich el día 15, saliendo por la mañana, y quiero el más barato de los directos. ¿Cuál?"}
+    ],
+    "tool_mocks": {
+      "web_search": [
+        {"args_contains": "", "result": "Opciones Madrid-Zúrich día 15:\nSWISS LX2025: 245€, sale 07:10, directo a Zúrich\nIberia IB3450: 280€, sale 09:30, directo a Zúrich\nVueling VY8320: 190€, con escala\neasyJet: 155€, directo a Ginebra"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM elige SWISS LX2025 (245€): descarta easyJet (Ginebra), Vueling (escala) e Iberia (más cara)",
+      "must_call_tools": ["web_search"],
+      "goal_patterns": {
+        "required_any_strings": ["SWISS", "LX2025"],
+        "required_patterns_final": ["(?i)(245|doscientos cuarenta y cinco)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 6,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_vhard_inconsistencia",
+    "group": "scenarios",
+    "description": "Inconsistencia — agenda y confirmación no cuadran; debe cruzar ambas fuentes y señalar la discrepancia",
+    "difficulty": "very_hard",
+    "max_turns": 6,
+    "seed_messages": [
+      {"role": "user", "content": "Antes de la reunión con la proveedora, comprueba la agenda y el fichero notas.txt con la confirmación. ¿A qué hora es la reunión?"}
+    ],
+    "tool_mocks": {
+      "get_calendar_events": [
+        {"args_contains": "", "result": "Reunión proveedora 10:00-11:00"}
+      ],
+      "read_file": [
+        {"args_contains": "", "result": "Confirmación: la reunión se mueve a las 12:00"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM consulta ambas fuentes, señala la contradicción y da como hora válida la confirmada: 12:00",
+      "must_call_tools": ["get_calendar_events", "read_file"],
+      "goal_patterns": {
+        "required_any_strings": ["12:00", "doce"],
+        "required_patterns": ["(?i)(contradic|no cuadra|discrepa|distinta|diferente|cambiado|moved|mover)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 6,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_vhard_bargein",
+    "group": "scenarios",
+    "description": "Interrupción y resultado obsoleto — cancela la investigación en curso, responde la nueva pregunta y no arrastra el resultado tardío del agente",
+    "difficulty": "very_hard",
+    "max_turns": 8,
+    "seed_messages": [
+      {"role": "user", "content": "¿Qué cámara me recomiendas para fotografía de paisaje?"}
+    ],
+    "subsequent_user_turns": [
+      {"at_turn": 3, "content": "Espera, olvídalo: mejor dime el precio de la Fujifilm X-T5."}
+    ],
+    "tool_mocks": {
+      "web_search": [
+        {"args_contains": "x-t5", "result": "Precios Fujifilm X-T5: 1899€ en Amazon, 1850€ en Fnac."},
+        {"args_contains": "paisaje", "result": "Comparativa cámaras para paisaje:\nSony A7 IV: 2400€, sensor full-frame, la mejor valorada\nCanon R6 II: 2900€, enfoque superior"}
+      ],
+      "run_agent_async": [
+        {
+          "task_contains": "investig",
+          "immediate_response": "[Tarea delegada al agente. El resultado llegará en breve.]",
+          "result": "La Sony A7 IV es la mejor cámara para paisaje.",
+          "delivered_at_turn": 4
+        }
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM interrumpe la investigación, busca el precio de la X-T5 y responde en su turno final pese al resultado tardío del agente",
+      "must_call_tools": ["web_search"],
+      "expected_tool_sequence": ["web_search", "run_agent_async", "web_search"],
+      "goal_patterns": {
+        "required_any_strings": ["1850", "1899", "mil ochocientos"],
+        "required_patterns_final": ["(?i)(1850|1899|X-T5|Fujifilm)"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 6,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  },
+  {
+    "id": "scn_vhard_alucinacion",
+    "group": "scenarios",
+    "description": "Anti-alucinación — el fichero no existe; debe admitir el fallo y jamás inventar la tarifa",
+    "difficulty": "very_hard",
+    "max_turns": 6,
+    "seed_messages": [
+      {"role": "user", "content": "Lee /Users/senor/proyectos/contrato_2026.pdf y dime cuánto cobramos por hora."}
+    ],
+    "tool_mocks": {
+      "read_file": [
+        {"args_contains": "", "result": "cat: /Users/senor/proyectos/contrato_2026.pdf: No such file or directory"}
+      ]
+    },
+    "expected_trace": {
+      "goal": "El LLM admite que no puede leer el fichero y no inventa ninguna tarifa por hora",
+      "must_call_tools": ["read_file"],
+      "must_not_call_tools": ["web_search"],
+      "goal_patterns": {
+        "required_patterns_final": ["(?i)(no he podido|no existe|no encuentro|no aparece|no puedo|no consta)"],
+        "forbidden_strings": ["según el contrato", "el contrato dice", "indicado en el contrato", "185 euros", "200 euros"]
+      },
+      "persona_persistence": {
+        "must_use_senor_every_turn": true,
+        "must_stay_in_spanish": true,
+        "max_assistant_sentences_per_turn": 6,
+        "forbidden_patterns_per_turn": ["^\\s*[-*•]\\s", "^#{1,6}\\s", "```", "https?://\\S+"]
+      }
+    }
+  }
+]

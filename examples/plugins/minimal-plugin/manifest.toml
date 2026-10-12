@@ -1,0 +1,10 @@
+# Minimal example plugin: just adds a prompt instruction.
+
+name = "minimal"
+assistant_name = "Minimal"
+description = "Minimal example: just adds a prompt"
+version = "0.1.0"
+
+[prompt]
+mode = "append"
+content = "Be extra concise."

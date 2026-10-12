@@ -1,0 +1,257 @@
+# Publishing Seneschal Releases
+
+This document explains how to build and publish a new seneschal release so that
+users can install it with:
+
+```sh
+curl -fsSL https://github.com/danieltvela/seneschal-voicebot/releases/latest/download/install.sh | sh
+```
+
+---
+
+## What gets published
+
+Each release contains:
+
+| File | Description |
+|------|-------------|
+| `voicebot-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon (M1/M2/M3/M4) |
+| `voicebot-x86_64-unknown-linux-gnu.tar.gz` | Linux x86\_64 |
+| `voicebot-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
+| `*.sha256` | SHA-256 checksums for each tarball |
+| `install.sh` | The installer script |
+
+Each tarball contains a single stripped executable named `seneschal`.
+
+### Compiled features per platform
+
+| Platform | Feature flags | TTS backend |
+|----------|--------------|-------------|
+| macOS Apple Silicon | `--features speech,avspeech,tui,parakeet` | AVSpeechSynthesizer (system, no models needed) |
+
+macOS Intel is **not released**: ONNX Runtime (>= 1.24) and `ort-sys` no
+longer publish binaries for Intel macOS, so the `parakeet` STT feature
+cannot build for `x86_64-apple-darwin`. Intel Macs can build from source
+without `parakeet`/`kokoro` (see "Manual builds" below).
+
+LLM models and the LLM server (`mlx_lm.server` or `omlx`) are **never
+bundled**. Users are expected to have them installed separately.
+
+---
+
+## GitHub Releases (Canonical / Public)
+
+This is the primary release path.  The workflow at `.github/workflows/release.yml`
+runs automatically whenever you push a version tag.  It builds the macOS
+Apple Silicon target on a native GitHub arm64 runner.
+
+### Step-by-step
+
+1. **Update the version** in `Cargo.toml`:
+   ```toml
+   [package]
+   version = "1.2.0"
+   ```
+
+2. **Commit** the version bump:
+   ```sh
+   git add Cargo.toml Cargo.lock
+   git commit -m "chore: bump version to v1.2.0"
+   ```
+
+3. **Tag the commit**.  Use an annotated tag — the tag message becomes the
+   release description on GitHub:
+   ```sh
+   git tag -a v1.2.0 -m "$(cat <<'MSG'
+   Short summary of what changed.
+
+   - Fix: describe a bug fix
+   - Feature: describe a new feature
+   MSG
+   )"
+   ```
+
+4. **Push tag** to trigger the workflow:
+   ```sh
+   git push origin v1.2.0
+   ```
+
+5. Open the **Actions** tab in your GitHub repository to watch the build
+progress.  One job runs (~10–15 min on GitHub's free runners).
+
+6. Once all jobs succeed, a GitHub Release is created automatically at
+   `https://github.com/danieltvela/seneschal-voicebot/releases/tag/v1.2.0`.
+
+### Pre-releases
+
+Tags that contain a hyphen (e.g. `v1.2.0-beta.1`, `v1.2.0-rc.1`) are
+automatically marked as **pre-release** on GitHub and are **not** served by the
+`/releases/latest/download/` URL.  Users must opt in explicitly:
+
+```sh
+SENECHAL_VERSION=v1.2.0-beta.1 \
+curl -fsSL https://github.com/danieltvela/seneschal-voicebot/releases/latest/download/install.sh | sh
+```
+
+---
+
+## Manual builds (without GitHub Actions)
+
+Use these commands when you need to build locally or on a CI system that is not
+GitHub Actions.
+
+### macOS — Apple Silicon
+
+```sh
+# Requires: Xcode Command Line Tools (xcode-select --install)
+cargo build --release --bin seneschal --features speech,avspeech,tui,parakeet
+strip target/release/seneschal
+tar -czf voicebot-aarch64-apple-darwin.tar.gz -C target/release seneschal
+```
+
+### macOS — Intel (source builds only)
+
+No Intel release tarball is published.  You can still build manually on an
+Intel Mac, but you must **not** enable the `parakeet` or `kokoro` features —
+`ort-sys` has no prebuilt ONNX Runtime for `x86_64-apple-darwin`:
+
+```sh
+cargo build --release --bin seneschal --features avspeech
+strip target/release/seneschal
+```
+
+### Linux x86\_64
+
+```sh
+# Build-time dependencies
+sudo apt-get install -y libasound2-dev espeak-ng pkg-config build-essential cmake
+
+cargo build --release --bin seneschal --features kokoro
+strip target/release/seneschal
+tar -czf voicebot-x86_64-unknown-linux-gnu.tar.gz -C target/release seneschal
+```
+
+### Linux ARM64
+
+Run the same Linux commands on an `aarch64` host (e.g. a Raspberry Pi 4/5,
+AWS Graviton, or an OrbStack/QEMU VM):
+
+```sh
+sudo apt-get install -y libasound2-dev espeak-ng pkg-config build-essential cmake
+cargo build --release --bin seneschal --features kokoro
+strip target/release/seneschal
+tar -czf voicebot-aarch64-unknown-linux-gnu.tar.gz -C target/release seneschal
+```
+
+---
+
+## Build dependencies
+
+### macOS (both architectures)
+
+| Dependency | Source | Notes |
+|-----------|--------|-------|
+| Xcode CLT | `xcode-select --install` | Provides `cc`, Metal SDK, CoreML framework |
+| Rust stable | rustup | 1.80+ recommended |
+
+`whisper-cpp-plus` compiles with Metal acceleration automatically on macOS.
+No extra libraries need to be installed.
+
+### Linux (both architectures)
+
+| Dependency | Package (Debian/Ubuntu) | Purpose |
+|-----------|------------------------|---------|
+| `libasound2-dev` | `apt-get install libasound2-dev` | CPAL audio I/O (build-time + runtime) |
+| `espeak-ng` | `apt-get install espeak-ng` | Kokoro TTS phonemization (runtime) |
+| `pkg-config` | `apt-get install pkg-config` | Used by several crates |
+| `build-essential` | `apt-get install build-essential` | C toolchain for native crates |
+| `cmake` | `apt-get install cmake` | Required by whisper-cpp-plus build scripts |
+| `libssl-dev` | `apt-get install libssl-dev` | reqwest TLS (build-time) |
+
+#### Runtime dependencies (must be present on the user's machine)
+
+The installer warns users if these are missing, but does not install them:
+
+- **`libasound2`** — ALSA audio library
+- **`espeak-ng`** — Kokoro TTS phonemizer
+
+---
+
+## What the installer downloads
+
+When a user runs `install.sh`, the following files are downloaded automatically:
+
+| File | Source | Size | Platform |
+|------|--------|------|----------|
+| `seneschal` binary | GitHub Releases | ~30–50 MB | both |
+| `ggml-large-v3-turbo.bin` | Hugging Face (ggerganov/whisper.cpp) | ~1.6 GB | both |
+| `kokoro-v1.0.onnx` | GitHub (thewh1teagle/kokoro-onnx) | ~305 MB | Linux only |
+| `voices-v1.0.bin` | GitHub (thewh1teagle/kokoro-onnx) | ~28 MB | Linux only |
+
+On macOS, Kokoro models are not needed — AVSpeechSynthesizer is a system
+framework that requires no additional files.
+
+---
+
+## Testing the installer locally
+
+You can test `install.sh` without publishing a release by serving the tarball
+locally:
+
+```sh
+# 1. Build the binary for your current platform
+cargo build --release --bin seneschal --features avspeech   # macOS
+# cargo build --release --bin seneschal --features kokoro   # Linux
+
+# 2. Package it
+strip target/release/seneschal
+tar -czf voicebot-$(rustc -vV | grep host | cut -d' ' -f2).tar.gz \
+    -C target/release seneschal
+
+# 3. Serve locally
+python3 -m http.server 9000 &
+
+# 4. Run the installer pointing at your local server
+GITHUB_REPO="localhost:9000"  \
+  SENECHAL_VERSION=""          \
+  sh install.sh
+```
+
+Or simply test with the binary already in place by running install.sh directly:
+
+```sh
+# Override SENECHAL_HOME to avoid touching ~/.seneschal during testing
+SENECHAL_HOME=/tmp/seneschal-test sh install.sh
+```
+
+---
+
+## Updating the install.sh URL in documentation
+
+The `readme.md` and `install.sh` already use the real GitHub URL
+(`danielvela/seneschal`). No manual replacement is needed.
+
+---
+
+---
+
+## Checklist for a new release
+
+- [ ] Version bumped in `Cargo.toml`
+- [ ] `Cargo.lock` updated (`cargo build` or `cargo update`)
+- [ ] All tests pass: `cargo test`
+- [ ] Clippy clean: `cargo clippy --all-targets --no-deps` (no errors)
+- [ ] No stale placeholders: `grep -Rn 'OWNER/REPO\|github.com/seneschal/seneschal\|origin main\|merge into main' Cargo.toml install.sh readme.md doc/PUBLISHING.md CONTRIBUTING.md`
+- [ ] No old VAD path references: `grep -Rn 'models/silero_vad.onnx' src/e2e_tests.rs readme.md .env.example doc/`
+- [ ] VAD model URL in installers is correct (`VAD_MODEL_URL` defaults to k2-fsa/sherpa-onnx release)
+- [ ] All model URLs overrideable: `WHISPER_MODEL_URL`, `VAD_MODEL_URL`, `KOKORO_MODEL_URL`, `KOKORO_VOICES_URL`
+- [ ] Installer smoke test passes: `bash scripts/test-installers.sh`
+- [ ] `readme.md` updated for new features / config vars
+- [ ] `GITHUB_REPO` at the top of `install.sh` points to the real repo
+- [ ] CI workflow exists and is valid: `.github/workflows/ci.yml`
+- [ ] Release workflows exist: `.github/workflows/release.yml`
+- [ ] Annotated tag created: `git tag -a vX.Y.Z -m "..."`
+- [ ] Tag pushed to GitHub: `git push origin vX.Y.Z`
+- [ ] GitHub Actions build passes (check the Actions tab)
+- [ ] Gitea Actions build passes (`http://tesla.local:3000/danielvela/seneschal/actions`)
+- [ ] Test `install.sh` on at least one macOS and one Linux machine

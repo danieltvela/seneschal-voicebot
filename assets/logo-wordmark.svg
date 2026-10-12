@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 128" role="img" width="520" height="128">
+  <title>Seneschal wordmark</title>
+  <desc>The project name "Seneschal" set in a clean geometric sans. Uses currentColor so it adapts to light/dark backgrounds.</desc>
+
+  <style>
+    .wm {
+      font-family: "Inter", "Work Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-weight: 600;
+      font-size: 84px;
+      letter-spacing: 1px;
+      fill: currentColor;
+    }
+  </style>
+
+  <text class="wm" x="0" y="92">Seneschal</text>
+</svg>

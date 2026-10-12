@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Messages</h1>
+<p class="success-banner" style="display: {% if deleted %}block{% else %}none{% endif %}">Message deleted.</p>
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Session</th>
+            <th>Time</th>
+            <th>Role</th>
+            <th>Content Preview</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for msg in messages %}
+        <tr>
+            <td>{{ msg.id }}</td>
+            <td><a href="/sessions/{{ msg.session_id }}">{{ msg.session_id }}</a></td>
+            <td>{{ msg.timestamp }}</td>
+            <td><span class="badge badge-{{ msg.role_class }}">{{ msg.role_display }}</span></td>
+            <td>{{ msg.content }}</td>
+            <td><a href="/messages/{{ msg.id }}/delete" class="btn-delete">Delete</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="pagination">
+    {% if pagination.has_previous %}
+        <a href="/messages?page={{ pagination.previous_page }}">&lt; Previous</a>
+        <a href="/messages?page=1">First</a>
+    {% else %}
+        <span class="disabled">&lt; Previous</span>
+        <span class="disabled">First</span>
+    {% endif %}
+
+    {% for link in pagination.links %}
+        {% if link.is_separator %}
+            <span class="separator">{{ link.label }}</span>
+        {% elif link.is_current %}
+            <span class="current">{{ link.label }}</span>
+        {% else %}
+            <a href="/messages?page={{ link.page }}">{{ link.label }}</a>
+        {% endif %}
+    {% endfor %}
+
+    {% if pagination.has_next %}
+        <a href="/messages?page={{ pagination.total_pages }}">Last</a>
+        <a href="/messages?page={{ pagination.next_page }}">Next &gt;</a>
+    {% else %}
+        <span class="disabled">Last</span>
+        <span class="disabled">Next &gt;</span>
+    {% endif %}
+</div>
+{% endblock %}

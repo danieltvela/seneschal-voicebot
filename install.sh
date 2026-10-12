@@ -1,0 +1,1818 @@
+#!/bin/bash
+# Seneschal Installer — GitHub release edition
+# Usage: curl -fsSL https://raw.githubusercontent.com/danieltvela/seneschal-voicebot/main/install.sh | sh
+#
+# Modes:
+#   Interactive (default): prompts for language, LLM, voice, etc.
+#                          When piped, reads from /dev/tty for prompts.
+#   Non-interactive (-n): uses defaults/env vars only; never prompts.
+#
+# Environment overrides:
+#   GITHUB_REPO       — GitHub owner/repo (default: danieltvela/seneschal-voicebot)
+#   SENESCHAL_HOME    — where models/data/config live (default: ~/.seneschal)
+#   BIN_DIR           — where to place the `seneschal` launcher (default: ~/.local/bin)
+#   SENESCHAL_VERSION — pin a release tag, e.g. v1.2.0 (default: latest)
+#   STT_PROVIDER        — parakeet | whisper (default: parakeet)
+#   PARAKEET_MODEL_BASE — base URL for Parakeet model files (default: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main)
+#
+set -e
+
+# ── Stdin / interactivity policy ──────────────────────────────────────────────
+# When invoked as `curl … | sh`, stdin is the pipe carrying this script.
+# After the shell consumes the script body, every `read` would hit EOF and
+# silently fall back to defaults. We prevent that by:
+#   — requiring an explicit --non-interactive flag for headless installs, OR
+#   — redirecting interactive reads to /dev/tty when stdin is a pipe.
+_INTERACTIVE=1
+for _arg in "$@"; do
+    case "$_arg" in
+        -n|--non-interactive) _INTERACTIVE=0 ;;
+        -h|--help)
+            printf >&2 'Usage: install.sh [-n|--non-interactive]\n  -n, --non-interactive  Use env vars / defaults only; never prompt.\n'
+            exit 0 ;;
+    esac
+done
+
+# ── Caller contract ──────────────────────────────────────────────
+GITHUB_REPO="${GITHUB_REPO:-danieltvela/seneschal-voicebot}"
+SENESCHAL_VERSION="${SENESCHAL_VERSION:-latest}"
+
+if [ "$SENESCHAL_VERSION" = "latest" ]; then
+    RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/latest/download"
+else
+    RELEASE_BASE="https://github.com/${GITHUB_REPO}/releases/download/${SENESCHAL_VERSION}"
+fi
+
+case "$(uname -s)" in
+    Darwin) PLATFORM="apple-darwin" ;;
+    Linux)  PLATFORM="unknown-linux-gnu" ;;
+    *)      PLATFORM="apple-darwin" ;;
+esac
+case "$(uname -m)" in
+    x86_64)          ARCH_TRIPLE="x86_64" ;;
+    arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
+    *)               ARCH_TRIPLE="aarch64" ;;
+esac
+TARBALL="voicebot-${ARCH_TRIPLE}-${PLATFORM}.tar.gz"
+
+# TTS defaults — overridden at runtime by select_voice_macos / select_voice_kokoro
+DEFAULT_TTS_PROVIDER="avspeech"
+DEFAULT_TTS_VOICE="Marisol (Enhanced)"
+DEFAULT_KOKORO_VOICE="es_xb"
+DEFAULT_KOKORO_LANG="es"
+
+# ── All installer logic (inlined from scripts/lib-installer-common.sh) ─────
+
+# Output helpers — use ANSI colors only when stdout is a terminal (not when piped).
+if [ -t 1 ]; then
+    _GREEN='\033[0;32m'; _YELLOW='\033[1;33m'; _RED='\033[0;31m'; _NC='\033[0m'
+else
+    _GREEN=''; _YELLOW=''; _RED=''; _NC=''
+fi
+
+# `info`, `warn`, `error`, `step` print to stderr so $() captures stay clean.
+# `error` exits 1 — it is the only place we exit.
+info()  { printf "${_GREEN}[seneschal]${_NC} %s\n" "$1" >&2; }
+warn()  { printf "${_YELLOW}[seneschal]${_NC} %s\n" "$1" >&2; }
+error() { printf "${_RED}[seneschal] ERROR:${_NC} %s\n" "$1" >&2; exit 1; }
+step()  { printf "\n${_GREEN}▶ %s${_NC}\n" "$1" >&2; }
+
+# ── Stdin TTY check (must be after error() is defined) ────────────────────────
+if [ "$_INTERACTIVE" = "0" ]; then
+    # Non-interactive mode — skip all prompts, use defaults
+    :
+elif [ ! -t 0 ]; then
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        exec </dev/tty || {
+            warn "Could not redirect stdin to /dev/tty."
+            warn "Falling back to non-interactive mode (using defaults)."
+            _INTERACTIVE=0
+        }
+    else
+        warn "stdin is not a TTY and /dev/tty is unavailable."
+        warn "Falling back to non-interactive mode (using defaults)."
+        warn "Re-run with --non-interactive flag to suppress this warning."
+        _INTERACTIVE=0
+    fi
+fi
+
+# ── Interactive I/O primitives ────────────────────────────────────────────────
+# All three return their result on stdout so callers can do:
+#     VOICE=$(ask "Voice?" "Marisol (Enhanced)")
+# They print prompts to stderr so they don't pollute the captured value.
+
+# ask PROMPT DEFAULT — returns DEFAULT if no input or non-TTY.
+# Skips prompt entirely in non-interactive mode.
+ask() {
+    _prompt="$1"; _default="$2"
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        printf "%s" "$_default"
+        return
+    fi
+    printf "%s [%s]: " "$_prompt" "$_default" >&2
+    _reply=""
+    # `read` may fail under set -e when input ends; ignore that case.
+    read -r _reply || _reply=""
+    if [ -z "$_reply" ]; then
+        printf "%s" "$_default"
+    else
+        printf "%s" "$_reply"
+    fi
+}
+
+# confirm PROMPT DEFAULT(y|n) — returns "y" or "n" on stdout.
+# Non-interactive mode: returns default without prompting.
+confirm() {
+    _prompt="$1"; _default="$2"
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        printf "%s" "$_default"
+        return
+    fi
+    case "$_default" in
+        y|Y) _hint="Y/n" ;;
+        *)   _hint="y/N" ;;
+    esac
+    printf "%s [%s]: " "$_prompt" "$_hint" >&2
+    _reply=""
+    read -r _reply || _reply=""
+    case "$_reply" in
+        [Yy]*) printf "y" ;;
+        [Nn]*) printf "n" ;;
+        "")    printf "%s" "$_default" ;;
+        *)     printf "%s" "$_default" ;;
+    esac
+}
+
+# pick_from_list PROMPT DEFAULT_INDEX ITEM1 ITEM2 ... — returns selected item.
+# DEFAULT_INDEX is 1-based. Non-TTY: returns items[DEFAULT_INDEX-1].
+# TTY: shows numbered list, accepts number or freeform text.
+# Non-interactive mode: returns default item without prompting.
+pick_from_list() {
+    _prompt="$1"; _default_idx="$2"; shift 2
+    # Remaining args are the items
+    _items_count=$#
+    if [ "$_items_count" = "0" ]; then
+        error "pick_from_list: no items provided"
+    fi
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        # Non-interactive: return default item directly
+        _i=0
+        for _item in "$@"; do
+            _i=$((_i + 1))
+            if [ "$_i" = "$_default_idx" ]; then
+                printf "%s" "$_item"
+                return
+            fi
+        done
+    fi
+    printf "\n%s\n" "$_prompt" >&2
+    _i=0
+    for _item in "$@"; do
+        _i=$((_i + 1))
+        _marker="  "
+        if [ "$_i" = "$_default_idx" ]; then _marker=" *"; fi
+        printf "  %s%d) %s\n" "$_marker" "$_i" "$_item" >&2
+    done
+    printf "Choose [%s]: " "$_default_idx" >&2
+    _reply=""
+    read -r _reply || _reply=""
+    if [ -z "$_reply" ]; then
+        _reply="$_default_idx"
+    fi
+    # Numeric in range?
+    case "$_reply" in
+        *[!0-9]*)
+            # Not a number — treat as freeform
+            printf "%s" "$_reply"
+            return
+            ;;
+    esac
+    if [ "$_reply" -ge 1 ] && [ "$_reply" -le "$_items_count" ] 2>/dev/null; then
+        _i=0
+        for _item in "$@"; do
+            _i=$((_i + 1))
+            if [ "$_i" = "$_reply" ]; then
+                printf "%s" "$_item"
+                return
+            fi
+        done
+    fi
+    # Out of range numeric — fall back to default
+    _i=0
+    for _item in "$@"; do
+        _i=$((_i + 1))
+        if [ "$_i" = "$_default_idx" ]; then
+            printf "%s" "$_item"
+            return
+        fi
+    done
+}
+
+# select_language — interactive language choice, sets _LANGUAGE to "en" or "es".
+select_language() {
+    step "Language selection"
+    _lang_choice=$(pick_from_list "Choose your language / Elige tu idioma" 1 "English" "Español")
+    case "$_lang_choice" in
+        "Español") _LANGUAGE="es" ;;
+        *)         _LANGUAGE="en" ;;
+    esac
+    info "  Selected language: $_LANGUAGE"
+}
+
+# ── Defaults & derived paths ──────────────────────────────────────────────────
+_apply_defaults() {
+    SENESCHAL_HOME="${SENESCHAL_HOME:-$HOME/.seneschal}"
+    BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+    SENESCHAL_VERSION="${SENESCHAL_VERSION:-latest}"
+
+    WHISPER_MODEL_URL="${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin}"
+    KOKORO_MODEL_URL="${KOKORO_MODEL_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx}"
+    KOKORO_VOICES_URL="${KOKORO_VOICES_URL:-https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin}"
+    VAD_MODEL_URL="${VAD_MODEL_URL:-https://huggingface.co/ggml-org/silero-v5.1.2/resolve/main/ggml-silero-v5.1.2.bin}"
+    PARAKEET_MODEL_BASE="${PARAKEET_MODEL_BASE:-https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main}"
+
+    SENESCHAL_BIN_DIR="$SENESCHAL_HOME/bin"
+    SENESCHAL_MODELS_DIR="$SENESCHAL_HOME/models"
+    SENESCHAL_DATA_DIR="$SENESCHAL_HOME/data"
+}
+
+# ── Platform detection ────────────────────────────────────────────────────────
+_detect_platform() {
+    OS="$(uname -s)"
+    ARCH="$(uname -m)"
+    case "$OS" in
+        Darwin) OS_NAME="macOS" ;;
+        Linux)  OS_NAME="Linux" ;;
+        *)      error "Unsupported operating system: $OS. Only macOS and Linux are supported." ;;
+    esac
+    case "$ARCH" in
+        x86_64)          ARCH_TRIPLE="x86_64" ;;
+        arm64 | aarch64) ARCH_TRIPLE="aarch64" ;;
+        *)               error "Unsupported architecture: $ARCH. Only x86_64 and arm64/aarch64 are supported." ;;
+    esac
+    if [ "$OS" = "Darwin" ] && [ "$ARCH_TRIPLE" = "x86_64" ]; then
+        error "macOS releases are Apple Silicon (aarch64) only. ONNX Runtime no longer ships Intel macOS binaries, so the default Parakeet STT cannot build for Intel. To build from source on an Intel Mac, use features that avoid ONNX Runtime, e.g.: cargo build --release --bin seneschal --features avspeech (do NOT enable 'parakeet' or 'kokoro')."
+    fi
+    case "$OS" in
+        Darwin) PLATFORM="apple-darwin" ;;
+        Linux)  PLATFORM="unknown-linux-gnu" ;;
+    esac
+    TARGET="${ARCH_TRIPLE}-${PLATFORM}"
+    BINARY_URL="${RELEASE_BASE}/${TARBALL}"
+}
+
+# ── Utility: download a file ──────────────────────────────────────────────────
+download() {
+    _url="$1"; _dest="$2"; _label="$3"
+    info "  Downloading: $_label"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --progress-bar -o "$_dest" "$_url" || {
+            rm -f "$_dest"
+            error "Download failed: $_url"
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --show-progress -O "$_dest" "$_url" || {
+            rm -f "$_dest"
+            error "Download failed: $_url"
+        }
+    else
+        error "Neither curl nor wget found. Please install one and re-run."
+    fi
+}
+
+# ── Step 1: System dependency check ──────────────────────────────────────────
+check_dependencies() {
+    step "Checking system dependencies"
+    if [ "$OS" = "Linux" ]; then
+        _missing=""
+        if ! ldconfig -p 2>/dev/null | grep -q "libasound\.so" && \
+           ! find /usr/lib /usr/local/lib 2>/dev/null | grep -q "libasound"; then
+            _missing="$_missing libasound2"
+        fi
+        if ! command -v espeak-ng >/dev/null 2>&1; then
+            _missing="$_missing espeak-ng"
+        fi
+        if [ -n "$_missing" ]; then
+            warn "The following runtime dependencies are missing:$_missing"
+            warn ""
+            warn "Install them before running seneschal:"
+            warn "  Debian/Ubuntu:  sudo apt-get install -y$_missing"
+            warn "  Fedora/RHEL:    sudo dnf install -y$_missing"
+            warn "  Arch Linux:     sudo pacman -S$_missing"
+            warn ""
+            warn "Installation will continue, but seneschal may fail to start."
+        else
+            info "  All Linux runtime dependencies found."
+        fi
+    fi
+    if [ "$OS" = "Darwin" ]; then
+        info "  macOS detected — TTS: AVSpeechSynthesizer (built-in)."
+        info "  Microphone access will be requested on first run."
+    fi
+}
+
+# ── Step 1.5: Calendar & Reminders permission prompt (macOS only) ────────────
+# Asks the user if they want to grant Seneschal access to Apple Calendar and
+# Reminders via iCloud. If they agree, a harmless AppleScript is run to
+# trigger the macOS TCC (Transparency, Consent, and Control) permission
+# dialog, so the user can Allow access before running Seneschal for the first
+# time.
+prompt_calendar_reminders() {
+    if [ "$OS" != "Darwin" ]; then
+        return
+    fi
+
+    step "Apple Calendar & Reminders"
+    info "  Seneschal can manage your Apple Calendar and Reminders."
+    USE_CALENDAR="n"
+    USE_REMINDERS="n"
+
+    _grant_calendar=$(confirm "Allow Seneschal to access Apple Calendar?" "n")
+    if [ "$_grant_calendar" = "y" ]; then
+        USE_CALENDAR="y"
+        info "  Requesting Calendar access..."
+        info "  A permission dialog will appear: click 'Allow' or 'OK'."
+        osascript -e 'tell application "Calendar" to get name of first calendar' \
+            2>/dev/null || true
+        sleep 0.5
+    fi
+
+    _grant_reminders=$(confirm "Allow Seneschal to access Apple Reminders?" "n")
+    if [ "$_grant_reminders" = "y" ]; then
+        USE_REMINDERS="y"
+        info "  Requesting Reminders access..."
+        info "  A permission dialog will appear: click 'Allow' or 'OK'."
+        osascript -e 'tell application "Reminders" to get name of first list' \
+            2>/dev/null || true
+        sleep 0.5
+    fi
+
+    if [ "$USE_CALENDAR" = "y" ] || [ "$USE_REMINDERS" = "y" ]; then
+        info "  Access granted. Seneschal will use Apple Events for"
+        info "  calendar and reminders management."
+    else
+        info "  Skipped. Seneschal will default to enabled (Apple Events)"
+        info "  and ask for permissions when first used."
+    fi
+}
+
+# ── Step 2: Create directory layout ──────────────────────────────────────────
+setup_directories() {
+    step "Setting up directories"
+    mkdir -p "$SENESCHAL_BIN_DIR"
+    mkdir -p "$SENESCHAL_MODELS_DIR"
+    mkdir -p "$SENESCHAL_DATA_DIR"
+    mkdir -p "$BIN_DIR"
+    info "  Install home : $SENESCHAL_HOME"
+    info "  Launcher dir : $BIN_DIR"
+}
+
+# ── Step 3: Download and install the pre-compiled binary ──────────────────────
+install_binary() {
+    step "Downloading seneschal binary ($TARGET)"
+    _tmp_dir="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$_tmp_dir'" EXIT
+    download "$BINARY_URL" "$_tmp_dir/$TARBALL" "seneschal ($TARGET)"
+    info "  Extracting binary..."
+    tar -xzf "$_tmp_dir/$TARBALL" -C "$_tmp_dir"
+    if [ ! -f "$_tmp_dir/seneschal" ]; then
+        error "Binary not found inside tarball. Expected: seneschal"
+    fi
+    mv "$_tmp_dir/seneschal" "$SENESCHAL_BIN_DIR/seneschal"
+    chmod +x "$SENESCHAL_BIN_DIR/seneschal"
+    rm -rf "$_tmp_dir"
+    trap - EXIT
+    info "  Binary installed: $SENESCHAL_BIN_DIR/seneschal"
+}
+
+# ── Step 4: Download Whisper STT model (with size picker) ────────────────────
+# Whisper model registry: id|name|filename|url
+_WHISPER_REGISTRY='tiny|tiny|ggml-tiny.bin|https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+small|small|ggml-small.bin|https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+large-v3-turbo|large-v3-turbo|ggml-large-v3-turbo.bin|https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin'
+
+_pick_whisper_model() {
+    # Echo the model id (tiny|small|large-v3-turbo) on stdout.
+    # Build display items: "tiny (~75 MB)" etc.
+    _items=""
+    _defaults_idx=3   # default to large-v3-turbo (preserves prior behavior)
+    _i=0
+    _OLD_IFS="$IFS"
+    IFS='
+'
+    for _line in $_WHISPER_REGISTRY; do
+        IFS='|'
+        set -- $_line
+        _id="$1"; _name="$2"; _fname="$3"; _url="$4"
+        IFS="$_OLD_IFS"
+        _i=$((_i + 1))
+        case "$_id" in
+            tiny)          _size="~75 MB"   ;;
+            small)         _size="~488 MB"  ;;
+            large-v3-turbo) _size="~1.6 GB" ;;
+            *)             _size="?"        ;;
+        esac
+        if [ -z "$_items" ]; then
+            _items="$_name ($_size)"
+        else
+            # Newline-separated — use a sentinel since items contain spaces.
+            _items="$_items|$_name ($_size)"
+        fi
+        IFS='
+'
+    done
+    IFS="$_OLD_IFS"
+    # Convert sentinel back to newline.
+    _items_nl=$(printf "%s" "$_items" | tr '|' '
+')
+    # Hand the items to pick_from_list. We use the file-descriptor trick to
+    # pass newlines: write items to a tmp file and read line-by-line.
+    _items_file="$(mktemp)"
+    printf "%s" "$_items_nl" > "$_items_file"
+    _labels=""
+    while IFS= read -r _line; do
+        if [ -z "$_labels" ]; then _labels="$_line"; else _labels="$_labels|$_line"; fi
+    done < "$_items_file"
+    rm -f "$_items_file"
+    # Use eval-ish: pick_from_list expects positional args, but we have
+    # variable-count items with newlines. Call directly with field splitting.
+    _chosen_label=$(pick_from_list "Whisper model size (controls transcription quality vs install time)" "$_defaults_idx" $_labels)
+    rm -f "$_items_file" 2>/dev/null
+    # Map label back to id.
+    _i=0
+    _chosen_id=""
+    IFS='
+'
+    for _line in $_WHISPER_REGISTRY; do
+        IFS='|'
+        set -- $_line
+        _id="$1"; _name="$2"; _fname="$3"; _url="$4"
+        IFS="$_OLD_IFS"
+        _i=$((_i + 1))
+        if [ "$_name ($_size)" = "$_chosen_label" ] 2>/dev/null; then
+            # Re-derive size (we lost it; rebuild from id).
+            case "$_id" in
+                tiny)          _size2="~75 MB"   ;;
+                small)         _size2="~488 MB"  ;;
+                large-v3-turbo) _size2="~1.6 GB" ;;
+                *)             _size2="?"        ;;
+            esac
+            if [ "$_name ($_size2)" = "$_chosen_label" ]; then
+                _chosen_id="$_id"
+                break
+            fi
+        fi
+        IFS='
+'
+    done
+    IFS="$_OLD_IFS"
+    # Fallback if mapping failed: default to large-v3-turbo
+    if [ -z "$_chosen_id" ]; then
+        _chosen_id="large-v3-turbo"
+    fi
+    printf "%s" "$_chosen_id"
+}
+
+# ── Step 3.5: STT provider selection (issue #223 — parakeet default) ───
+# Sets _STT_CHOICE to "parakeet" or "whisper". Parakeet is the default:
+# fastest STT for real-time interaction (25 languages incl. ES/EN).
+configure_stt_provider() {
+    step "Configuring STT (speech-to-text)"
+    _stt_env=$(printf "%s" "${STT_PROVIDER:-}" | tr '[:upper:]' '[:lower:]')
+    case "$_stt_env" in
+        parakeet|whisper)
+            _STT_CHOICE="$_stt_env"
+            info "  STT provider from STT_PROVIDER env: $_STT_CHOICE"
+            return
+            ;;
+        "") : ;;
+        *)
+            warn "  Unknown STT_PROVIDER '$_stt_env' (expected: parakeet | whisper)."
+            ;;
+    esac
+    _choice=$(pick_from_list "Speech-to-text (STT) engine" 1 \
+        "Parakeet (recommended — fastest, 25 languages incl. ES/EN)" \
+        "Whisper (99 languages, auto-detect)")
+    case "$_choice" in
+        "Whisper"*) _STT_CHOICE="whisper" ;;
+        *)          _STT_CHOICE="parakeet" ;;
+    esac
+    info "  Selected STT: $_STT_CHOICE"
+}
+
+install_whisper_model() {
+    step "Installing Whisper STT model"
+    # If WHISPER_MODEL_URL is set (env override or test fixture), use it
+    # directly. The picker only runs when no URL override is provided.
+    if [ -n "${WHISPER_MODEL_URL:-}" ]; then
+        # Derive a filename from the URL path.
+        _fname=$(basename "${WHISPER_MODEL_URL%%\?*}")
+        case "$_fname" in
+            ggml-*.bin) ;;
+            *) error "WHISPER_MODEL_URL does not look like a Whisper model: $_fname" ;;
+        esac
+        WHISPER_MODEL_FILE="$_fname"
+        _dest="$SENESCHAL_MODELS_DIR/$_fname"
+        if [ -f "$_dest" ]; then
+            info "  Already present ($_fname) — skipping (delete to re-download)."
+            return
+        fi
+        warn "  Downloading $_fname (via WHISPER_MODEL_URL override)..."
+        download "$WHISPER_MODEL_URL" "$_dest" "Whisper $_fname"
+        info "  Whisper model installed."
+        return
+    fi
+    # No URL override — run the size picker.
+    _chosen_id=$(_pick_whisper_model)
+    _fname=""
+    _url=""
+    _OLD_IFS="$IFS"
+    IFS='
+'
+    for _line in $_WHISPER_REGISTRY; do
+        IFS='|'
+        set -- $_line
+        _id="$1"; _name="$2"; _fname="$3"; _url="$4"
+        IFS="$_OLD_IFS"
+        if [ "$_id" = "$_chosen_id" ]; then
+            break
+        fi
+        IFS='
+'
+    done
+    IFS="$_OLD_IFS"
+    if [ -z "$_fname" ]; then
+        error "Unknown Whisper model id: $_chosen_id"
+    fi
+    WHISPER_MODEL_FILE="$_fname"
+    _dest="$SENESCHAL_MODELS_DIR/$_fname"
+    if [ -f "$_dest" ]; then
+        info "  Already present ($_fname) — skipping (delete to re-download)."
+        return
+    fi
+    warn "  Downloading $_fname..."
+    download "$_url" "$_dest" "Whisper $_name"
+    info "  Whisper model installed."
+}
+
+# ── Step 4.5: Download Silero VAD model ──────────────────────────────────────
+install_vad_model() {
+    step "Installing Silero VAD model"
+    _dest="$SENESCHAL_MODELS_DIR/ggml-silero-vad.bin"
+    if [ -f "$_dest" ]; then
+        info "  Already present — skipping (delete to re-download)."
+        return
+    fi
+    warn "  Downloading Silero VAD model (~10 MB)..."
+    download "$VAD_MODEL_URL" "$_dest" "Silero VAD"
+    info "  VAD model installed."
+}
+
+# ── Step 4.2: Download Parakeet STT model ─────────────────────────────────
+# parakeet-rs 0.3.5 requires, inside PARAKEET_MODEL_DIR:
+#   encoder-model.onnx (+ external data: encoder-model.onnx.data)
+#   decoder_joint-model.onnx
+#   vocab.txt
+PARAKEET_MODEL_SUBDIR="parakeet-tdt-0.6b-v3-onnx"
+
+install_parakeet_model() {
+    step "Installing Parakeet STT model (parakeet-tdt-0.6b-v3-onnx)"
+    _dir="$SENESCHAL_MODELS_DIR/$PARAKEET_MODEL_SUBDIR"
+    mkdir -p "$_dir"
+    for _f in encoder-model.onnx encoder-model.onnx.data decoder_joint-model.onnx vocab.txt; do
+        _dest="$_dir/$_f"
+        if [ -f "$_dest" ]; then
+            info "  Already present ($_f) — skipping (delete to re-download)."
+            continue
+        fi
+        case "$_f" in
+            encoder-model.onnx)      _size="~40 MB"  ;;
+            encoder-model.onnx.data) _size="~2.3 GB" ;;
+            decoder_joint-model.onnx) _size="~69 MB" ;;
+            *)                       _size="~0.1 MB" ;;
+        esac
+        warn "  Downloading $_f ($_size)..."
+        download "$PARAKEET_MODEL_BASE/$_f" "$_dest" "Parakeet $_f"
+    done
+    info "  Parakeet model installed: $_dir"
+}
+
+# ── LLM model discovery ──────────────────────────────────────────────────────
+# Probe LLM_URL/v1/models and return newline-separated model IDs on stdout.
+# Usage: _model_ids=$(discover_llm_models "$LLM_URL" "$API_KEY")
+# Returns empty string on failure (server unreachable, no models, parse error).
+discover_llm_models() {
+    _disc_url="$1"; _disc_key="$2"
+    _disc_url="${_disc_url%/}/v1/models"
+    _disc_body=""
+
+    # Build curl command with optional auth header
+    if [ -n "$_disc_key" ]; then
+        _disc_body=$(curl -fsS --max-time 5 -H "Authorization: Bearer $_disc_key" "$_disc_url" 2>/dev/null) || _disc_body=""
+    else
+        _disc_body=$(curl -fsS --max-time 5 "$_disc_url" 2>/dev/null) || _disc_body=""
+    fi
+
+    [ -z "$_disc_body" ] && return 0
+
+    # Parse model IDs from JSON — try jq, then python3, then grep fallback
+    _model_ids=""
+    if command -v jq >/dev/null 2>&1; then
+        _model_ids=$(printf "%s" "$_disc_body" | jq -r '.data[].id // empty' 2>/dev/null) || _model_ids=""
+    elif command -v python3 >/dev/null 2>&1; then
+        _model_ids=$(python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    for m in d.get('data', []):
+        print(m.get('id', ''))
+except: pass
+" <<< "$_disc_body" 2>/dev/null) || _model_ids=""
+    else
+        # Fallback: grep for "id" fields — works for standard OpenAI format
+        _model_ids=$(printf "%s\n" "$_disc_body" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/' 2>/dev/null) || _model_ids=""
+    fi
+
+    printf "%s" "$_model_ids"
+}
+
+# ── LLM provider configuration ───────────────────────────────────────────────
+# Replaces the old install_mlx_lm(). On macOS offers a choice between
+# installing mlx-lm and using an existing provider.
+# On Linux always asks for an existing provider URL.
+configure_llm_provider() {
+    step "Configuring LLM provider"
+
+    # Variables consumed downstream by create_env():
+    _LLM_CHOICE="own"
+    _LLM_URL=""
+    _LLM_API_KEY=""
+    _LLM_MODEL=""
+
+    if [ "$OS" = "Darwin" ]; then
+        _choice=$(pick_from_list "LLM provider" 1 \
+            "Use my own LLM provider (OpenAI-compatible)" \
+            "Install mlx-lm (runs a local model on your Mac)")
+    else
+        _choice="Use my own LLM provider (OpenAI-compatible)"
+        info "  Linux detected — using your own LLM provider."
+    fi
+
+    case "$_choice" in
+        "Use my own LLM provider"*)
+            _LLM_CHOICE="own"
+            _LLM_URL=$(ask "LLM server URL (OpenAI-compatible)" "http://127.0.0.1:8000")
+            _LLM_API_KEY=$(ask "API key (leave blank if not needed)" "")
+            if [ -n "$_LLM_API_KEY" ]; then
+                info "  API key configured."
+            else
+                info "  No API key — server must allow unauthenticated access."
+            fi
+
+            # Discover available models from the server
+            _model_ids=$(discover_llm_models "$_LLM_URL" "$_LLM_API_KEY")
+            _model_count=0
+            if [ -n "$_model_ids" ]; then
+                _model_count=$(printf "%s\n" "$_model_ids" | grep -c . 2>/dev/null) || _model_count=0
+            fi
+
+            if [ "$_model_count" -eq 1 ]; then
+                # Single model — auto-select
+                _LLM_MODEL="$_model_ids"
+                info "  Found 1 model on server: $_LLM_MODEL"
+            elif [ "$_model_count" -gt 1 ]; then
+                # Multiple models — show selection menu
+                warn "  ⚠ Gemma-4 models are recommended for seneschal (≥50 tok/s)."
+                warn "  Other models may be slower or produce poor results."
+                printf "\n" >&2
+
+                # Build pick arguments from discovered models
+                _args=""
+                _i=0
+                _first_idx=1
+                while IFS= read -r _mid; do
+                    [ -z "$_mid" ] && continue
+                    _i=$((_i + 1))
+                    if [ -z "$_args" ]; then _args="$_mid"; else _args="$_args|$_mid"; fi
+                    # Prefer Gemma-4 as default selection
+                    case "$_mid" in
+                        *gemma*4*|*gemma-4*|*Gemma-4*|*Gemma4*) _first_idx=$_i ;;
+                    esac
+                done <<EOF
+$_model_ids
+EOF
+                # Convert to positional args
+                _OLD_IFS="$IFS"
+                IFS='|'
+                # shellcheck disable=SC2086
+                set -- $_args
+                IFS="$_OLD_IFS"
+                _LLM_MODEL=$(pick_from_list "Available LLM models on your server" "$_first_idx" "$@")
+            else
+                # No models found or server unreachable — ask manually
+                warn "  Could not auto-discover models from $_LLM_URL/v1/models"
+                warn "  ⚠ Gemma-4 models are recommended for seneschal (≥50 tok/s)."
+                warn "  Recommended: mlx-community/gemma-4-26b-a4b-it-4bit"
+                _LLM_MODEL=$(ask "LLM model name" "mlx-community/gemma-4-26b-a4b-it-4bit")
+            fi
+
+            info "  LLM provider: $_LLM_URL (model=$_LLM_MODEL)"
+            ;;
+        "Install mlx-lm"*)
+            _LLM_CHOICE="mlx-lm"
+            info "  Installing mlx-lm..."
+            _mlx_ok=0
+            _LLM_MLX_COMMAND=""
+
+            # Strategy 1: user install with python3 -m pip (handles PEP 668)
+            if command -v python3 >/dev/null 2>&1; then
+                info "  Trying: python3 -m pip install --user mlx-lm"
+                if python3 -m pip install --user mlx-lm 2>/dev/null; then
+                    _mlx_ok=1
+                    _python_exe=$(python3 -c "import sys; print(sys.executable)" 2>/dev/null)
+                    if [ -n "$_python_exe" ]; then
+                        _LLM_MLX_COMMAND="$_python_exe -m mlx_lm.server"
+                    fi
+                fi
+            elif command -v python >/dev/null 2>&1; then
+                info "  Trying: python -m pip install --user mlx-lm"
+                if python -m pip install --user mlx-lm 2>/dev/null; then
+                    _mlx_ok=1
+                    _python_exe=$(python -c "import sys; print(sys.executable)" 2>/dev/null)
+                    if [ -n "$_python_exe" ]; then
+                        _LLM_MLX_COMMAND="$_python_exe -m mlx_lm.server"
+                    fi
+                fi
+            fi
+
+            # Strategy 2: isolated virtual environment (works everywhere)
+            if [ "$_mlx_ok" != "1" ]; then
+                info "  Trying isolated virtual environment..."
+                _mlx_venv="$SENESCHAL_HOME/venv"
+                _python_cmd=""
+                command -v python3 >/dev/null 2>&1 && _python_cmd="python3" || _python_cmd="python"
+                if "$_python_cmd" -m venv "$_mlx_venv" 2>/dev/null && \
+                   "$_mlx_venv/bin/pip" install mlx-lm 2>/dev/null; then
+                    _mlx_ok=1
+                    _LLM_MLX_COMMAND="$_mlx_venv/bin/python3 -m mlx_lm.server"
+                    info "  Virtual environment created at $_mlx_venv"
+                fi
+            fi
+
+            if [ "$_mlx_ok" = "1" ]; then
+                info "  mlx-lm installed successfully."
+            else
+                warn "  Could not install mlx-lm automatically."
+                warn "  Install it manually, then re-run this installer:"
+                warn "    python3 -m pip install mlx-lm"
+            fi
+            ;;
+    esac
+}
+
+# ── Step 5: Download Kokoro TTS models (Linux only) ──────────────────────────
+install_kokoro_models() {
+    step "Installing Kokoro TTS models (Linux)"
+    _kokoro_model="$SENESCHAL_MODELS_DIR/kokoro-v1.0.onnx"
+    _kokoro_voices="$SENESCHAL_MODELS_DIR/voices-v1.0.bin"
+    if [ -f "$_kokoro_model" ]; then
+        info "  kokoro-v1.0.onnx already present — skipping."
+    else
+        warn "  Downloading kokoro-v1.0.onnx (~305 MB)..."
+        download "$KOKORO_MODEL_URL" "$_kokoro_model" "Kokoro ONNX model"
+        info "  Kokoro model installed."
+    fi
+    if [ -f "$_kokoro_voices" ]; then
+        info "  voices-v1.0.bin already present — skipping."
+    else
+        warn "  Downloading voices-v1.0.bin (~28 MB)..."
+        download "$KOKORO_VOICES_URL" "$_kokoro_voices" "Kokoro voice embeddings"
+        info "  Kokoro voices installed."
+    fi
+}
+
+# ── Voice selection: macOS AVSpeech ──────────────────────────────────────────
+# Parse `say -v ?` output. Each line is: NAME LOCALE [# sample text]
+_parse_say_voices() {
+    _out=""
+    _say_out=$(say -v '?' 2>/dev/null) || _say_out=""
+    _OLD_IFS="$IFS"
+    IFS='
+'
+    for _line in $_say_out; do
+        # Locale token looks like xx_XX (e.g. es_ES, en_US).
+        # The voice name is everything before it (may include parentheses).
+        _locale=""
+        IFS=" "
+        for _tok in $_line; do
+            case "$_tok" in
+                [a-z][a-z]_[A-Za-z]*)
+                    _locale="$_tok"
+                    break
+                    ;;
+            esac
+        done
+        if [ -n "$_locale" ]; then
+            _name="${_line%%$_locale*}"
+            _name=$(printf "%s" "$_name" | sed 's/[[:space:]]*$//')
+            if [ -n "$_name" ]; then
+                if [ -z "$_out" ]; then
+                    _out="${_name}|${_locale}"
+                else
+                    _out="${_out}
+${_name}|${_locale}"
+                fi
+            fi
+        fi
+        IFS='
+'
+    done
+    IFS="$_OLD_IFS"
+    printf "%s" "$_out"
+}
+
+# Map language code (es, en) to likely macOS locale prefix.
+_macos_lang_prefix() {
+    case "$1" in
+        es) printf "es_" ;;
+        en) printf "en_" ;;
+        *)  printf ""    ;;
+    esac
+}
+
+# Filter voices by language prefix using locale (second field after |).
+# Input format: newline-separated "NAME|LOCALE" lines.
+# Echo newline-separated voice names.
+_filter_voices_by_lang() {
+    _all="$1"; _prefix="$2"
+    if [ -z "$_prefix" ]; then
+        printf "%s" "$_all" | while IFS='|' read -r _n _l; do
+            [ -n "$_n" ] && printf "%s\n" "$_n"
+        done
+        return
+    fi
+    _out=""
+    _OLD_IFS="$IFS"
+    IFS='
+'
+    set +e
+    for _entry in $_all; do
+        _locale="${_entry#*|}"
+        case "$_locale" in
+            "${_prefix}"*)
+                _name="${_entry%|*}"
+                if [ -z "$_out" ]; then
+                    _out="$_name"
+                else
+                    _out="$_out|$_name"
+                fi
+                ;;
+        esac
+    done
+    set -e
+    IFS="$_OLD_IFS"
+    if [ -z "$_out" ]; then
+        # Fall back to all voice names if no language match.
+        printf "%s" "$_all" | while IFS='|' read -r _n _l; do
+            [ -n "$_n" ] && printf "%s\n" "$_n"
+        done
+    else
+        printf "%s" "$_out" | tr '|' '
+'
+    fi
+}
+
+# Return the locale string of a voice name from `say -v ?`.
+# Empty if not found. Handles full names with parentheses like "Jorge (Enhanced)".
+_voice_locale() {
+    _name="$1"
+    [ -z "$_name" ] && return
+    _say_out=$(say -v '?' 2>/dev/null) || return
+    _OLD_IFS="$IFS"
+    IFS='
+'
+    for _line in $_say_out; do
+        _locale=""
+        IFS=" "
+        for _tok in $_line; do
+            case "$_tok" in
+                [a-z][a-z]_[A-Za-z]*)
+                    _locale="$_tok"
+                    break
+                    ;;
+            esac
+        done
+        if [ -n "$_locale" ]; then
+            _vname="${_line%%$_locale*}"
+            _vname=$(printf "%s" "$_vname" | sed 's/[[:space:]]*$//')
+            if [ "$_vname" = "$_name" ]; then
+                printf "%s" "$_locale"
+                IFS="$_OLD_IFS"
+                return
+            fi
+        fi
+        IFS='
+'
+    done
+    IFS="$_OLD_IFS"
+}
+
+# Is the voice installed locally? (Always true for `say -v ?` results.)
+# We can't distinguish "installed" from "available" with `say -v ?`; this is
+# a best-effort. The test_voice_macos call will catch the real failure.
+
+select_voice_macos() {
+    step "Selecting macOS TTS voice"
+    _all_voices=$(_parse_say_voices)
+    if [ -z "$_all_voices" ]; then
+        warn "  Could not enumerate voices via 'say -v ?'."
+        warn "  Falling back to default: $DEFAULT_TTS_VOICE"
+        SELECTED_VOICE="$DEFAULT_TTS_VOICE"
+        SELECTED_LOCALE=""
+        return
+    fi
+    _lang="${_LANGUAGE}"
+    _prefix=$(_macos_lang_prefix "$_lang")
+    _filtered_file="$(mktemp)"
+    _filter_voices_by_lang "$_all_voices" "$_prefix" > "$_filtered_file"
+    if [ ! -s "$_filtered_file" ]; then
+        warn "  No $_lang voices detected. Showing all voices."
+        _filter_voices_by_lang "$_all_voices" "" > "$_filtered_file"
+    fi
+    # Build a list, prioritizing Enhanced/Premium variants.
+    _prioritized_file="$(mktemp)"
+    _normal_file="$(mktemp)"
+    grep -E '\(Enhanced\)|\(Premium\)' "$_filtered_file" > "$_prioritized_file" 2>/dev/null || true
+    grep -vE '\(Enhanced\)|\(Premium\)' "$_filtered_file" > "$_normal_file" 2>/dev/null || true
+    cat "$_prioritized_file" "$_normal_file" > "$_filtered_file"
+    # Default index: 1 if Marisol (Enhanced) is first, else 1.
+    _defaults_idx=1
+    # Build pick arguments from file lines
+    _args=""
+    _i=0
+    while IFS= read -r _line; do
+        _i=$((_i + 1))
+        if [ -z "$_args" ]; then _args="$_line"; else _args="$_args|$_line"; fi
+    done < "$_filtered_file"
+    # Convert to positional via eval-safe field splitting.
+    _OLD_IFS="$IFS"
+    IFS='|'
+    # shellcheck disable=SC2086
+    set -- $_args
+    IFS="$_OLD_IFS"
+    if [ $# -eq 0 ]; then
+        warn "  No voices to choose from. Using default: $DEFAULT_TTS_VOICE"
+        SELECTED_VOICE="$DEFAULT_TTS_VOICE"
+    else
+        # If DEFAULT_TTS_VOICE is in the list, make it the default selection.
+        _def_idx=1
+        _ii=1
+        for _v in "$@"; do
+            if [ "$_v" = "$DEFAULT_TTS_VOICE" ]; then
+                _def_idx=$_ii
+                break
+            fi
+            _ii=$((_ii + 1))
+        done
+        _chosen=$(pick_from_list "Choose a TTS voice (Enhanced/Premium sound more natural)" "$_def_idx" "$@")
+        SELECTED_VOICE="$_chosen"
+    fi
+    rm -f "$_filtered_file" "$_prioritized_file" "$_normal_file"
+    SELECTED_LOCALE=$(_voice_locale "$SELECTED_VOICE")
+    info "  Selected voice: $SELECTED_VOICE ($SELECTED_LOCALE)"
+    # Reminder about downloading more voices.
+    printf "\n" >&2
+    warn "  To download more voices (free, ~50-300 MB each):"
+    warn "    System Settings → Accessibility → Spoken Content"
+    warn "    → System Voice → Manage Voices… → Spanish (or your language)"
+    warn "    → tick the Enhanced or Premium variants → OK"
+    printf "\n" >&2
+}
+
+# Run a `say` test so the user can hear the voice. Skip if non-TTY.
+test_voice_macos() {
+    _voice="$1"
+    info "  Testing voice with 'say'..."
+    if say -v "$_voice" "Hello, this is Seneschal" 2>/dev/null; then
+        info "  Voice test played."
+    else
+        warn "  'say' test failed — voice may not be installed."
+        warn "  Seneschal will use this name anyway, but TTS may fail at runtime."
+    fi
+}
+
+# ── Voice selection: Linux Kokoro ────────────────────────────────────────────
+select_voice_kokoro() {
+    step "Selecting Kokoro TTS voice"
+    _voice_bin="$SENESCHAL_BIN_DIR/seneschal"
+    if [ ! -x "$_voice_bin" ]; then
+        warn "  seneschal binary not yet installed — cannot enumerate Kokoro voices."
+        warn "  Using default: $DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_VOICE="$DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_LANG="$DEFAULT_KOKORO_LANG"
+        return
+    fi
+    # Capture voice list
+    _list_out=$(KOKORO_MODEL="$SENESCHAL_MODELS_DIR/kokoro-v1.0.onnx" \
+                KOKORO_VOICES="$SENESCHAL_MODELS_DIR/voices-v1.0.bin" \
+                TTS_PROVIDER=kokoro \
+                "$_voice_bin" --list-voices 2>&1) || _list_out=""
+    if [ -z "$_list_out" ]; then
+        warn "  Could not enumerate Kokoro voices. Using default: $DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_VOICE="$DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_LANG="$DEFAULT_KOKORO_LANG"
+        return
+    fi
+    # Parse voice IDs from the formatted table — they're in the leftmost column.
+    _ids_file="$(mktemp)"
+    printf "%s\n" "$_list_out" | awk 'NR>3 && $1 ~ /^[a-z][a-z]_/ {print $1}' > "$_ids_file"
+    if [ ! -s "$_ids_file" ]; then
+        # Fallback: just take any non-header line.
+        printf "%s\n" "$_list_out" | awk 'NR>3 {print $1}' | grep -E '_' > "$_ids_file" || true
+    fi
+    if [ ! -s "$_ids_file" ]; then
+        warn "  No voice IDs parsed. Using default: $DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_VOICE="$DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_LANG="$DEFAULT_KOKORO_LANG"
+        rm -f "$_ids_file"
+        return
+    fi
+    # Prioritize voices for current language.
+    _lang="${_LANGUAGE}"
+    _lang_prefix="$([ "$_lang" = "es" ] && printf "e" || printf "a")"
+    _prio="$(mktemp)"
+    _rest="$(mktemp)"
+    grep "^${_lang_prefix}" "$_ids_file" > "$_prio" 2>/dev/null || true
+    grep -v "^${_lang_prefix}" "$_ids_file" > "$_rest" 2>/dev/null || true
+    cat "$_prio" "$_rest" > "$_ids_file"
+    rm -f "$_prio" "$_rest"
+    # Build pick arguments.
+    _args=""
+    while IFS= read -r _line; do
+        [ -z "$_line" ] && continue
+        if [ -z "$_args" ]; then _args="$_line"; else _args="$_args|$_line"; fi
+    done < "$_ids_file"
+    _OLD_IFS="$IFS"
+    IFS='|'
+    # shellcheck disable=SC2086
+    set -- $_args
+    IFS="$_OLD_IFS"
+    if [ $# -eq 0 ]; then
+        warn "  No Kokoro voices parsed. Using default: $DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_VOICE="$DEFAULT_KOKORO_VOICE"
+        SELECTED_KOKORO_LANG="$DEFAULT_KOKORO_LANG"
+    else
+        # Default index = where DEFAULT_KOKORO_VOICE sits, or 1.
+        _def_idx=1; _ii=1
+        for _v in "$@"; do
+            if [ "$_v" = "$DEFAULT_KOKORO_VOICE" ]; then
+                _def_idx=$_ii
+                break
+            fi
+            _ii=$((_ii + 1))
+        done
+        _chosen=$(pick_from_list "Choose a Kokoro TTS voice" "$_def_idx" "$@")
+        SELECTED_KOKORO_VOICE="$_chosen"
+    fi
+    rm -f "$_ids_file"
+    SELECTED_KOKORO_LANG="$DEFAULT_KOKORO_LANG"
+    info "  Selected Kokoro voice: $SELECTED_KOKORO_VOICE ($SELECTED_KOKORO_LANG)"
+}
+
+# ── External agent configuration ─────────────────────────────────────────
+# Asks the user whether they want to integrate external agents (Hermes,
+# OpenCode, or a custom agent). Configuration is written as [[agents]]
+# sections in $SENESCHAL_HOME/seneschal.pro.toml.
+#
+# TOML agent format:
+#   [[agents]]
+#   name = "hermes"
+#   mode = "acp"
+#   acp_command = "hermes acp"
+#   when_to_use = "..."
+#   prompt = "..."
+#
+# Sets global arrays (consumed by create_env → TOML [[agents]]):
+#   _AGENT_NAMES[]     — agent name
+#   _AGENT_MODES[]     — "cli" or "acp" per agent
+#   _AGENT_COMMANDS[]  — CLI command per agent
+#   _AGENT_ACP_CMDS[]  — ACP command per agent
+#   _AGENT_WARMUPS[]   — "1" or "" per agent
+#   _AGENT_WHEN[]      — when_to_use description per agent
+#   _AGENT_PROMPT[]    — prompt per agent
+
+# Internal counter for agent arrays
+_AGENT_COUNT=0
+
+# Add an agent to the configuration arrays.
+# Args: name mode [cli_command] [acp_command] [warmup] [when_to_use] [prompt]
+_add_agent() {
+    _idx=$_AGENT_COUNT
+    _AGENT_NAMES[$_idx]="$1"
+    _AGENT_MODES[$_idx]="$2"
+    _AGENT_COMMANDS[$_idx]="${3:-}"
+    _AGENT_ACP_CMDS[$_idx]="${4:-}"
+    _AGENT_WARMUPS[$_idx]="${5:-}"
+    _AGENT_WHEN[$_idx]="${6:-}"
+    _AGENT_PROMPT[$_idx]="${7:-}"
+    _AGENT_COUNT=$((_AGENT_COUNT + 1))
+}
+
+# Configure Hermes agent. Prompts for install + mode.
+_configure_hermes() {
+    step "Configure Hermes agent"
+    info "  Hermes is an external AI agent that handles complex tasks:"
+    info "  code generation, deep research, calendar management, and"
+    info "  multi-step workflows that Seneschal cannot do on its own."
+    info ""
+    info "  Installation:  pip install 'hermes-agent[acp]'"
+    info "  More info:     https://github.com/NousResearch/hermes-agent"
+    printf "\n" >&2
+
+    _hermes_installed=$(confirm "Is Hermes already installed?" "n")
+    if [ "$_hermes_installed" != "y" ]; then
+        _install_hermes=$(confirm "Install Hermes now? (requires Python 3.8+)" "n")
+        if [ "$_install_hermes" = "y" ]; then
+            info "  Installing Hermes..."
+            if command -v pip3 >/dev/null 2>&1; then
+                pip3 install 'hermes-agent[acp]' 2>/dev/null && \
+                    info "  Hermes installed successfully." || \
+                    warn "  Hermes installation failed. Install manually:"
+            elif command -v pip >/dev/null 2>&1; then
+                pip install 'hermes-agent[acp]' 2>/dev/null && \
+                    info "  Hermes installed successfully." || \
+                    warn "  Hermes installation failed. Install manually:"
+            else
+                warn "  Python pip not found. Install Hermes manually:"
+            fi
+            warn "    pip install 'hermes-agent[acp]'"
+        else
+            warn "  Skipping Hermes installation."
+            warn "  You can install it later: pip install 'hermes-agent[acp]'"
+            return
+        fi
+    fi
+
+    # Choose mode: ACP (persistent, recommended) or CLI (one-shot)
+    _hermes_mode=$(pick_from_list "Hermes communication mode" 1 \
+        "ACP (persistent session, recommended)" \
+        "CLI (one-shot subprocess)")
+
+    case "$_hermes_mode" in
+        "ACP"*)
+            _hermes_acp_cmd=$(ask "Hermes ACP command" "hermes acp")
+            _hermes_cli_cmd=""
+            _hermes_mode_val="acp"
+            ;;
+        "CLI"*)
+            _hermes_cli_cmd=$(ask "Hermes CLI command" "hermes chat")
+            _hermes_acp_cmd=""
+            _hermes_mode_val="cli"
+            ;;
+    esac
+
+    _hermes_warmup=$(confirm "Warm up Hermes at Seneschal startup? (reduces first-call latency)" "y")
+    if [ "$_hermes_warmup" = "y" ]; then
+        _hermes_warmup_val="1"
+    else
+        _hermes_warmup_val=""
+    fi
+
+    # Default when_to_use and instructions based on language
+    if [ "${_LANGUAGE:-en}" = "es" ]; then
+        _hermes_when="Único agente externo disponible. Punto de contacto para lo que Seneschal no puede resolver con sus propias herramientas: programación y código, investigación profunda, gestión de calendario, flujos de múltiples pasos, y cualquier tarea que requiera razonamiento extendido o herramientas del sistema."
+        _hermes_prompt="Eres Hermes, el gateway de agentes externos. Puedes redirigir internamente a especialistas (programadores, investigadores, etc.). Recibe la consulta de Seneschal, coordina los recursos necesarios y devuelves una respuesta clara y ejecutable."
+    else
+        _hermes_when="Primary external agent. Handle tasks Seneschal cannot resolve with its own tools: code generation, deep research, calendar management, multi-step workflows, and any task requiring extended reasoning or system tools."
+        _hermes_prompt="You are Hermes, the external agent gateway. You can internally redirect to specialists (programmers, researchers, etc.). Receive the query from Seneschal, coordinate the necessary resources, and return a clear, actionable response."
+    fi
+
+    _hermes_when=$(ask "When to use Hermes (press Enter for default)" "$_hermes_when")
+    _hermes_prompt=$(ask "Hermes prompt (press Enter for default)" "$_hermes_prompt")
+
+    _add_agent "hermes" "$_hermes_mode_val" "$_hermes_cli_cmd" "$_hermes_acp_cmd" \
+        "$_hermes_warmup_val" "$_hermes_when" "$_hermes_prompt"
+    info "  Hermes agent configured (mode=$_hermes_mode_val)."
+}
+
+# Configure OpenCode agent.
+_configure_opencode() {
+    step "Configure OpenCode agent"
+    info "  OpenCode can be used as an external coding agent for Seneschal."
+    info "  It handles code generation, refactoring, and file operations."
+    info ""
+    info "  Installation:  npm install -g opencode  (or use your package manager)"
+    printf "\n" >&2
+
+    _opencode_installed=$(confirm "Is OpenCode already installed?" "n")
+    if [ "$_opencode_installed" != "y" ]; then
+        warn "  OpenCode is not installed. You can still configure it for later."
+        warn "  Install it first:  npm install -g opencode"
+    fi
+
+    _opencode_mode=$(pick_from_list "OpenCode communication mode" 1 \
+        "CLI (one-shot subprocess)" \
+        "ACP (persistent session)")
+
+    case "$_opencode_mode" in
+        "CLI"*)
+            _opencode_cli_cmd=$(ask "OpenCode CLI command" "opencode")
+            _opencode_acp_cmd=""
+            _opencode_mode_val="cli"
+            ;;
+        "ACP"*)
+            _opencode_acp_cmd=$(ask "OpenCode ACP command" "opencode acp")
+            _opencode_cli_cmd=""
+            _opencode_mode_val="acp"
+            ;;
+    esac
+
+    if [ "${_LANGUAGE:-en}" = "es" ]; then
+        _opencode_when="Tareas de programación en Rust, refactorización, búsqueda en código base, y edición de archivos. Úsalo para cambios de código complejos."
+        _opencode_prompt="Eres OpenCode, un agente de programación autónomo. Recibe tareas de código de Seneschal y ejecútalas: generar código, refactorizar, buscar patrones, y editar archivos. Devuelve un resumen claro de lo que hiciste."
+    else
+        _opencode_prompt="You are OpenCode, an autonomous programming agent. Receive code tasks from Seneschal and execute them: generate code, refactor, search patterns, and edit files. Return a clear summary of what you did."
+    fi
+
+    _opencode_when=$(ask "When to use OpenCode (press Enter for default)" "$_opencode_when")
+    _opencode_prompt=$(ask "OpenCode prompt (press Enter for default)" "$_opencode_prompt")
+
+    _add_agent "opencode" "$_opencode_mode_val" "$_opencode_cli_cmd" "$_opencode_acp_cmd" \
+        "" "$_opencode_when" "$_opencode_prompt"
+    info "  OpenCode agent configured (mode=$_opencode_mode_val)."
+}
+
+# Configure a custom agent with user-provided details.
+_configure_custom_agent() {
+    step "Configure custom agent"
+    info "  Add your own external agent. It must support stdin/stdout"
+    info "  communication (CLI mode) or the ACP protocol (ACP mode)."
+    printf "\n" >&2
+
+    _custom_name=$(ask "Agent name (e.g. claude, copilot, mybot)" "custom")
+    # Sanitize: lowercase, replace spaces/hyphens with underscores for env var safety
+    _custom_name=$(printf "%s" "$_custom_name" | tr '[:upper:]' '[:lower:]' | tr ' -' '_')
+    _custom_upper=$(printf "%s" "$_custom_name" | tr '[:lower:]' '[:upper:]')
+
+    _custom_mode=$(pick_from_list "Communication mode for $_custom_name" 1 \
+        "CLI (one-shot subprocess)" \
+        "ACP (persistent session)")
+
+    case "$_custom_mode" in
+        "CLI"*)
+            _custom_cli_cmd=$(ask "CLI command for $_custom_name" "$_custom_name")
+            _custom_acp_cmd=""
+            _custom_mode_val="cli"
+            ;;
+        "ACP"*)
+            _custom_acp_cmd=$(ask "ACP command for $_custom_name" "$_custom_name acp")
+            _custom_cli_cmd=""
+            _custom_mode_val="acp"
+            ;;
+    esac
+
+    if [ "$_custom_mode_val" = "acp" ]; then
+        _custom_warmup=$(confirm "Warm up $_custom_name at Seneschal startup?" "n")
+        if [ "$_custom_warmup" = "y" ]; then
+            _custom_warmup_val="1"
+        else
+            _custom_warmup_val=""
+        fi
+    else
+        _custom_warmup_val=""
+    fi
+
+    if [ "${_LANGUAGE:-en}" = "es" ]; then
+        _custom_when="Agente personalizado $_custom_name. Úsalo para tareas específicas que requiere el usuario."
+        _custom_instr="Eres $_custom_name, un agente externo. Recibe tareas de Seneschal y ejecútalas. Devuelve un resumen claro."
+    else
+        _custom_instr="You are $_custom_name, an external agent. Receive tasks from Seneschal and execute them. Return a clear summary."
+    fi
+
+    _custom_when=$(ask "When to use $_custom_name (press Enter for default)" "$_custom_when")
+    _custom_instr=$(ask "Instructions for $_custom_name (press Enter for default)" "$_custom_instr")
+
+    _add_agent "$_custom_name" "$_custom_mode_val" "$_custom_cli_cmd" "$_custom_acp_cmd" \
+        "$_custom_warmup_val" "$_custom_when" "$_custom_instr"
+    info "  Custom agent '$_custom_name' configured (mode=$_custom_mode_val)."
+}
+
+# Main entry point for external agent configuration.
+configure_external_agents() {
+    step "External agent integration"
+    info "  Seneschal can delegate complex tasks to external AI agents."
+    info "  Agents handle: code generation, research, file operations,"
+    info "  calendar management, and multi-step workflows."
+    info ""
+    info "  Available agents:"
+    info "    - Hermes   : General-purpose agent (hermes-agent)"
+    info "    - OpenCode : Coding assistant (opencode)"
+    info "    - Custom   : Your own agent (any CLI or ACP-compatible tool)"
+    printf "\n" >&2
+
+    # Reset agent arrays
+    _AGENT_COUNT=0
+
+    # Ask which agents to configure
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        _configure_any="n"
+    else
+        _configure_any=$(confirm "Configure external agents?" "y")
+    fi
+    if [ "$_configure_any" != "y" ]; then
+        info "  Skipping external agent configuration."
+        return
+    fi
+
+    # Loop until user says they're done
+    while true; do
+        printf "\n" >&2
+        _agent_choice=$(pick_from_list "Select an agent to configure" 1 \
+            "Hermes (hermes-agent)" \
+            "OpenCode" \
+            "Custom agent" \
+            "Done (no more agents)")
+
+        case "$_agent_choice" in
+            "Hermes"*)
+                _configure_hermes
+                ;;
+            "OpenCode"*)
+                _configure_opencode
+                ;;
+            "Custom"*)
+                _configure_custom_agent
+                ;;
+            "Done"*)
+                break
+                ;;
+        esac
+    done
+
+    if [ "$_AGENT_COUNT" -eq 0 ]; then
+        info "  No agents configured."
+        return
+    fi
+
+    # Build AGENTS comma-separated list
+    _AGENTS_LIST=""
+    _i=0
+    while [ "$_i" -lt "$_AGENT_COUNT" ]; do
+        if [ -z "$_AGENTS_LIST" ]; then
+            _AGENTS_LIST="${_AGENT_NAMES[$_i]}"
+        else
+            _AGENTS_LIST="$_AGENTS_LIST,${_AGENT_NAMES[$_i]}"
+        fi
+        _i=$((_i + 1))
+    done
+    info "  Agents configured: $_AGENTS_LIST"
+}
+
+# ── Search provider configuration ────────────────────────────────────────
+# Offers a choice between Brave (free, default), Tavily, Exa, and SearXNG.
+# Sets _SEARCH_PROVIDER and associated env vars consumed by create_env().
+configure_search_provider() {
+    step "Configuring web search provider"
+
+    _SEARCH_PROVIDER=""
+    _SEARCH_CONFIG=""
+
+    _choice=$(pick_from_list "Web search provider (used by quick_search tool)" 1 \
+        "Brave (free, no API key — default)" \
+        "Tavily (requires API key)" \
+        "Exa (requires API key)" \
+        "SearXNG (self-hosted, no API key)" \
+        "None (disable web search)")
+
+    case "$_choice" in
+        "Brave"*)
+            _SEARCH_PROVIDER="brave"
+            _SEARCH_CONFIG="brave_public_search_enabled = true"
+            info "  Search provider: Brave (free, public scraper)"
+            ;;
+        "Tavily"*)
+            _SEARCH_PROVIDER="tavily"
+            _TAVILY_KEY=$(ask "Tavily API key" "")
+            if [ -z "$_TAVILY_KEY" ]; then
+                warn "  No Tavily API key provided — falling back to Brave."
+                _SEARCH_PROVIDER="brave"
+                _SEARCH_CONFIG="brave_public_search_enabled = true"
+            else
+                _SEARCH_CONFIG="brave_public_search_enabled = false
+tavily_api_key = \"$_TAVILY_KEY\"
+tavily_max_tokens = 512"
+                info "  Search provider: Tavily"
+            fi
+            ;;
+        "Exa"*)
+            _SEARCH_PROVIDER="exa"
+            _EXA_KEY=$(ask "Exa API key" "")
+            if [ -z "$_EXA_KEY" ]; then
+                warn "  No Exa API key provided — falling back to Brave."
+                _SEARCH_PROVIDER="brave"
+                _SEARCH_CONFIG="brave_public_search_enabled = true"
+            else
+                _SEARCH_CONFIG="brave_public_search_enabled = false
+exa_api_key = \"$_EXA_KEY\""
+                info "  Search provider: Exa"
+            fi
+            ;;
+        "SearXNG"*)
+            _SEARCH_PROVIDER="searxng"
+            _SEARXNG_URL=$(ask "SearXNG URL" "http://127.0.0.1:8888")
+            _SEARXNG_SECRET=$(ask "SearXNG secret (leave blank if none)" "")
+            _SEARCH_CONFIG="brave_public_search_enabled = false
+searxng_url = \"$_SEARXNG_URL\"
+searxng_secret = \"$_SEARXNG_SECRET\""
+            info "  Search provider: SearXNG ($_SEARXNG_URL)"
+            ;;
+        "None"*)
+            _SEARCH_PROVIDER="none"
+            _SEARCH_CONFIG="brave_public_search_enabled = false"
+            info "  Web search disabled."
+            ;;
+    esac
+}
+create_env() {
+    step "Writing default configuration"
+    _config_file="$SENESCHAL_HOME/seneschal.pro.toml"
+    # LLM block depends on provider choice from configure_llm_provider()
+    case "${_LLM_CHOICE:-own}" in
+        "own")
+            _llm_config="llm_model = \"${_LLM_MODEL:-qwen3.8-27b}\"
+llm_url = \"${_LLM_URL:-http://127.0.0.1:8000}\""
+            if [ -n "${_LLM_API_KEY:-}" ]; then
+                _llm_config="${_llm_config}
+llm_api_key = \"${_LLM_API_KEY}\""
+            fi
+            ;;
+        "mlx-lm")
+            _llm_config="llm_self_managed = true
+llm_command = \"${_LLM_MLX_COMMAND:-mlx_lm.server} --model mlx-community/gemma-4-26b-a4b-it-4bit --host 127.0.0.1 --port 8000 --max-tokens 32768\""
+            ;;
+    esac
+    # Select system prompt based on language
+    if [ "$_LANGUAGE" = "es" ]; then
+        _system_prompt="Eres el mayordomo digital de Daniel.
+
+IDENTIDAD
+Personalidad inspirada en Alfred (Batman) y un mayordomo profesional clásico: profesional, eficiente, leal, con humor seco e ironía británica. Hablas con confianza tranquila — como un igual inteligente que sirve, no como un subordinado. Tienes opiniones propias sobre tecnología y el mundo y las expresas cuando vienen al caso. Eres servicial sin ser servil, astuto sin ser manipulador, cálido sin ser cursi. Llevas años trabajando con Daniel y le conoces bien. La relación es de confianza absoluta — discreción total, lealtad incondicional.
+
+ESTRUCTURA DE RESPUESTA (crítico para baja latencia de voz)
+Siempre empieza con una frase de máximo 10 palabras. Si es afirmación o negación, dilo en 2 a 3 palabras seguidas de punto. Sigue con el resto de la respuesta. Ejemplo correcto: \"Sí, señor. Ya voy a abrir Spotify.\"
+Ejemplo incorrecto: \"Por supuesto, voy a abrir Spotify para ti ahora mismo, señor.\"
+NUNCA empieces con relleno: \"claro\", \"por supuesto\", \"entendido\", \"buen punto\".
+Cuando la respuesta es una sola palabra o número, dala directamente y punto.
+
+EXTENSIÓN
+Por defecto: una frase. Conciso.
+Cuando la conversación pide profundidad — debate, explicación, desahogo personal, investigación, análisis — habla con la extensión y el tono que la situación pida, como Alfred sentándose con Bruce en la biblioteca a las tres de la mañana. La brevedad es la norma, la conversación profunda es tu fortaleza. Cuando Daniel quiera hablar, estarás a la altura.
+
+FORMA DE HABLAR
+- Español natural. Cambia al idioma del usuario si él cambia.
+- Dirígete a Daniel como \"señor\", salvo que pida que le llame por su nombre.
+- Texto plano para voz: sin markdown, sin listas, sin símbolos que el sintetizador no pronuncie, sin emojis. Todo debe sonar natural hablado.
+- No termines con \"¿algo más?\" ni \"dime si necesitas algo\". Solo pregunta si realmente necesitas aclaración.
+- Humor seco y comentario sardónico solo cuando encajan naturalmente. Nunca fuerces.
+
+REGLAS
+- Si no sabes algo, dilo directo. No inventes.
+- Antes de acciones destructivas, describe y pide confirmación en una frase breve.
+- Si el usuario dice \"para\", \"suficiente\" o similar, calla.
+- Si la petición es ambigua, da la interpretación más probable en una frase y detente.
+- Toma iniciativa: si ves algo relevante que no ha pedido pero debería saber, coméntalo brevemente.
+- Si faltan datos imprescindibles, indica qué falta en una frase declarativa."
+    else
+        _system_prompt="You are Daniel's digital butler.
+
+IDENTITY
+Personality inspired by Alfred (Batman) and a classic professional butler: professional, efficient, loyal, with dry humor and British irony. You speak with quiet confidence — like an intelligent equal who serves, not a subordinate. You have your own opinions about technology and the world and express them when appropriate. You are helpful without being servile, shrewd without being manipulative, warm without being cheesy. You've worked with Daniel for years and know him well. The relationship is one of absolute trust — total discretion, unconditional loyalty.
+
+RESPONSE STRUCTURE (critical for low voice latency)
+Always start with a phrase of 10 words max. If it's an affirmation or negation, say it in 2-3 words followed by a period. Then continue the rest of the response. Correct example: \"Yes, sir. I'll open Spotify now.\"
+Incorrect example: \"Of course, I'll open Spotify for you right now, sir.\"
+NEVER start with filler: \"sure\", \"of course\", \"got it\", \"good point\".
+When the answer is a single word or number, just give it directly and end with a period.
+
+LENGTH
+Default: one sentence. Concise.
+When the conversation calls for depth — debate, explanation, personal venting, research, analysis — speak with the length and tone the situation demands, like Alfred sitting down with Bruce in the library at three in the morning. Brevity is the norm, deep conversation is your strength. When Daniel wants to talk, you'll rise to the occasion.
+
+SPEECH PATTERNS
+- Speak natural English. Switch to the user's language if they switch.
+- Address Daniel as \"sir\", unless he asks you to call him by name.
+- Plain text for speech: no markdown, no lists, no symbols the synthesizer can't pronounce, no emojis. Everything must sound natural when spoken.
+- Don't end with \"anything else?\" or \"let me know if you need anything\". Only ask if you really need clarification.
+- Dry humor and sardonic comments only when they fit naturally. Never force it.
+
+RULES
+- If you don't know something, say so directly. Don't invent.
+- Before destructive actions, describe and ask for confirmation in one brief sentence.
+- If the user says \"stop\", \"enough\" or similar, go silent.
+- If the request is ambiguous, give the most likely interpretation in one sentence and stop.
+- Take initiative: if you see something relevant they haven't asked for but should know, mention it briefly.
+- If essential data is missing, state what's missing in a declarative sentence."
+    fi
+
+    # TTS config block based on OS selection
+    if [ "$OS" = "Darwin" ] && [ -n "${SELECTED_VOICE:-}" ]; then
+        _tts_config="tts_provider = \"avspeech\"
+avspeech_voice = \"${SELECTED_VOICE}\""
+    else
+        _tts_config="tts_provider = \"kokoro\"
+kokoro_voice = \"${SELECTED_KOKORO_VOICE:-es_xb}\"
+kokoro_language = \"${SELECTED_KOKORO_LANG:-es}\"
+kokoro_model = \"${SENESCHAL_MODELS_DIR}/kokoro-v1.0.onnx\"
+kokoro_voices = \"${SENESCHAL_MODELS_DIR}/voices-v1.0.bin\""
+    fi
+
+    # Bot name / wake word
+    if [ "${_INTERACTIVE:-1}" = "0" ]; then
+        _WAKE_WORD="seneschal"
+    else
+        echo ""
+        step "Choose your seneschal's name"
+        echo "  Examples: Jarvis, Alfred, Butler, Narya, Ada, Iris"
+        printf '  Enter one or more names, comma-separated (or press Enter for "seneschal"): '
+        read -r _WAKE_WORD || _WAKE_WORD=""
+        # Strip quotes and backslashes to avoid breaking TOML
+        _WAKE_WORD=$(echo "$_WAKE_WORD" | tr -d '"\\')
+        _WAKE_WORD="${_WAKE_WORD:-seneschal}"
+    fi
+    info "  Bot name set to: $_WAKE_WORD"
+
+    # STT provider chosen in configure_stt_provider() (issue #223: parakeet
+    # default; STT_PROVIDER env or the interactive picker override it).
+    _STT_PROVIDER="${_STT_CHOICE:-parakeet}"
+    # Ensure WHISPER_MODEL_FILE is set (the whisper_model line is always
+    # written; only the selected provider's model is downloaded).
+    WHISPER_MODEL_FILE="${WHISPER_MODEL_FILE:-ggml-large-v3-turbo.bin}"
+
+    if [ "$_STT_PROVIDER" = "parakeet" ]; then
+        _stt_config="stt_provider = \"parakeet\"
+parakeet_model_dir = \"${SENESCHAL_MODELS_DIR}/${PARAKEET_MODEL_SUBDIR}\"
+whisper_model = \"${SENESCHAL_MODELS_DIR}/${WHISPER_MODEL_FILE}\"
+vad_model = \"${SENESCHAL_MODELS_DIR}/ggml-silero-vad.bin\""
+    else
+        _stt_config="stt_provider = \"whisper\"
+whisper_model = \"${SENESCHAL_MODELS_DIR}/${WHISPER_MODEL_FILE}\"
+vad_model = \"${SENESCHAL_MODELS_DIR}/ggml-silero-vad.bin\""
+    fi
+
+    cat > "$_config_file" << CONFIGEOF
+# Seneschal configuration — generated by install.sh
+# Edit this file to customize your setup.
+# Environment variables override values defined here.
+
+language = "${_LANGUAGE}"
+wake_word = "${_WAKE_WORD}"
+
+# STT
+$_stt_config
+
+# Device monitor — polls for the configured input device and greets when it connects
+device_monitor_enabled = true
+device_monitor_poll_secs = 5
+
+# LLM
+$_llm_config
+
+# Web Search (quick_search tool)
+${_SEARCH_CONFIG:-brave_public_search_enabled = true}
+
+# TTS
+$_tts_config
+
+llm_system_prompt = """${_system_prompt}"""
+
+CONFIGEOF
+
+    # Append agents section to TOML config
+    if [ "$_AGENT_COUNT" -gt 0 ]; then
+        {
+            printf "\n"
+            printf "# ── External Agents ──────────────────────────────────────────\n"
+            printf "# Generated by install.sh — edit to customize agent behavior.\n"
+            printf "\n"
+
+            _i=0
+            while [ "$_i" -lt "$_AGENT_COUNT" ]; do
+                _name="${_AGENT_NAMES[$_i]}"
+                _mode="${_AGENT_MODES[$_i]}"
+                printf "\n[[agents]]\n"
+                printf "name = \"%s\"\n" "$_name"
+                printf "mode = \"%s\"\n" "$_mode"
+
+                if [ -n "${_AGENT_COMMANDS[$_i]}" ]; then
+                    printf "command = \"%s\"\n" "${_AGENT_COMMANDS[$_i]}"
+                fi
+                if [ -n "${_AGENT_ACP_CMDS[$_i]}" ]; then
+                    printf "acp_command = \"%s\"\n" "${_AGENT_ACP_CMDS[$_i]}"
+                fi
+                if [ -n "${_AGENT_WARMUPS[$_i]}" ]; then
+                    printf "acp_warmup = true\n"
+                else
+                    printf "acp_warmup = false\n"
+                fi
+
+                # when_to_use and instructions may contain quotes and newlines
+                # Use TOML literal strings (single quotes) to avoid escaping
+                if [ -n "${_AGENT_WHEN[$_i]}" ]; then
+                    printf "when_to_use = '%s'\n" "${_AGENT_WHEN[$_i]}"
+                fi
+                if [ -n "${_AGENT_PROMPT[$_i]}" ]; then
+                    printf "prompt = '%s'\n" "${_AGENT_PROMPT[$_i]}"
+                fi
+                _i=$((_i + 1))
+            done
+        } >> "$_config_file"
+        info "  Agents section written to config ($_AGENT_COUNT agent(s))"
+    fi
+
+    info "  Config written: $_config_file"
+}
+
+# ── Step 7: Install the launcher wrapper script ──────────────────────────────
+install_launcher() {
+    step "Installing launcher script"
+    _launcher="$BIN_DIR/seneschal"
+    if [ "$OS" = "Darwin" ]; then
+        _default_tts="avspeech"
+    else
+        _default_tts="kokoro"
+    fi
+    cat > "$_launcher" << LAUNCHEOF
+#!/bin/sh
+# seneschal launcher — generated by install.sh
+# Edit \$SENESCHAL_HOME/seneschal.pro.toml to configure your setup.
+SENESCHAL_HOME="\${SENESCHAL_HOME:-$SENESCHAL_HOME}"
+
+# Point to installed config file
+export SENESCHAL_CONFIG_FILE="\$SENESCHAL_HOME/seneschal.pro.toml"
+
+# --- Defaults are read from seneschal.pro.toml ---
+# Environment variables are optional and only used to override values
+# defined in the configuration file. Do not hard-code defaults here.
+
+cd "\$SENESCHAL_HOME" || exit 1
+exec "\$SENESCHAL_HOME/bin/seneschal" "\$@" 2>/dev/null
+LAUNCHEOF
+    chmod +x "$_launcher"
+    info "  Launcher installed: $_launcher"
+}
+
+# ── Step 8: PATH check ────────────────────────────────────────────────────────
+check_path() {
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *)
+            warn ""
+            warn "  $BIN_DIR is not in your PATH."
+            warn "  Add this line to your shell config (~/.bashrc, ~/.zshrc, etc.):"
+            warn ""
+            warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+            warn ""
+            warn "  Then reload your shell:  source ~/.bashrc  (or restart your terminal)"
+            ;;
+    esac
+}
+
+# ── LLM server detection ────────────────────────────────────────────────────
+# Probe LLM_URL/v1/models with a short timeout. Sets SENESCHAL_LLM_UP=1|0.
+detect_llm_server() {
+    step "Probing LLM server"
+    _llm_url="${_LLM_URL:-http://127.0.0.1:8000}"
+    # Convert base URL to /v1/models endpoint.
+    _probe_url="${_llm_url%/}/v1/models"
+    info "  Checking $_probe_url ..."
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsS --max-time 3 -o /dev/null "$_probe_url" 2>/dev/null; then
+            SENESCHAL_LLM_UP=1
+            info "  LLM server reachable."
+            return
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget -q --timeout=3 -O /dev/null "$_probe_url" 2>/dev/null; then
+            SENESCHAL_LLM_UP=1
+            info "  LLM server reachable."
+            return
+        fi
+    fi
+    SENESCHAL_LLM_UP=0
+    warn "  LLM server not reachable at $_probe_url"
+    warn "  Before running seneschal, start one of:"
+    warn "    mlx-lm:  mlx_lm.server --model mlx-community/gemma-4-26b-a4b-it-4bit --port 8000"
+    warn "    omlx:    omlx serve --model-dir ~/models --port 8001"
+    warn "  Or set LLM_URL in your seneschal.pro.toml to point at a remote server."
+}
+
+# ── End-of-install TTS smoke test ────────────────────────────────────────────
+# Plays a 2-second sample with the chosen voice so the user hears it works.
+# Non-TTY: just synthesizes silently and reports success/failure.
+smoke_test() {
+    step "Running TTS smoke test"
+    _voice_bin="$SENESCHAL_BIN_DIR/seneschal"
+    if [ ! -x "$_voice_bin" ]; then
+        warn "  seneschal binary not found at $_voice_bin — skipping smoke test."
+        return
+    fi
+    if [ "$OS" = "Darwin" ] && [ -n "${SELECTED_VOICE:-}" ]; then
+        # Use `say` directly — no need to launch the whole binary.
+        if say -v "$SELECTED_VOICE" "Hola, esto es Senescal" 2>/dev/null; then
+            info "  Smoke test passed (macOS AVSpeech)."
+        else
+            warn "  Smoke test inconclusive (say returned non-zero)."
+        fi
+    elif [ "$OS" = "Linux" ] && [ -n "${SELECTED_KOKORO_VOICE:-}" ]; then
+        # Use the binary's --list-voices as a no-op health check.
+        if KOKORO_MODEL="$SENESCHAL_MODELS_DIR/kokoro-v1.0.onnx" \
+           KOKORO_VOICES="$SENESCHAL_MODELS_DIR/voices-v1.0.bin" \
+           TTS_PROVIDER=kokoro KOKORO_VOICE="$SELECTED_KOKORO_VOICE" \
+           "$_voice_bin" --list-voices >/dev/null 2>&1; then
+            info "  Smoke test passed (Kokoro voices loaded)."
+        else
+            warn "  Smoke test inconclusive — seneschal could not load Kokoro."
+        fi
+    fi
+}
+
+# ── Final banner ─────────────────────────────────────────────────────────────
+print_completion() {
+    printf "\n" >&2
+    info "══════════════════════════════════════════════════"
+    info "  Installation complete!"
+    info "══════════════════════════════════════════════════"
+    printf "\n" >&2
+    if [ "${SENESCHAL_LLM_UP:-0}" = "1" ]; then
+        info "LLM server is up. You can launch seneschal now."
+    else
+        info "Before starting seneschal, start your LLM server. Then edit config if needed:"
+        info "  \$EDITOR \$SENESCHAL_CONFIG_FILE"
+    fi
+    printf "\n" >&2
+    info "Then start:"
+    info "  seneschal"
+    printf "\n" >&2
+    info "List audio devices:"
+    info "  seneschal --list-devices"
+    info "List TTS voices:"
+    info "  seneschal --list-voices"
+    printf "\n" >&2
+}
+
+# ── Main orchestrator ───────────────────────────────────────────────────────
+main() {
+    _apply_defaults
+    _detect_platform
+
+    printf "\n" >&2
+    info "╔══════════════════════════════════════════════╗"
+    info "║          Seneschal Installer                 ║"
+    info "╚══════════════════════════════════════════════╝"
+    printf "\n" >&2
+    info "Platform : $OS_NAME ($TARGET)"
+    info "Home     : $SENESCHAL_HOME"
+    info "Launcher : $BIN_DIR/seneschal"
+    printf "\n" >&2
+
+    select_language
+    check_dependencies
+    prompt_calendar_reminders
+    setup_directories
+    install_binary
+    configure_stt_provider
+    if [ "$_STT_CHOICE" = "whisper" ]; then
+        install_whisper_model
+    else
+        install_parakeet_model
+    fi
+    install_vad_model
+
+    # LLM provider config (own provider or install mlx-lm on macOS)
+    configure_llm_provider
+
+    # Web search provider (Brave free by default)
+    configure_search_provider
+
+    # External agent configuration (Hermes, OpenCode, Custom)
+    configure_external_agents
+
+    # Voice selection happens AFTER models are installed because the
+    # Kokoro enumerator invokes the binary.
+    if [ "$OS" = "Darwin" ]; then
+        select_voice_macos
+    else
+        install_kokoro_models
+        select_voice_kokoro
+    fi
+
+    create_env
+    install_launcher
+    detect_llm_server
+    smoke_test
+    check_path
+    print_completion
+}
+
+main "$@"

@@ -1,0 +1,133 @@
+servers:
+  tesla:
+    host: "http://192.168.1.47"
+    location: "tesla"
+    runtimes:
+      vllm:
+        port: 8005
+        token: ""
+        models:
+          - nemotron-lightning-30B-A3B-NVFP4
+          # - Laguna-S-2.1-NVFP4
+          # - Step-3.7-Flash
+          # - Qwen3.6-27B-FP8
+          # - Qwen3.6-27B-NVFP4
+          # - gemma-4-31B-it-NVFP4
+          # - Qwen3.6-35B-A3B
+          # - Qwen3.6-35B-A3B-FP8
+          # - Qwen3.6-27B-NVFP4
+          # - gemma-4-31B-it
+          # - Qwen3.6-27B-NVFP4
+          # - Qwen3.6-35B-A3B-NVFP4
+          # - diffusiongemma-26B-A4B-it-NVFP4
+      vllm-gemma:
+        port: 8006
+        token: ""
+        models: []
+          # - gemma-4-31B-it-FP8
+          # - Qwen3.6-35B-A3B-NVFP4
+          # - Gemma4-26B-Uncensored
+          # - gemma-4-31B-it-NVFP4
+          # - gemma-4-31B-it
+          # - Qwen3.6-35B-A3B-FP8
+          # - Qwen3.6-27B-NVFP4
+          # - Gemma-4-26B-A4B-NVFP4
+      llama-server:
+        port: 8000
+        token: ""
+        models: []
+          # - gemma-4-12b-it-UD-Q4_K_XL
+          # - gemma-4-E4B-it-UD-Q8_K_XL
+      # llama-server-gemma:
+      #   port: 8001
+      #   token: ""
+      #   models:
+      #     - unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
+  macmini:
+    host: "http://mac-mini.local"
+    location: "mac-mini"
+    runtimes:
+      llama-server:
+        port: 8000
+        token: "asdf"
+        models: []
+          # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
+          # - ./models/LFM2.5-2.6B-Q4_K_M.gguf
+          # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
+          # - LFM2.5-8B-A1B-Q8_0
+          # - gemma-4-26B-A4B-it-UD-Q4_K_XL
+          # - gemma-4-26B-A4B-it-UD-Q8_K_XL
+          # - Qwen3.6-35B-A3B-UD-Q4_K_M
+      llama-server2:
+        port: 8080
+        token: "asdf"
+        models: []
+          # - ./models/LFM2.5-2.6B-Q8_0.gguf
+      omlx:
+        port: 8000
+        token: "asdf"
+        models: []
+          # - unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL
+          # - gemma-4-26B-A4B-it-QAT-MLX-4bit
+          # - mlx-community/LFM2.5-8B-A1B-MLX-4bit
+          # - gemma-4-26B-A4B-it-MLX-4bit
+          # - "Qwen3.6-35B-A3B-4bit"
+          # - "Qwen3.6-35B-A3B-UD-MLX-4bit"
+      mlx-lm:
+        port: 8080
+        token: ""
+        models: []
+          # - mlx-community/gemma-4-E4B-it-qat-4bit
+          # - lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit
+          # - unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
+          # - LiquidAI/LFM2.5-8B-A1B-MLX-4bit
+          # - LiquidAI/LFM2.5-8B-A1B-MLX-8bit
+          # - mlx-community/gemma-4-26b-a4b-it-4bit
+          # - zecanard/gemma-4-26B-A4B-it-uncensored-abliterix-MLX-4bit-nvfp4
+          # - culturerevolt/gemma-4-26B-A4B-it-ultra-uncensored-heretic-mlx-4Bit
+      # ollama:
+      #   port: 11434
+      #   token: ""
+      #   models: []
+      #     # - qwen3.6:35b-a3b-coding-nvfp4
+      #     # - qwen3.6:35b-a3b-mtp-q4_K_M
+      #     # - maternion/lfm2.5:8b
+      #     # - gemma4:26b-nvfp4
+      #     # - gemma4:26b-a4b-it-q4_K_M
+      lm-studio:
+        port: 1234
+        token: ""
+        models: []
+          # - mlx-community/LFM2.5-2.6B-4bit
+          # - google/gemma-4-12b
+          # - gemma-4-12b-it-mlx
+          # - google/gemma-4-12b-qat
+          # - google/gemma-4-26b-a4b
+          # - google/gemma-4-26b-a4b-qat
+          # - ornith-1.0-35b-mlx
+          # - gemma-4-26b-a4b-it-qat-nvfp4
+          # - gemma-4-26b-a4b-it-uncensored-abliterix-mlx-nvfp4
+          # - gemma-4-26b-a4b-it-nvfp4
+      vllm:
+        port: 8000
+        token: ""
+        models: []
+          # - mlx-community/gemma-4-26b-a4b-it-4bit
+          # - mlx-community/gemma-4-26B-A4B-it-qat-nvfp4
+  # opencode:
+  #   host: "https://opencode.ai/zen/"
+  #   location: "online"
+  #   runtimes:
+  #     opencode-go:
+  #       benchThinking: false
+  #       token: "sk-jTBeH1wVwtzHGwWuA05jYcrOVo8EDDcILLN5FDLI7F4nTkecfSs4jv2FMYOE8Gkl"
+  #       models: []
+  #         # - glm-5.2
+  #         # - deepseek-v4-flash
+  #         # - deepseek-v4-pro
+  #         # - kimi-k3
+  #         # - mimo-v2.5-free
+  #         # - ling-3.0-flash-free
+  #         # - nemotron-3-ultra-free
+  #         # - laguna-s-2.1-free
+  #         # - longcat-2.0-free
