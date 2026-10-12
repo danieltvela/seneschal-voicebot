@@ -29,7 +29,10 @@ and three test layers that lock it:
    under `target/stt-fixtures/`): `tests/stt_audit_contract.rs` (onset/tail/
    live), `stt_audit_continuous.rs` (20 s cap, commit budget), plus
    code-switching and terms audits. Provider selection via
-   `STT_AUDIT_PROVIDER=whisper|openai`.
+   `STT_AUDIT_PROVIDER=whisper|openai`. The audits assert wall-clock RTF and
+   commit budgets measured against real decode work, so run them serialized
+   (`-- --ignored stt --test-threads=1`, as `make test-stt` does); parallel
+   test threads oversubscribe the CPU on CPU-only hosts and trip the budgets.
 
 When a budget trips in L3, run the `vad_probe_calibration` audit first —
 Silero's probability behavior on synthetic audio is the usual suspect.

@@ -139,8 +139,22 @@ stage_test_stt() {
     # --workspace: STT tests live in crates/seneschal-core/tests/ (audit
     # harness) plus the root-package e2e STT tests; plain `cargo test` at the
     # root only tests the root package and would silently skip the crates.
-    if (cd "$PROJECT_ROOT" && $CARGO test --workspace --quiet -- --ignored stt 2>&1 | tail -n 80); then
+    # --test-threads=1: the audits assert wall-clock RTF/commit budgets from
+    # real decode work; parallel test threads oversubscribe the CPU on
+    # CPU-only hosts and trip those budgets (stt_audit_latency_baseline).
+    local log cargo_ok=0 matched=0
+    log="$(mktemp "${TMPDIR:-/tmp}/seneschal-test-stt.XXXXXX")"
+    if (cd "$PROJECT_ROOT" && $CARGO test --workspace --quiet -- --ignored stt --test-threads=1) >"$log" 2>&1; then
+        cargo_ok=1
+        matched=$(grep -cE 'test result: ok\. [1-9][0-9]* passed' "$log")
+    fi
+    tail -n 80 "$log"
+    rm -f "$log"
+    if [[ "$cargo_ok" -eq 1 && "$matched" -gt 0 ]]; then
         stage_ok "test-stt"
+    elif [[ "$cargo_ok" -eq 1 ]]; then
+        stage_fail "test-stt" "cargo reported ok but zero tests matched '-- --ignored stt' (stale build fingerprints? rerun)"
+        return 1
     else
         stage_fail "test-stt" "STT integration tests failed"
         return 1
