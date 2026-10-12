@@ -38,11 +38,10 @@ use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
-use super::segmenter::{
-    SegmenterConfig, SegmenterEvent, SileroDetector, SpeechDetector, VadSegmenter,
-};
+use super::segmenter::{SegmenterEvent, SileroDetector, SpeechDetector, VadSegmenter};
+use super::streaming::LiveStreamConfig;
 use super::wav;
-use super::whisper::{WhisperSTTVADConfig, load_vad};
+use super::whisper::{WhisperSTTVADConfig, load_vad, segmenter_config};
 
 /// TCP connect timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,16 +104,40 @@ struct ModelEntry {
 /// STT provider that transcribes finalized utterances against an
 /// OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 ///
+/// Live partials (contract P3): while the segment is open, the buffered
+/// prefix is POSTed every `live.interval_ms`; partial texts arrive as
+/// `SpeechEvent::Speech`. At close a fresh request covering the complete
+/// utterance produces the final `SpeechEnd` (contract P4). Requests run
+/// detached — the audio loop is never blocked by the network.
+///
 /// Generic over the speech detector so the full VAD + segmentation + HTTP
 /// pipeline can be exercised in tests without loading Silero.
 pub struct OpenAiSttProvider<D: SpeechDetector = SileroDetector> {
     client: reqwest::Client,
     cfg: OpenAiSttConfig,
     segmenter: VadSegmenter<D>,
-    /// In-flight transcription token, cancelled on barge-in.
+    live_cfg: LiveStreamConfig,
+    /// Live-partial state for the segment currently open.
+    live: Option<LiveRemote>,
+    /// In-flight transcription token (final request), cancelled on barge-in.
     pending: Option<CancellationToken>,
     /// Number of transcriptions currently in flight (observability + tests).
     inflight: Arc<AtomicUsize>,
+}
+
+/// Live-prefix request in flight for the open segment.
+struct PendingLive {
+    /// Segment samples covered by the request's audio.
+    covered_len: usize,
+    token: CancellationToken,
+}
+
+/// Per-segment live state.
+struct LiveRemote {
+    seq: u64,
+    /// Segment samples already dispatched (cadence is measured against this).
+    covered_upto: usize,
+    pending: Vec<PendingLive>,
 }
 
 impl OpenAiSttProvider<SileroDetector> {
@@ -146,21 +169,11 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
             .build()
             .map_err(map_reqwest)?;
 
-        let segmenter = VadSegmenter::new(
-            detector,
-            // Uniform contract (P6): same segmentation defaults as the local
-            // providers (100 ms probes, real pre-roll, 200 ms post-roll).
-            SegmenterConfig::uniform(
-                base.silence_ms,
-                base.vad_start_threshold,
-                base.vad_end_threshold,
-                base.vad_confirm_probes,
-            ),
-        )?;
+        let segmenter = VadSegmenter::new(detector, segmenter_config(base))?;
 
         tracing::info!(
             target: "sttvad",
-            "OpenAiSttProvider ready (url: {}, model: {}, lang: {}, timeout_ms: {}, vad: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {}, vad_gpu: {})",
+            "OpenAiSttProvider ready (url: {}, model: {}, lang: {}, timeout_ms: {}, vad: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {}, probe_ms: {}, preroll_ms: {}, post_roll_ms: {}, live: {}, vad_gpu: {})",
             cfg.base_url,
             cfg.model,
             cfg.language,
@@ -170,6 +183,10 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
             base.vad_start_threshold,
             base.vad_end_threshold,
             base.vad_confirm_probes.max(1),
+            base.probe_ms,
+            base.preroll_ms,
+            base.post_roll_ms,
+            base.live.enabled,
             base.vad_gpu.map(|i| i.to_string()).unwrap_or_else(|| "cpu".into()),
         );
 
@@ -177,6 +194,8 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
             client,
             cfg,
             segmenter,
+            live_cfg: base.live.clone(),
+            live: None,
             pending: None,
             inflight: Arc::new(AtomicUsize::new(0)),
         })
@@ -242,25 +261,56 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
 
     /// Feed a chunk of 16 kHz mono f32 audio.
     ///
-    /// Finalized utterances are dispatched to a background task so the pipeline
-    /// is never blocked by the HTTP round trip. An in-flight request is aborted
-    /// on barge-in via [`OpenAiSttProvider::cancel_inflight`] (wired to the
-    /// pipeline's cancellation), not on every VAD commit — a new utterance must
-    /// not discard the transcription of the one the user just finished.
+    /// While the segment is open, live prefix requests are dispatched every
+    /// `live.interval_ms` (contract P3). A finalized utterance dispatches one
+    /// final request covering the complete audio (contract P4); both kinds run
+    /// detached so the pipeline is never blocked by the HTTP round trip. A
+    /// barge-in aborts pending requests via [`OpenAiSttProvider::cancel_inflight`].
     pub async fn process_audio(
         &mut self,
         audio: &[f32],
         tx: &mpsc::Sender<SpeechEvent>,
     ) -> Result<()> {
+        // Reap cancelled live requests (their partials were sent directly).
+        if let Some(live) = &mut self.live {
+            live.pending.retain(|p| !p.token.is_cancelled());
+        }
+
         for event in self.segmenter.feed(audio) {
             match event {
                 SegmenterEvent::SpeechStart { segment_seq } => {
+                    self.live = Some(LiveRemote {
+                        seq: segment_seq,
+                        covered_upto: 0,
+                        pending: Vec::new(),
+                    });
                     let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
                 }
                 SegmenterEvent::SegmentReady {
                     segment_seq,
                     segment,
+                    trailing_silence,
                 } => {
+                    tracing::debug!(
+                        target: "sttvad",
+                        "Finalizing segment {segment_seq}: {:.2}s",
+                        segment.len() as f32 / SAMPLE_RATE as f32
+                    );
+
+                    // The final request covers the complete utterance; any
+                    // live prefix request is superseded by it.
+                    if let Some(mut live) = self.live.take() {
+                        for p in live.pending.drain(..) {
+                            p.token.cancel();
+                        }
+                    }
+                    let speech_end_offset = segment.len().saturating_sub(trailing_silence);
+                    tracing::debug!(
+                        target: "stt",
+                        "Final request covers {speech_end_offset} spoken samples of {}",
+                        segment.len()
+                    );
+
                     let token = CancellationToken::new();
                     self.pending = Some(token.clone());
                     self.inflight.fetch_add(1, Ordering::SeqCst);
@@ -284,6 +334,38 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
             }
         }
 
+        // Live cadence: dispatch a prefix request when the interval elapsed
+        // (runs detached; never blocks the audio loop).
+        if self.live_cfg.enabled
+            && let Some(live) = &mut self.live
+            && self.segmenter.in_speech()
+        {
+            let buf = self.segmenter.speech_buf();
+            let seq = live.seq;
+            if buf.len().saturating_sub(live.covered_upto)
+                >= SAMPLE_RATE * self.live_cfg.interval_ms.max(1) as usize / 1000
+            {
+                let window =
+                    (SAMPLE_RATE * self.live_cfg.window_ms.max(1) as usize / 1000).min(buf.len());
+                let snapshot = buf[buf.len() - window..].to_vec();
+                live.covered_upto = buf.len();
+                let token = CancellationToken::new();
+                live.pending.push(PendingLive {
+                    covered_len: buf.len(),
+                    token: token.clone(),
+                });
+                self.inflight.fetch_add(1, Ordering::SeqCst);
+                let client = self.client.clone();
+                let cfg = self.cfg.clone();
+                let tx = tx.clone();
+                let inflight = Arc::clone(&self.inflight);
+                tokio::spawn(async move {
+                    dispatch_live_transcription(client, cfg, snapshot, seq, token, tx, inflight)
+                        .await;
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -295,6 +377,11 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
                 target: "stt",
                 "Cancelled in-flight remote transcription (barge-in)"
             );
+        }
+        if let Some(mut live) = self.live.take() {
+            for p in live.pending.drain(..) {
+                p.token.cancel();
+            }
         }
     }
 
@@ -361,10 +448,15 @@ impl<D: SpeechDetector + Sync + 'static> SttProvider for OpenAiSttProvider<D> {
 
 impl<D: SpeechDetector> Drop for OpenAiSttProvider<D> {
     fn drop(&mut self) {
-        // Best-effort: stop a detached request when the provider goes away
-        // (pipeline shutdown) instead of letting it run to its timeout.
+        // Best-effort: stop detached requests when the provider goes away
+        // (pipeline shutdown) instead of letting them run to their timeout.
         if let Some(token) = self.pending.take() {
             token.cancel();
+        }
+        if let Some(mut live) = self.live.take() {
+            for p in live.pending.drain(..) {
+                p.token.cancel();
+            }
         }
     }
 }
@@ -413,6 +505,34 @@ async fn dispatch_transcription(
                 tracing::debug!(target: "stt", "Remote transcription aborted on barge-in");
             } else {
                 tracing::warn!(target: "stt", "Remote transcription failed: {e:#}");
+            }
+        }
+    }
+}
+
+/// Run a live prefix transcription and forward the partial text through `tx`
+/// (contract P3). Results are cosmetic: superseded requests simply vanish.
+async fn dispatch_live_transcription(
+    client: reqwest::Client,
+    cfg: OpenAiSttConfig,
+    segment: Vec<f32>,
+    segment_seq: u64,
+    token: CancellationToken,
+    tx: mpsc::Sender<SpeechEvent>,
+    inflight: Arc<AtomicUsize>,
+) {
+    let _guard = InflightGuard(inflight);
+    match transcribe_remote(&client, &cfg, &segment, &token).await {
+        Ok(quality) => {
+            if token.is_cancelled() || quality.text.trim().is_empty() {
+                return;
+            }
+            tracing::debug!(target: "stt", "Partial (live remote, seq {segment_seq}): {}", quality.text);
+            let _ = tx.send(SpeechEvent::Speech(quality.text)).await;
+        }
+        Err(e) => {
+            if !token.is_cancelled() {
+                tracing::debug!(target: "stt", "Live remote transcription failed: {e:#}");
             }
         }
     }

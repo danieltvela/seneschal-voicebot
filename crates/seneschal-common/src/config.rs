@@ -143,6 +143,33 @@ pub struct Config {
     /// (so short answers like "yes"/"Vale" work). Coughs/noise are rejected by NoSpeechGate.
     /// Default: 2 (~200ms sustained speech-like signal).
     pub vad_confirm_probes: usize,
+    /// VAD probe window in ms (VAD_PROBE_MS). Default: 100 (contract P1: the
+    /// start commit lands within `vad_confirm_probes × probe` of the onset).
+    #[serde(default = "default_vad_probe_ms")]
+    pub vad_probe_ms: usize,
+    /// Real-audio pre-roll prepended to confirmed segments, in ms
+    /// (VAD_PREROLL_MS). Default: 300 — keeps the utterance onset that the
+    /// VAD threshold crossed late (contract P4).
+    #[serde(default = "default_vad_preroll_ms")]
+    pub vad_preroll_ms: usize,
+    /// Grace period after the silence timeout during which resumed speech
+    /// cancels the closure, in ms (VAD_POST_ROLL_MS). Default: 200 — uniform
+    /// for whisper/parakeet/openai; avoids premature closes on soft tails.
+    #[serde(default = "default_vad_post_roll_ms")]
+    pub vad_post_roll_ms: usize,
+    /// Live transcription while the user speaks (STT_LIVE_ENABLED, default
+    /// true): partial decodes run during the open segment; the segment close
+    /// reuses a decode that already covered all speech (contract P3/P4).
+    #[serde(default = "default_stt_live_enabled")]
+    pub stt_live_enabled: bool,
+    /// Minimum new speech audio (ms) between live partial decodes
+    /// (STT_LIVE_INTERVAL_MS). Default: 1000.
+    #[serde(default = "default_stt_live_interval_ms")]
+    pub stt_live_interval_ms: u64,
+    /// Cap on the audio length per live partial decode (STT_LIVE_WINDOW_MS);
+    /// longer segments decode their tail. Default: 15000.
+    #[serde(default = "default_stt_live_window_ms")]
+    pub stt_live_window_ms: u64,
 
     // ── Language ─────────────────────────────────────────────────────────────
     /// "es" (default) or "en"
@@ -612,6 +639,34 @@ fn default_stt_language() -> String {
     "auto".to_string()
 }
 
+/// Contract P1: with 100 ms probes the start commit lands ~200 ms after the
+/// onset (2 confirm probes).
+fn default_vad_probe_ms() -> usize {
+    100
+}
+
+/// Contract P4: real-audio pre-roll so the utterance onset is never lost.
+fn default_vad_preroll_ms() -> usize {
+    300
+}
+
+/// Uniform post-roll grace for whisper/parakeet/openai (contract P6).
+fn default_vad_post_roll_ms() -> usize {
+    200
+}
+
+fn default_stt_live_enabled() -> bool {
+    true
+}
+
+fn default_stt_live_interval_ms() -> u64 {
+    1000
+}
+
+fn default_stt_live_window_ms() -> u64 {
+    15_000
+}
+
 /// Reference remote STT deployment (issue #17): `seneschal-asr` (Qwen3-ASR)
 /// served by vLLM at `http://localhost:8024`.
 fn default_stt_url() -> String {
@@ -794,6 +849,24 @@ impl Config {
         }
         if let Ok(v) = env::var("VAD_MODEL") {
             self.vad_model = v;
+        }
+        if let Ok(v) = env::var("VAD_PROBE_MS") {
+            self.vad_probe_ms = v.parse().context("Invalid VAD_PROBE_MS")?;
+        }
+        if let Ok(v) = env::var("VAD_PREROLL_MS") {
+            self.vad_preroll_ms = v.parse().context("Invalid VAD_PREROLL_MS")?;
+        }
+        if let Ok(v) = env::var("VAD_POST_ROLL_MS") {
+            self.vad_post_roll_ms = v.parse().context("Invalid VAD_POST_ROLL_MS")?;
+        }
+        if let Ok(v) = env::var("STT_LIVE_ENABLED") {
+            self.stt_live_enabled = v.parse().context("Invalid STT_LIVE_ENABLED")?;
+        }
+        if let Ok(v) = env::var("STT_LIVE_INTERVAL_MS") {
+            self.stt_live_interval_ms = v.parse().context("Invalid STT_LIVE_INTERVAL_MS")?;
+        }
+        if let Ok(v) = env::var("STT_LIVE_WINDOW_MS") {
+            self.stt_live_window_ms = v.parse().context("Invalid STT_LIVE_WINDOW_MS")?;
         }
         if let Ok(v) = env::var("VAD_CONFIRM_PROBES") {
             self.vad_confirm_probes = v.parse().context("Invalid VAD_CONFIRM_PROBES")?;

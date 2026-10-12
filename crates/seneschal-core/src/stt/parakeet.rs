@@ -8,10 +8,9 @@ use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
-use super::segmenter::{
-    SAMPLE_RATE, SegmenterConfig, SegmenterEvent, SileroDetector, VadSegmenter,
-};
-use super::whisper::{WhisperSTTVADConfig, load_vad};
+use super::segmenter::{SAMPLE_RATE, SegmenterEvent, SileroDetector, VadSegmenter};
+use super::streaming::{LiveDecoder, LiveStreamer};
+use super::whisper::{WhisperSTTVADConfig, load_vad, segmenter_config};
 
 /// Load the Parakeet TDT model, placing the ONNX Runtime session on `gpu`
 /// when requested (issue #14).
@@ -55,6 +54,18 @@ fn load_parakeet_model(model_dir: &str, gpu: Option<i32>) -> parakeet_rs::Result
 pub struct ParakeetSttProvider {
     model: Arc<Mutex<ParakeetTDT>>,
     segmenter: VadSegmenter<SileroDetector>,
+    streamer: LiveStreamer,
+}
+
+/// Blocking Parakeet decoder over one snapshot of the open segment (live).
+struct ParakeetDecoder {
+    model: Arc<Mutex<ParakeetTDT>>,
+}
+
+impl LiveDecoder for ParakeetDecoder {
+    fn decode(&self, audio: Vec<f32>) -> Result<TranscriptionQuality> {
+        transcribe(&self.model, &audio)
+    }
 }
 
 impl ParakeetSttProvider {
@@ -65,22 +76,12 @@ impl ParakeetSttProvider {
             .with_context(|| format!("Failed to load Parakeet TDT model from: {}\n\nThe model directory must contain ONNX Runtime files (encoder-model.onnx, decoder_joint-model.onnx, vocab.txt).\nYou may have downloaded the wrong format — parakeet-rs requires the ONNX export, not the HuggingFace Transformers model (.safetensors) or NeMo checkpoint (.nemo).\n\nSolution: download the correct ONNX model from HuggingFace:\n  mkdir -p {}\n  cd {}\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt\n  # Optional external data (if present):\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data\n", model_dir, model_dir, model_dir))?;
 
         let vad = load_vad(&base.vad_model, base.vad_gpu)?;
-        let segmenter = VadSegmenter::new(
-            SileroDetector::new(vad),
-            // Uniform contract (P6): 100 ms probes, real-audio pre-roll,
-            // 200 ms post-roll. Leading-silence trimming is disabled — the
-            // real pre-roll carries the onset and trimming would eat it.
-            SegmenterConfig::uniform(
-                base.silence_ms,
-                base.vad_start_threshold,
-                base.vad_end_threshold,
-                base.vad_confirm_probes,
-            ),
-        )?;
+        let segmenter = VadSegmenter::new(SileroDetector::new(vad), segmenter_config(&base))?;
+        let streamer = LiveStreamer::new(base.live.clone());
 
         tracing::info!(
             target: "sttvad",
-            "ParakeetSttProvider ready (parakeet: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {}, parakeet_gpu: {}, vad_gpu: {})",
+            "ParakeetSttProvider ready (parakeet: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {}, probe_ms: {}, preroll_ms: {}, post_roll_ms: {}, live: {}, parakeet_gpu: {}, vad_gpu: {})",
             model_dir,
             base.vad_model,
             base.language,
@@ -88,6 +89,10 @@ impl ParakeetSttProvider {
             base.vad_start_threshold,
             base.vad_end_threshold,
             base.vad_confirm_probes.max(1),
+            base.probe_ms,
+            base.preroll_ms,
+            base.post_roll_ms,
+            base.live.enabled,
             base.parakeet_gpu
                 .map(|i| i.to_string())
                 .unwrap_or_else(|| "cpu".into()),
@@ -99,22 +104,30 @@ impl ParakeetSttProvider {
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
             segmenter,
+            streamer,
         })
     }
 
+    /// Feed a chunk of 16 kHz mono f32 audio. Live partial decodes run while
+    /// the segment is open (contract P3); the close completes via a detached
+    /// task (contract P4) — decoding never blocks the VAD feed.
     pub async fn process_audio(
         &mut self,
         audio: &[f32],
         tx: &mpsc::Sender<SpeechEvent>,
     ) -> Result<()> {
+        self.streamer.poll(&tx).await;
+
         for event in self.segmenter.feed(audio) {
             match event {
                 SegmenterEvent::SpeechStart { segment_seq } => {
+                    self.streamer.on_segment_start(segment_seq);
                     let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
                 }
                 SegmenterEvent::SegmentReady {
                     segment_seq,
                     segment,
+                    trailing_silence,
                 } => {
                     tracing::debug!(
                         target: "sttvad",
@@ -122,24 +135,31 @@ impl ParakeetSttProvider {
                         segment.len() as f32 / SAMPLE_RATE as f32
                     );
 
-                    let model = Arc::clone(&self.model);
-                    let quality =
-                        tokio::task::spawn_blocking(move || -> Result<TranscriptionQuality> {
-                            transcribe(&model, &segment)
-                        })
-                        .await
-                        .context("transcription task join")??;
-
-                    tracing::info!(target: "sttvad", "SpeechEnd: {}", quality.text);
-                    let _ = tx
-                        .send(SpeechEvent::SpeechEnd {
-                            segment_seq,
-                            quality,
-                        })
-                        .await;
+                    let speech_end_offset = segment.len().saturating_sub(trailing_silence);
+                    let decoder = ParakeetDecoder {
+                        model: Arc::clone(&self.model),
+                    };
+                    self.streamer.finish_detached(
+                        segment_seq,
+                        segment,
+                        speech_end_offset,
+                        decoder,
+                        tx.clone(),
+                    );
                 }
             }
         }
+
+        let seq = self.segmenter.current_segment_seq();
+        self.streamer.maybe_spawn(
+            seq,
+            self.segmenter.in_speech(),
+            self.segmenter.closing_silence_started(),
+            self.segmenter.speech_buf(),
+            ParakeetDecoder {
+                model: Arc::clone(&self.model),
+            },
+        );
 
         Ok(())
     }
@@ -161,6 +181,10 @@ impl SttProvider for ParakeetSttProvider {
 
     fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
         ParakeetSttProvider::transcribe_complete(self, audio)
+    }
+
+    fn inflight_transcriptions(&self) -> usize {
+        self.streamer.inflight()
     }
 }
 

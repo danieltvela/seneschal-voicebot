@@ -1,6 +1,7 @@
 pub mod no_speech_gate;
 pub mod provider;
 pub mod segmenter;
+pub mod streaming;
 pub mod wav;
 pub mod whisper;
 pub mod whisper_log;
@@ -17,6 +18,7 @@ pub mod speech_recognizer;
 pub use no_speech_gate::{NoSpeechGate, TranscriptionQuality};
 pub use provider::{SttProvider, create_provider};
 pub use segmenter::{SegmenterConfig, SegmenterEvent, SpeechDetector, VadSegmenter};
+pub use streaming::{LiveDecoder, LiveStreamConfig, LiveStreamer};
 #[allow(unused_imports)]
 pub use whisper::{WhisperSTTVAD, WhisperSTTVADConfig, WhisperSttProvider};
 
@@ -34,7 +36,7 @@ pub enum SpeechEvent {
     SpeechStart {
         segment_seq: u64,
     },
-    #[allow(dead_code)]
+    /// Live partial transcript (contract P3): emitted while the user speaks.
     Speech(String),
     SpeechEnd {
         segment_seq: u64,

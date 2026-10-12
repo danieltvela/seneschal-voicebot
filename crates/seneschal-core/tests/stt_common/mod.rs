@@ -16,6 +16,7 @@
 use anyhow::{Context, Result, bail};
 #[cfg(feature = "openai-stt")]
 use seneschal_core::stt::openai::{OpenAiSttConfig, OpenAiSttProvider};
+use seneschal_core::stt::streaming::LiveStreamConfig;
 use seneschal_core::stt::{
     SpeechEvent, SttProvider, TranscriptionQuality, WhisperSTTVADConfig, WhisperSttProvider,
 };
@@ -89,7 +90,9 @@ pub fn skip_if_no_models() {
 }
 
 /// Default provider config mirroring production (seneschal.pro.toml + .env):
-/// silence 300 ms, start 0.65 / end 0.45, confirm_probes 2.
+/// silence 300 ms, start 0.65 / end 0.45, confirm_probes 2, plus the uniform
+/// segmentation contract (100 ms probes, 300 ms pre-roll, 200 ms post-roll)
+/// and live transcription enabled at a fast interval for the audits.
 pub fn default_config(language: &str) -> WhisperSTTVADConfig {
     let (wm, vm) = model_paths();
     WhisperSTTVADConfig {
@@ -100,6 +103,19 @@ pub fn default_config(language: &str) -> WhisperSTTVADConfig {
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
         vad_confirm_probes: 2,
+        probe_ms: 100,
+        preroll_ms: 300,
+        post_roll_ms: 200,
+        live: LiveStreamConfig {
+            enabled: std::env::var("STT_LIVE_ENABLED")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true),
+            interval_ms: std::env::var("STT_LIVE_INTERVAL_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000),
+            window_ms: 15_000,
+        },
         vad_gpu: None,
         parakeet_gpu: None,
     }

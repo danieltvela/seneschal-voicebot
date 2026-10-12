@@ -15,11 +15,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use seneschal_core::stt::openai::{OpenAiSttConfig, OpenAiSttProvider};
-use seneschal_core::stt::segmenter::{SpeechDetector, VAD_PROBE_SAMPLES};
+use seneschal_core::stt::segmenter::SpeechDetector;
+use seneschal_core::stt::streaming::LiveStreamConfig;
 use seneschal_core::stt::{SpeechEvent, WhisperSTTVADConfig};
 use tokio::sync::mpsc;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Probe window the shared segmenter uses by default (100 ms @ 16 kHz).
+const PROBE: usize = 1600;
 
 /// Deterministic speech detector driven by a per-probe probability script.
 struct ScriptedDetector {
@@ -50,6 +54,16 @@ fn base_config() -> WhisperSTTVADConfig {
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
         vad_confirm_probes: 2,
+        probe_ms: 100,
+        preroll_ms: 300,
+        post_roll_ms: 200,
+        // Live partials off by default in these tests; the dedicated live test
+        // below turns them on with a fast interval.
+        live: LiveStreamConfig {
+            enabled: false,
+            interval_ms: 1000,
+            window_ms: 15_000,
+        },
         vad_gpu: None,
         parakeet_gpu: None,
     }
@@ -65,9 +79,10 @@ fn cfg(url: &str) -> OpenAiSttConfig {
     }
 }
 
-/// Two confirmed probes, then enough silence to close the segment (whisper
-/// style single-stage close, silence_ms = 300).
-const ONE_UTTERANCE: &[f32] = &[0.9, 0.9, 0.0, 0.0, 0.0];
+/// Two confirmed probes, then enough silence to close the segment (uniform
+/// post-roll contract; silence_ms = 300 with 100 ms probes = 3 silent probes
+/// after the 200 ms post-roll grace).
+const ONE_UTTERANCE: &[f32] = &[0.9, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0];
 
 type Provider = OpenAiSttProvider<ScriptedDetector>;
 
@@ -80,7 +95,7 @@ fn provider(probs: &[f32], cfg: OpenAiSttConfig) -> (Provider, usize) {
 
 async fn feed(provider: &mut Provider, tx: &mpsc::Sender<SpeechEvent>, probes: usize) {
     for _ in 0..probes {
-        let chunk = vec![0.1f32; VAD_PROBE_SAMPLES];
+        let chunk = vec![0.1f32; PROBE];
         provider.process_audio(&chunk, tx).await.unwrap();
     }
 }
@@ -394,6 +409,61 @@ async fn rejects_empty_url_and_model_at_construction() {
     let mut c = cfg("http://localhost:9");
     c.model = String::new();
     assert!(OpenAiSttProvider::with_detector(scripted(&[]).0, &base_config(), c).is_err());
+}
+
+/// Contract P3 (live): while the user speaks, prefix requests emit
+/// `Speech` partials BEFORE the close; the final request covers the complete
+/// utterance and produces exactly one `SpeechEnd`.
+#[tokio::test]
+async fn live_prefix_requests_emit_partials_before_final() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "hola"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut base = base_config();
+    base.live = LiveStreamConfig {
+        enabled: true,
+        interval_ms: 200, // one live request every 2 probes
+        window_ms: 15_000,
+    };
+    // 20 speech probes (2 s) + 5 closing silent probes (post-roll contract).
+    let mut probs = vec![0.9f32; 20];
+    probs.extend_from_slice(&[0.0; 5]);
+    let (detector, len) = scripted(&probs);
+    let mut p = OpenAiSttProvider::with_detector(detector, &base, cfg(&server.uri()))
+        .expect("provider construction");
+
+    let (tx, mut rx) = mpsc::channel(64);
+    feed(&mut p, &tx, len).await;
+
+    // Collect until SpeechEnd; a partial must precede it.
+    let mut partials = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let ev = tokio::time::timeout_at(deadline, rx.recv()).await;
+        match ev {
+            Ok(Some(SpeechEvent::Speech(_))) => partials += 1,
+            Ok(Some(SpeechEvent::SpeechEnd { .. })) => break,
+            Ok(Some(_)) => continue,
+            _ => panic!("stream ended without SpeechEnd (partials={partials})"),
+        }
+    }
+    assert!(
+        partials >= 1,
+        "live transcription must emit partials during speech (P3)"
+    );
+
+    // Live prefix POSTs + the final covering POST.
+    let requests = server.received_requests().await.unwrap().len();
+    assert!(
+        requests >= 2,
+        "expected live + final requests, got {requests}"
+    );
 }
 
 // ── Live service integration (ignored by default) ──────────────────────────────

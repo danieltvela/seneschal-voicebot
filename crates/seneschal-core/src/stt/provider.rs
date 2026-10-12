@@ -6,6 +6,7 @@ use seneschal_common::config::Config;
 
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
+use super::streaming::LiveStreamConfig;
 use super::whisper::{WhisperSTTVADConfig, WhisperSttProvider};
 
 #[async_trait]
@@ -53,6 +54,14 @@ pub fn create_provider(
         vad_start_threshold: config.vad_start_threshold,
         vad_end_threshold: config.vad_end_threshold,
         vad_confirm_probes: config.vad_confirm_probes,
+        probe_ms: config.vad_probe_ms,
+        preroll_ms: config.vad_preroll_ms,
+        post_roll_ms: config.vad_post_roll_ms,
+        live: LiveStreamConfig {
+            enabled: config.stt_live_enabled,
+            interval_ms: config.stt_live_interval_ms,
+            window_ms: config.stt_live_window_ms,
+        },
         vad_gpu: assignments.vad.index(),
         parakeet_gpu: assignments.parakeet.index(),
     };

@@ -153,8 +153,14 @@ impl SegmenterConfig {
 pub enum SegmenterEvent {
     /// VAD committed to a speech segment (drives barge-in / LISTENING).
     SpeechStart { segment_seq: u64 },
-    /// A finalized utterance ready to be transcribed.
-    SegmentReady { segment_seq: u64, audio: Vec<f32> },
+    /// A finalized utterance ready to be transcribed. `trailing_silence` is
+    /// the length (samples) of the silence tail at the end of `audio`; the
+    /// spoken part ends at `audio.len() - trailing_silence`.
+    SegmentReady {
+        segment_seq: u64,
+        audio: Vec<f32>,
+        trailing_silence: usize,
+    },
 }
 
 /// VAD-driven utterance segmenter, generic over the speech detector so the
@@ -314,6 +320,9 @@ impl<D: SpeechDetector> VadSegmenter<D> {
                 let silence = avg_prob < self.vad_end_threshold;
                 if silence {
                     self.post_roll_remaining = self.post_roll_remaining.saturating_sub(chunk.len());
+                    // Count post-roll silence too, so the finalized segment can
+                    // report where the spoken part ends.
+                    self.silence_samples += chunk.len();
                     if self.post_roll_remaining == 0 {
                         self.finalize_segment(events);
                     }
@@ -454,6 +463,10 @@ impl<D: SpeechDetector> VadSegmenter<D> {
     }
 
     fn finalize_segment(&mut self, events: &mut Vec<SegmenterEvent>) {
+        // Trailing silence at close = the accumulated below-end-threshold tail
+        // (silence probes + post-roll probes; reset to 0 whenever speech
+        // resumed). Captured before the buffer is taken.
+        let trailing = self.silence_samples;
         let audio = std::mem::take(&mut self.speech_buf);
         self.in_speech = false;
         self.in_post_roll = false;
@@ -477,6 +490,7 @@ impl<D: SpeechDetector> VadSegmenter<D> {
         );
         events.push(SegmenterEvent::SegmentReady {
             segment_seq: seq,
+            trailing_silence: trailing,
             audio: segment,
         });
     }
