@@ -1,4 +1,4 @@
-//! Raw PCM decoding for the vLLM-Omni speech endpoint (issue #16).
+//! Raw PCM decoding for the OpenAI-compatible speech endpoint (issue #16).
 //!
 //! With `response_format=pcm` + `stream_format=audio` the service returns raw
 //! little-endian **16-bit signed mono** samples (24 kHz for Qwen3-TTS), not a

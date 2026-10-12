@@ -334,38 +334,38 @@ pub struct Config {
     /// Default Kokoro speech speed (KOKORO_SPEED, default 1.3).
     pub kokoro_speed: f32,
 
-    // ── TTS: vLLM-Omni / Qwen3-TTS (issue #16) ──────────────────────────────
-    /// Base URL of the local vLLM-Omni speech service (VLLM_TTS_URL,
+    // ── TTS: OpenAI-compatible speech API (issue #16) ───────────────────────
+    /// Base URL of the OpenAI-compatible speech service (OPENAI_TTS_URL,
     /// default "http://localhost:8025"). Only used when `tts_provider = "openai"`.
-    #[serde(default = "default_vllm_tts_url")]
-    pub vllm_tts_url: String,
-    /// Preset voice name (VLLM_TTS_VOICE, default "vivian"). Discover the full
+    #[serde(default = "default_openai_tts_url")]
+    pub openai_tts_url: String,
+    /// Preset voice name (OPENAI_TTS_VOICE, default "vivian"). Discover the full
     /// list with `--list-voices` or `GET /v1/audio/voices`.
-    #[serde(default = "default_vllm_tts_voice")]
-    pub vllm_tts_voice: String,
-    /// Language hint sent as `language` (VLLM_TTS_LANGUAGE, default "auto").
+    #[serde(default = "default_openai_tts_voice")]
+    pub openai_tts_voice: String,
+    /// Language hint sent as `language` (OPENAI_TTS_LANGUAGE, default "auto").
     /// "auto" (case-insensitive) is sent as the literal `"Auto"` so the model
     /// adapts per utterance (ES/EN code-switching). Never pin a single
     /// language unless the user explicitly wants to.
-    #[serde(default = "default_vllm_tts_language")]
-    pub vllm_tts_language: String,
+    #[serde(default = "default_openai_tts_language")]
+    pub openai_tts_language: String,
     /// Natural-language style/emotion instruction applied to every synthesis
-    /// request (VLLM_TTS_INSTRUCTIONS, default ""). Empty = omitted.
+    /// request (OPENAI_TTS_INSTRUCTIONS, default ""). Empty = omitted.
     #[serde(default)]
-    pub vllm_tts_instructions: String,
-    /// Speech speed (VLLM_TTS_SPEED, default 0.0 = service default). Sent as
+    pub openai_tts_instructions: String,
+    /// Speech speed (OPENAI_TTS_SPEED, default 0.0 = service default). Sent as
     /// `speed` only when > 0.
     #[serde(default)]
-    pub vllm_tts_speed: f32,
+    pub openai_tts_speed: f32,
     /// Warm up the service at startup with a throwaway request
-    /// (VLLM_TTS_WARMUP, default false). The first request after container
+    /// (OPENAI_TTS_WARMUP, default false). The first request after container
     /// start takes ~90 s; warming up avoids that latency on the first turn.
     #[serde(default)]
-    pub vllm_tts_warmup: bool,
+    pub openai_tts_warmup: bool,
     /// HTTP timeout for a synthesis request in milliseconds
-    /// (VLLM_TTS_TIMEOUT_MS, default 120000) — must cover the ~90 s warmup.
-    #[serde(default = "default_vllm_tts_timeout_ms")]
-    pub vllm_tts_timeout_ms: u64,
+    /// (OPENAI_TTS_TIMEOUT_MS, default 120000) — must cover the ~90 s warmup.
+    #[serde(default = "default_openai_tts_timeout_ms")]
+    pub openai_tts_timeout_ms: u64,
 
     // ── Context consolidation ────────────────────────────────────────────────
     /// Approximate context window of the LLM model in tokens.
@@ -604,23 +604,23 @@ fn default_thinking_style() -> String {
     "auto".to_string()
 }
 
-/// Local vLLM-Omni speech service base URL (issue #16).
-fn default_vllm_tts_url() -> String {
+/// Local OpenAI-compatible speech service base URL (issue #16).
+fn default_openai_tts_url() -> String {
     "http://localhost:8025".to_string()
 }
 
 /// Default Qwen3-TTS CustomVoice preset (issue #16).
-fn default_vllm_tts_voice() -> String {
+fn default_openai_tts_voice() -> String {
     "vivian".to_string()
 }
 
 /// Adaptive language by default — the model decides per utterance (issue #16).
-fn default_vllm_tts_language() -> String {
+fn default_openai_tts_language() -> String {
     "auto".to_string()
 }
 
 /// Generous timeout: the first request after container start takes ~90 s.
-fn default_vllm_tts_timeout_ms() -> u64 {
+fn default_openai_tts_timeout_ms() -> u64 {
     120_000
 }
 
@@ -889,19 +889,19 @@ impl Config {
         if let Ok(v) = env::var("KOKORO_SPEED") {
             self.kokoro_speed = v.parse().context("Invalid KOKORO_SPEED")?;
         }
-        // vLLM-Omni / Qwen3-TTS (issue #16)
-        merge_env_string(&mut self.vllm_tts_url, "VLLM_TTS_URL");
-        merge_env_string(&mut self.vllm_tts_voice, "VLLM_TTS_VOICE");
-        merge_env_string(&mut self.vllm_tts_language, "VLLM_TTS_LANGUAGE");
-        merge_env_string(&mut self.vllm_tts_instructions, "VLLM_TTS_INSTRUCTIONS");
-        if let Ok(v) = env::var("VLLM_TTS_SPEED") {
-            self.vllm_tts_speed = v.parse().context("Invalid VLLM_TTS_SPEED")?;
+        // OpenAI-compatible speech API (issue #16)
+        merge_env_string(&mut self.openai_tts_url, "OPENAI_TTS_URL");
+        merge_env_string(&mut self.openai_tts_voice, "OPENAI_TTS_VOICE");
+        merge_env_string(&mut self.openai_tts_language, "OPENAI_TTS_LANGUAGE");
+        merge_env_string(&mut self.openai_tts_instructions, "OPENAI_TTS_INSTRUCTIONS");
+        if let Ok(v) = env::var("OPENAI_TTS_SPEED") {
+            self.openai_tts_speed = v.parse().context("Invalid OPENAI_TTS_SPEED")?;
         }
-        if let Ok(v) = env::var("VLLM_TTS_WARMUP") {
-            self.vllm_tts_warmup = v == "1" || v.to_lowercase() == "true";
+        if let Ok(v) = env::var("OPENAI_TTS_WARMUP") {
+            self.openai_tts_warmup = v == "1" || v.to_lowercase() == "true";
         }
-        if let Ok(v) = env::var("VLLM_TTS_TIMEOUT_MS") {
-            self.vllm_tts_timeout_ms = v.parse().context("Invalid VLLM_TTS_TIMEOUT_MS")?;
+        if let Ok(v) = env::var("OPENAI_TTS_TIMEOUT_MS") {
+            self.openai_tts_timeout_ms = v.parse().context("Invalid OPENAI_TTS_TIMEOUT_MS")?;
         }
 
         // Context consolidation

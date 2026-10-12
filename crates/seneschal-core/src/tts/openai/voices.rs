@@ -1,4 +1,4 @@
-//! Preset voice catalogue + discovery for the vLLM-Omni speech service
+//! Preset voice catalogue + discovery for the OpenAI-compatible speech service
 //! (issue #16).
 //!
 //! `GET /v1/audio/voices` returns the authoritative list of names the running
@@ -8,7 +8,7 @@
 
 use serde::Deserialize;
 
-use super::error::{VllmTtsError, VllmTtsResult};
+use super::error::{OpenAiTtsError, OpenAiTtsResult};
 
 /// Preset Qwen3-TTS CustomVoice voices with a short human label + language hint.
 pub const PRESET_VOICES: &[(&str, &str, &str)] = &[
@@ -53,7 +53,7 @@ pub struct UploadedVoice {
 pub async fn fetch_voices(
     client: &reqwest::Client,
     base_url: &str,
-) -> VllmTtsResult<VoicesResponse> {
+) -> OpenAiTtsResult<VoicesResponse> {
     let url = format!("{}/v1/audio/voices", base_url.trim_end_matches('/'));
     let resp = client.get(&url).send().await.map_err(map_reqwest)?;
     if !resp.status().is_success() {
@@ -62,18 +62,18 @@ pub async fn fetch_voices(
             .text()
             .await
             .unwrap_or_else(|_| "<no body>".to_string());
-        return Err(VllmTtsError::Service { status, message });
+        return Err(OpenAiTtsError::Service { status, message });
     }
     resp.json::<VoicesResponse>()
         .await
-        .map_err(|e| VllmTtsError::Decode(format!("invalid /v1/audio/voices response: {e}")))
+        .map_err(|e| OpenAiTtsError::Decode(format!("invalid /v1/audio/voices response: {e}")))
 }
 
 /// Print a human-readable voice table to stdout (`--list-voices`).
-pub async fn print_voices(client: &reqwest::Client, base_url: &str) -> VllmTtsResult<()> {
+pub async fn print_voices(client: &reqwest::Client, base_url: &str) -> OpenAiTtsResult<()> {
     let resp = fetch_voices(client, base_url).await?;
 
-    println!("Available voices for TTS provider: openai (vLLM-Omni / Qwen3-TTS)");
+    println!("Available voices for TTS provider: openai (Qwen3-TTS via an OpenAI-compatible API)");
     println!("Service: {base_url}");
     println!();
     println!(
@@ -111,28 +111,28 @@ pub async fn validate_voice(
     client: &reqwest::Client,
     base_url: &str,
     voice: &str,
-) -> VllmTtsResult<()> {
+) -> OpenAiTtsResult<()> {
     let resp = fetch_voices(client, base_url).await?;
     if resp.voices.iter().any(|v| v == voice)
         || resp.uploaded_voices.iter().any(|v| v.name == voice)
     {
         return Ok(());
     }
-    Err(VllmTtsError::Invalid(format!(
+    Err(OpenAiTtsError::Invalid(format!(
         "voice '{voice}' is not offered by {base_url}. Supported: {}",
         resp.voices.join(", ")
     )))
 }
 
 /// Convert any transport error into a provider error, mapping timeouts.
-pub(crate) fn map_reqwest(e: reqwest::Error) -> VllmTtsError {
+pub(crate) fn map_reqwest(e: reqwest::Error) -> OpenAiTtsError {
     if e.is_timeout() {
-        VllmTtsError::Timeout(e.to_string())
+        OpenAiTtsError::Timeout(e.to_string())
     } else if e.is_connect() {
-        VllmTtsError::Connection(e.to_string())
+        OpenAiTtsError::Connection(e.to_string())
     } else if e.is_decode() {
-        VllmTtsError::Decode(e.to_string())
+        OpenAiTtsError::Decode(e.to_string())
     } else {
-        VllmTtsError::Connection(format!("{e}"))
+        OpenAiTtsError::Connection(format!("{e}"))
     }
 }

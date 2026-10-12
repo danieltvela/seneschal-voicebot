@@ -2,23 +2,23 @@
 pub mod avspeech;
 #[cfg(feature = "kokoro")]
 pub mod kokoro;
+#[cfg(feature = "openai-tts")]
+pub mod openai;
 pub mod sentence;
-#[cfg(feature = "vllm-tts")]
-pub mod vllm;
 
 #[cfg(feature = "avspeech")]
 pub use avspeech::AvSpeechTts;
 #[cfg(feature = "kokoro")]
 pub use kokoro::KokoroTts;
+#[cfg(feature = "openai-tts")]
+pub use openai::{OpenAiTts, OpenAiTtsConfig};
 pub use sentence::SentenceSplitter;
-#[cfg(feature = "vllm-tts")]
-pub use vllm::{VllmTts, VllmTtsConfig};
 
 use tokio::sync::mpsc;
 
 /// Streaming synthesis handle shared by every TTS backend.
 ///
-/// A provider that truly streams (vLLM-Omni) fills `rx` progressively; the
+/// A provider that truly streams (the `openai` backend) fills `rx` progressively; the
 /// non-streaming backends (AVSpeech, Kokoro, Mock) send a single `Vec<f32>`
 /// with the whole utterance and close the channel. The pipeline therefore has
 /// one code path: pump `rx` into the speaker as chunks arrive.
@@ -33,8 +33,8 @@ pub struct TtsStreamHandle {
 /// - `"avspeech"` (default) — Native macOS `AVSpeechSynthesizer`; requires `--features avspeech`.
 ///   Configured by `AVSPEECH_VOICE` / `AVSPEECH_RATE`.
 /// - `"kokoro"` — Kokoro ONNX model; requires `--features kokoro` and espeak-ng.
-/// - `"openai"` — Qwen3-TTS via a local vLLM-Omni service (OpenAI-compatible
-///   speech API); requires `--features vllm-tts`. Configured by `VLLM_TTS_*`.
+/// - `"openai"` — Qwen3-TTS via an OpenAI-compatible service (OpenAI-compatible
+///   speech API); requires `--features openai-tts`. Configured by `OPENAI_TTS_*`.
 ///
 /// All variants expose the same `synthesize` / `synthesize_stream` /
 /// `sample_rate` interface so the rest of the pipeline is backend-agnostic.
@@ -43,8 +43,8 @@ pub enum TtsEngine {
     AvSpeech(AvSpeechTts),
     #[cfg(feature = "kokoro")]
     Kokoro(KokoroTts),
-    #[cfg(feature = "vllm-tts")]
-    Vllm(VllmTts),
+    #[cfg(feature = "openai-tts")]
+    OpenAi(OpenAiTts),
     /// Test-only variant: captures synthesized text instead of producing audio.
     Mock(self::mock_tts::MockTts),
 }
@@ -64,9 +64,9 @@ impl TtsEngine {
             #[cfg(feature = "kokoro")]
             Self::Kokoro(t) => t.synthesize(text),
             Self::Mock(t) => t.synthesize(text),
-            #[cfg(feature = "vllm-tts")]
-            Self::Vllm(_) => Err(anyhow::anyhow!(
-                "the vllm provider is streaming-only; use synthesize_stream()"
+            #[cfg(feature = "openai-tts")]
+            Self::OpenAi(_) => Err(anyhow::anyhow!(
+                "the openai provider is streaming-only; use synthesize_stream()"
             )),
             _ => unreachable!("no TTS backend enabled"),
         }
@@ -79,8 +79,8 @@ impl TtsEngine {
     #[allow(unused_variables)]
     pub async fn synthesize_stream(&self, text: &str) -> anyhow::Result<TtsStreamHandle> {
         match self {
-            #[cfg(feature = "vllm-tts")]
-            Self::Vllm(t) => {
+            #[cfg(feature = "openai-tts")]
+            Self::OpenAi(t) => {
                 let stream = t.synthesize_stream(text).await?;
                 Ok(TtsStreamHandle {
                     rx: stream.rx,
@@ -108,8 +108,8 @@ impl TtsEngine {
             Self::AvSpeech(t) => t.sample_rate(),
             #[cfg(feature = "kokoro")]
             Self::Kokoro(t) => t.sample_rate(),
-            #[cfg(feature = "vllm-tts")]
-            Self::Vllm(t) => t.sample_rate(),
+            #[cfg(feature = "openai-tts")]
+            Self::OpenAi(t) => t.sample_rate(),
             Self::Mock(t) => t.sample_rate(),
             _ => unreachable!("no TTS backend enabled"),
         }

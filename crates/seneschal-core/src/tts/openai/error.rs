@@ -1,8 +1,8 @@
-//! Errors raised by the vLLM-Omni / Qwen3-TTS provider (issue #16).
+//! Errors raised by the OpenAI-compatible TTS provider (issue #16).
 
 /// Failure modes of the remote TTS provider.
 #[derive(Debug, thiserror::Error)]
-pub enum VllmTtsError {
+pub enum OpenAiTtsError {
     /// Could not reach the service (connection refused, DNS failure, ...).
     #[error("TTS service unreachable: {0}")]
     Connection(String),
@@ -22,4 +22,4 @@ pub enum VllmTtsError {
 }
 
 /// Convenience result alias for the provider.
-pub type VllmTtsResult<T> = Result<T, VllmTtsError>;
+pub type OpenAiTtsResult<T> = Result<T, OpenAiTtsError>;

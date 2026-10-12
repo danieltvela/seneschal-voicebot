@@ -1,9 +1,10 @@
-//! vLLM-Omni / Qwen3-TTS TTS provider (issue #16).
+//! OpenAI-compatible TTS provider (issue #16).
 //!
-//! Consumes the OpenAI-compatible speech API served by a local vLLM-Omni
-//! container (`POST /v1/audio/speech`, `GET /v1/audio/voices`). Audio is
-//! streamed to the caller as raw 16-bit mono PCM chunks so playback can start
-//! before the sentence finishes synthesising.
+//! Consumes an OpenAI-compatible speech API (`POST /v1/audio/speech`,
+//! `GET /v1/audio/voices`). The current local deployment is a vLLM-Omni
+//! container, but the provider targets the API shape, not that runtime. Audio
+//! is streamed to the caller as raw 16-bit mono PCM chunks so playback can
+//! start before the sentence finishes synthesising.
 //!
 //! Verified against `vllm/vllm-omni:qwen-image21` serving
 //! `Qwen3-TTS-12Hz-1.7B-CustomVoice` on port 8025: ~24 kHz output, first
@@ -15,22 +16,22 @@ pub mod voices;
 
 use std::time::Duration;
 
-pub use error::{VllmTtsError, VllmTtsResult};
+pub use error::{OpenAiTtsError, OpenAiTtsResult};
 pub use voices::{UploadedVoice, VoicesResponse};
 
 use serde::Serialize;
 use tokio::sync::mpsc;
 
 /// Sample rate of the PCM returned by Qwen3-TTS in `response_format=pcm`.
-pub const VLLM_TTS_SAMPLE_RATE: u32 = 24_000;
+pub const OPENAI_TTS_SAMPLE_RATE: u32 = 24_000;
 
 /// Bounded depth (in chunks) of the synthesis → playback channel. Provides
 /// backpressure so a fast producer cannot grow memory unbounded.
 const STREAM_CHANNEL_CAPACITY: usize = 32;
 
-/// Runtime configuration for [`VllmTts`].
+/// Runtime configuration for [`OpenAiTts`].
 #[derive(Debug, Clone)]
-pub struct VllmTtsConfig {
+pub struct OpenAiTtsConfig {
     /// Service base URL, e.g. `http://localhost:8025`.
     pub base_url: String,
     /// Preset voice name.
@@ -46,7 +47,7 @@ pub struct VllmTtsConfig {
     pub timeout_ms: u64,
 }
 
-impl VllmTtsConfig {
+impl OpenAiTtsConfig {
     /// The wire value for the `language` field. `"auto"` maps to `"Auto"`.
     fn wire_language(&self) -> String {
         if self.language.eq_ignore_ascii_case("auto") {
@@ -74,26 +75,26 @@ struct SpeechRequest<'a> {
 
 /// Streaming synthesis handle handed to the pipeline.
 #[derive(Debug)]
-pub struct VllmTtsStream {
+pub struct OpenAiTtsStream {
     /// Receives mono f32 PCM chunks as they are decoded.
     pub rx: mpsc::Receiver<Vec<f32>>,
     /// Sample rate of the received chunks.
     pub sample_rate: u32,
 }
 
-/// The vLLM-Omni TTS client.
-pub struct VllmTts {
+/// The OpenAI-compatible TTS client.
+pub struct OpenAiTts {
     client: reqwest::Client,
-    cfg: VllmTtsConfig,
+    cfg: OpenAiTtsConfig,
 }
 
-impl VllmTts {
+impl OpenAiTts {
     /// Build a client. Performs a best-effort voice check against the service
     /// (a warning, never a hard failure, when the service is unreachable at
     /// startup).
-    pub fn new(cfg: VllmTtsConfig) -> VllmTtsResult<Self> {
+    pub fn new(cfg: OpenAiTtsConfig) -> OpenAiTtsResult<Self> {
         if cfg.voice.trim().is_empty() {
-            return Err(VllmTtsError::Invalid("VLLM_TTS_VOICE is empty".into()));
+            return Err(OpenAiTtsError::Invalid("OPENAI_TTS_VOICE is empty".into()));
         }
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -108,20 +109,20 @@ impl VllmTts {
     /// Returns the provider error on a rejection (unknown voice) or transport
     /// failure; callers that should not abort on a transient outage can log and
     /// continue instead.
-    pub async fn verify_voice(&self) -> VllmTtsResult<()> {
+    pub async fn verify_voice(&self) -> OpenAiTtsResult<()> {
         match voices::validate_voice(&self.client, &self.cfg.base_url, &self.cfg.voice).await {
             Ok(()) => {
                 tracing::info!(
                     target: "tts",
-                    "vLLM TTS voice '{}' accepted by {}",
+                    "OpenAI TTS voice '{}' accepted by {}",
                     self.cfg.voice,
                     self.cfg.base_url
                 );
                 Ok(())
             }
-            Err(VllmTtsError::Invalid(msg)) => {
+            Err(OpenAiTtsError::Invalid(msg)) => {
                 tracing::warn!(target: "tts", "{msg}");
-                Err(VllmTtsError::Invalid(msg))
+                Err(OpenAiTtsError::Invalid(msg))
             }
             Err(e) => {
                 tracing::warn!(
@@ -137,9 +138,9 @@ impl VllmTts {
     /// Warm up the service with a throwaway request. The first request after
     /// the container starts takes ~90 s; doing it at startup keeps the first
     /// real turn fast.
-    pub async fn warmup(&self) -> VllmTtsResult<()> {
+    pub async fn warmup(&self) -> OpenAiTtsResult<()> {
         let started = std::time::Instant::now();
-        tracing::info!(target: "tts", "Warming up vLLM TTS service at {} ...", self.cfg.base_url);
+        tracing::info!(target: "tts", "Warming up OpenAI TTS service at {} ...", self.cfg.base_url);
         let mut stream = self.synthesize_stream("Hola.").await?;
         let mut got_audio = false;
         while let Some(chunk) = stream.rx.recv().await {
@@ -149,7 +150,7 @@ impl VllmTts {
         }
         tracing::info!(
             target: "tts",
-            "vLLM TTS warmup finished in {} ms (audio={got_audio})",
+            "OpenAI TTS warmup finished in {} ms (audio={got_audio})",
             started.elapsed().as_millis()
         );
         Ok(())
@@ -157,7 +158,7 @@ impl VllmTts {
 
     /// Sample rate of the produced audio.
     pub fn sample_rate(&self) -> u32 {
-        VLLM_TTS_SAMPLE_RATE
+        OPENAI_TTS_SAMPLE_RATE
     }
 
     /// Start streaming synthesis of `text`.
@@ -165,9 +166,9 @@ impl VllmTts {
     /// Spawns a task that POSTs to `/v1/audio/speech` and pushes decoded f32
     /// chunks into a bounded channel. The channel is bounded so a stalled
     /// consumer applies backpressure to the HTTP read.
-    pub async fn synthesize_stream(&self, text: &str) -> VllmTtsResult<VllmTtsStream> {
+    pub async fn synthesize_stream(&self, text: &str) -> OpenAiTtsResult<OpenAiTtsStream> {
         if text.trim().is_empty() {
-            return Err(VllmTtsError::Invalid("empty synthesis text".into()));
+            return Err(OpenAiTtsError::Invalid("empty synthesis text".into()));
         }
 
         let body = SpeechRequest {
@@ -208,7 +209,7 @@ impl VllmTts {
         if !status.is_success() {
             let code = status.as_u16();
             let raw = resp.text().await.unwrap_or_default();
-            return Err(VllmTtsError::Service {
+            return Err(OpenAiTtsError::Service {
                 status: code,
                 message: extract_error_message(&raw),
             });
@@ -217,24 +218,24 @@ impl VllmTts {
         let (tx, rx) = mpsc::channel::<Vec<f32>>(STREAM_CHANNEL_CAPACITY);
         tokio::spawn(async move {
             if let Err(e) = pump_response(resp, tx).await {
-                tracing::warn!(target: "tts", "vLLM TTS stream ended with error: {e}");
+                tracing::warn!(target: "tts", "OpenAI TTS stream ended with error: {e}");
             }
         });
 
-        Ok(VllmTtsStream {
+        Ok(OpenAiTtsStream {
             rx,
-            sample_rate: VLLM_TTS_SAMPLE_RATE,
+            sample_rate: OPENAI_TTS_SAMPLE_RATE,
         })
     }
 
     /// `--list-voices` implementation.
-    pub async fn list_voices(&self) -> VllmTtsResult<()> {
+    pub async fn list_voices(&self) -> OpenAiTtsResult<()> {
         voices::print_voices(&self.client, &self.cfg.base_url).await
     }
 }
 
 /// Read the HTTP body incrementally, decode PCM and forward f32 chunks.
-async fn pump_response(resp: reqwest::Response, tx: mpsc::Sender<Vec<f32>>) -> VllmTtsResult<()> {
+async fn pump_response(resp: reqwest::Response, tx: mpsc::Sender<Vec<f32>>) -> OpenAiTtsResult<()> {
     use futures_util::StreamExt;
 
     let mut converter = pcm::Pcm16ToF32::new();
@@ -249,7 +250,7 @@ async fn pump_response(resp: reqwest::Response, tx: mpsc::Sender<Vec<f32>>) -> V
     }
     let dropped = converter.finish();
     if dropped > 0 {
-        tracing::debug!(target: "tts", "vLLM TTS stream ended with {dropped} dangling byte(s)");
+        tracing::debug!(target: "tts", "OpenAI TTS stream ended with {dropped} dangling byte(s)");
     }
     Ok(())
 }

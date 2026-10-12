@@ -67,16 +67,16 @@ export PARAKEET_MODEL_DIR="${PARAKEET_MODEL_DIR:-models/parakeet-tdt-0.6b-v3-onn
 # TTS_PROVIDER=avspeech, el binario abortaría al arrancar.
 # TTS_PROVIDER=kokoro
 export TTS_PROVIDER=openai
-export VLLM_TTS_URL=http://localhost:8025
-export VLLM_TTS_VOICE=vivian
-export VLLM_TTS_LANGUAGE=auto
+export OPENAI_TTS_URL=http://localhost:8025
+export OPENAI_TTS_VOICE=aiden
+export OPENAI_TTS_LANGUAGE=auto
 
 # ── GPU (issue #14): CUDA opt-in ─────────────────────────────────────────────
 # Con SENECHAL_CUDA=1 se compila con CUDA (whisper.cpp + ONNX Runtime GPU) y,
 # por defecto, GPU_AUTO reparte VAD/Parakeet/Kokoro entre las GPUs visibles.
 # Requiere toolkit CUDA instalado (nvcc) en el host. Requiere GPU_AUTO=0 o
 # overrides VAD_GPU/PARAKEET_GPU/TTS_GPU para un reparto manual.
-FEATURES="control,parakeet,kokoro,tui,remote,vllm-tts"
+FEATURES="control,parakeet,kokoro,tui,remote,openai-tts"
 if [[ "${SENECHAL_CUDA:-0}" == "1" ]]; then
     FEATURES="$FEATURES,cuda"
 fi

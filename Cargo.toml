@@ -175,8 +175,8 @@ default = ["memory", "tools-core", "search", "mcp", "agents", "plugins", "extras
 # TTS backends
 kokoro = ["dep:kokorox", "seneschal-core/kokoro", "seneschal-common/kokoro"]
 avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio", "seneschal-core/avspeech", "seneschal-common/avspeech"]
-# TTS — Qwen3-TTS via vLLM-Omni (issue #16)
-vllm-tts = ["seneschal-core/vllm-tts", "seneschal-common/vllm-tts"]
+# TTS — Qwen3-TTS via an OpenAI-compatible API (issue #16)
+openai-tts = ["seneschal-core/openai-tts", "seneschal-common/openai-tts"]
 # STT backends
 speaker = ["dep:sherpa-rs", "seneschal-core/speaker", "seneschal-common/speaker"]
 parakeet = ["dep:parakeet-rs", "seneschal-core/parakeet", "seneschal-common/parakeet"]
@@ -195,7 +195,7 @@ remote = ["dep:seneschal-remote", "control"]
 tui = ["dep:seneschal-tui", "dep:ratatui", "dep:crossterm", "agents"]
 extras = ["dep:seneschal-extras", "agents", "plugins", "search", "mcp"]
 # Meta-feature: enable everything
-full = ["memory", "tools-core", "search", "mcp", "agents", "classifier", "plugins", "control", "remote", "tui", "extras", "vllm-tts"]
+full = ["memory", "tools-core", "search", "mcp", "agents", "classifier", "plugins", "control", "remote", "tui", "extras", "openai-tts"]
 # GPU acceleration (Linux/NVIDIA hosts, issue #14): enables CUDA for the
 # whisper.cpp backend and the ONNX Runtime models (Parakeet STT / Kokoro TTS).
 # Only meaningful together with the matching backend features, e.g.:

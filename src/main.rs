@@ -61,8 +61,8 @@ use seneschal_core::tts::AvSpeechTts;
 #[cfg(feature = "kokoro")]
 use seneschal_core::tts::KokoroTts;
 use seneschal_core::tts::TtsEngine;
-#[cfg(feature = "vllm-tts")]
-use seneschal_core::tts::{VllmTts, VllmTtsConfig};
+#[cfg(feature = "openai-tts")]
+use seneschal_core::tts::{OpenAiTts, OpenAiTtsConfig};
 use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
 use seneschal_extras::analysis::ContextLens;
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
@@ -80,16 +80,16 @@ use seneschal_tools_core::CurrentTimeTool;
 #[cfg(test)]
 mod e2e_tests;
 
-/// Build the vLLM-Omni TTS provider configuration from the runtime config.
-#[cfg(feature = "vllm-tts")]
-fn vllm_tts_config(config: &Config) -> VllmTtsConfig {
-    VllmTtsConfig {
-        base_url: config.vllm_tts_url.clone(),
-        voice: config.vllm_tts_voice.clone(),
-        language: config.vllm_tts_language.clone(),
-        instructions: config.vllm_tts_instructions.clone(),
-        speed: config.vllm_tts_speed,
-        timeout_ms: config.vllm_tts_timeout_ms,
+/// Build the OpenAI-compatible TTS provider configuration from the runtime config.
+#[cfg(feature = "openai-tts")]
+fn openai_tts_config(config: &Config) -> OpenAiTtsConfig {
+    OpenAiTtsConfig {
+        base_url: config.openai_tts_url.clone(),
+        voice: config.openai_tts_voice.clone(),
+        language: config.openai_tts_language.clone(),
+        instructions: config.openai_tts_instructions.clone(),
+        speed: config.openai_tts_speed,
+        timeout_ms: config.openai_tts_timeout_ms,
     }
 }
 
@@ -238,9 +238,9 @@ async fn async_main() -> Result<()> {
                 );
                 std::process::exit(1);
             }
-            #[cfg(feature = "vllm-tts")]
+            #[cfg(feature = "openai-tts")]
             "openai" => {
-                let tts = match VllmTts::new(vllm_tts_config(&config)) {
+                let tts = match OpenAiTts::new(openai_tts_config(&config)) {
                     Ok(t) => t,
                     Err(e) => {
                         eprintln!("TTS_PROVIDER=openai: {e}");
@@ -252,16 +252,16 @@ async fn async_main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
-            #[cfg(not(feature = "vllm-tts"))]
+            #[cfg(not(feature = "openai-tts"))]
             "openai" => {
                 eprintln!(
-                    "TTS_PROVIDER=openai requires the 'vllm-tts' feature: cargo run --features vllm-tts"
+                    "TTS_PROVIDER=openai requires the 'openai-tts' feature: cargo run --features openai-tts"
                 );
                 std::process::exit(1);
             }
             _ => {
                 eprintln!(
-                    "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via vLLM-Omni, needs --features vllm-tts)",
+                    "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via an OpenAI-compatible API, needs --features openai-tts)",
                     config.tts_provider
                 );
                 std::process::exit(1);
@@ -1157,33 +1157,33 @@ async fn async_main() -> Result<()> {
                 "TTS_PROVIDER=kokoro requires the 'kokoro' feature: cargo run --features kokoro"
             );
         }
-        #[cfg(feature = "vllm-tts")]
+        #[cfg(feature = "openai-tts")]
         "openai" => {
             info!(
                 target: "tts",
-                "TTS provider: vLLM-Omni / Qwen3-TTS (OpenAI-compatible speech API, url={}, voice={}, language={})",
-                config.vllm_tts_url,
-                config.vllm_tts_voice,
-                config.vllm_tts_language
+                "TTS provider: openai (OpenAI-compatible speech API, url={}, voice={}, language={})",
+                config.openai_tts_url,
+                config.openai_tts_voice,
+                config.openai_tts_language
             );
-            let t = VllmTts::new(vllm_tts_config(&config))?;
+            let t = OpenAiTts::new(openai_tts_config(&config))?;
             if let Err(e) = t.verify_voice().await {
                 warn!(target: "tts", "TTS voice check failed: {e} (continuing)");
             }
-            if config.vllm_tts_warmup {
+            if config.openai_tts_warmup {
                 t.warmup().await?;
             }
-            TtsEngine::Vllm(t)
+            TtsEngine::OpenAi(t)
         }
-        #[cfg(not(feature = "vllm-tts"))]
+        #[cfg(not(feature = "openai-tts"))]
         "openai" => {
             anyhow::bail!(
-                "TTS_PROVIDER=openai requires the 'vllm-tts' feature: cargo run --features vllm-tts"
+                "TTS_PROVIDER=openai requires the 'openai-tts' feature: cargo run --features openai-tts"
             );
         }
         _ => {
             anyhow::bail!(
-                "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via vLLM-Omni, needs --features vllm-tts)",
+                "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via an OpenAI-compatible API, needs --features openai-tts)",
                 config.tts_provider
             );
         }

@@ -27,6 +27,7 @@ set includes the voice pipeline + essential tools + agents + plugins.
 |---------|---------|------------|--------------|
 | `kokoro` | Kokoro ONNX TTS | kokorox | `brew install espeak-ng` |
 | `avspeech` | macOS AVSpeechSynthesizer | objc2*, block2 | macOS only |
+| `openai-tts` | OpenAI-compatible TTS (Qwen3-TTS via vLLM-Omni) | — (reqwest already present) | reachable speech service (`OPENAI_TTS_URL`) |
 | `parakeet` | NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
 | `speech` | macOS SFSpeechRecognizer STT | speech | macOS only, microphone permission |
 | `speaker` | Speaker verification | sherpa-rs | `models/speaker_embedding.onnx` |

@@ -1,13 +1,16 @@
-# TTS provider: vLLM-Omni / Qwen3-TTS (issue #16)
+# TTS provider: OpenAI-compatible (Qwen3-TTS) — issue #16
 
-The `openai` backend synthesises speech through a local **vLLM-Omni** container
-serving a **Qwen3-TTS** checkpoint over an OpenAI-compatible speech API. It is
-the concrete "external TTS service" half of issue #15 and complements the
+The `openai` backend synthesises speech through a speech API that follows the
+**OpenAI-compatible** `POST /v1/audio/speech` contract. The current local
+deployment is a **vLLM-Omni** container serving a **Qwen3-TTS** checkpoint, but
+the provider targets the API shape, not that specific runtime. It is the
+concrete "external TTS service" half of issue #15 and complements the
 in-process `avspeech` / `kokoro` backends.
 
-- Feature: `--features vllm-tts`
+- Feature: `--features openai-tts`
 - Select: `TTS_PROVIDER=openai`
-- Deployment: the `seneschal-tts` service in
+- Config: `OPENAI_TTS_*`
+- Deployment (current): the `seneschal-tts` service in
   `~/services/tesla-docker/docker-compose.yml` (`vllm/vllm-omni:qwen-image21`),
   GPU 0, port **8025**.
 
@@ -34,19 +37,19 @@ Observed data path with
 - Output arrives in bursts (one decoder block every ~0.35 s).
 - Throughput ≈ **5× real time** on the shared GPU.
 - The **first request after container start takes ~90 s** (warmup); subsequent
-  requests ~0.5 s. Use `VLLM_TTS_WARMUP=1` to absorb it at startup, and keep the
+  requests ~0.5 s. Use `OPENAI_TTS_WARMUP=1` to absorb it at startup, and keep the
   default 120 s request timeout.
 
 ## Design
 
-- `crates/seneschal-core/src/tts/vllm/`
-  - `mod.rs` — `VllmTts` client: request shaping, streaming pump, warmup.
+- `crates/seneschal-core/src/tts/openai/`
+  - `mod.rs` — `OpenAiTts` client: request shaping, streaming pump, warmup.
   - `pcm.rs` — `Pcm16ToF32`: carries partial samples across TCP chunks and trims
     leading silence.
   - `voices.rs` — voice discovery/validation + a label table for the presets.
-  - `error.rs` — `VllmTtsError` with a readable message extracted from the
+  - `error.rs` — `OpenAiTtsError` with a readable message extracted from the
     OpenAI-style error body.
-- `TtsEngine::Vllm` and `TtsEngine::synthesize_stream()` in `tts/mod.rs` give the
+- `TtsEngine::OpenAi` and `TtsEngine::synthesize_stream()` in `tts/mod.rs` give the
   pipeline a uniform streaming interface. Non-streaming backends emit a single
   chunk, so `tts_task` has one code path.
 - **Incremental playback** (`audio/output.rs`): `AudioOutput::start_stream()`
@@ -94,16 +97,16 @@ variance.
 
 ```sh
 # Unit + wiremock contract tests
-cargo test -p seneschal-core --features vllm-tts
+cargo test -p seneschal-core --features openai-tts
 
-# Real service (skipped when unreachable); wired as `make test-vllm`
-VLLM_TTS_TEST_URL=http://localhost:8025 \
-  cargo test -p seneschal-core --features vllm-tts -- --ignored vllm_live
+# Real service (skipped when unreachable); wired as `make test-openai`
+OPENAI_TTS_TEST_URL=http://localhost:8025 \
+  cargo test -p seneschal-core --features openai-tts -- --ignored openai_live
 
 # Manual
-TTS_PROVIDER=openai VLLM_TTS_VOICE=vivian cargo run --features vllm-tts -- --list-voices
-TTS_PROVIDER=openai VLLM_TTS_INSTRUCTIONS="habla con entusiasmo" \
-  RUST_LOG=performance cargo run --features vllm-tts
+TTS_PROVIDER=openai OPENAI_TTS_VOICE=vivian cargo run --features openai-tts -- --list-voices
+TTS_PROVIDER=openai OPENAI_TTS_INSTRUCTIONS="habla con entusiasmo" \
+  RUST_LOG=performance cargo run --features openai-tts
 ```
 
 Look for `[+Nms] SpeechStart → FirstAudioPlayback` in the logs; a medium sentence

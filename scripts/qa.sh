@@ -5,7 +5,7 @@
 #   bash scripts/qa.sh [MODE|STAGE]
 #
 # Modes:  fast (default) | full | all
-# Stages: fmt | lint | test | test-ci | test-e2e | test-stt | test-llm | test-vllm
+# Stages: fmt | lint | test | test-ci | test-e2e | test-stt | test-llm | test-openai
 #         | build | audit | coverage
 #
 # Env overrides:
@@ -161,17 +161,17 @@ stage_test_llm() {
     fi
 }
 
-stage_test_vllm() {
-    banner "Stage: test-vllm  (real vLLM-Omni TTS service, issue #16)"
-    local url="${VLLM_TTS_TEST_URL:-http://localhost:8025}"
+stage_test_openai() {
+    banner "Stage: test-openai  (real OpenAI-compatible TTS service, issue #16)"
+    local url="${OPENAI_TTS_TEST_URL:-http://localhost:8025}"
     if ! curl -fs --max-time 2 "$url/v1/audio/voices" >/dev/null 2>&1; then
-        stage_skip "test-vllm" "no vLLM-Omni TTS service reachable on $url"
+        stage_skip "test-openai" "no OpenAI-compatible TTS service reachable on $url"
         return 0
     fi
-    if (cd "$PROJECT_ROOT" && VLLM_TTS_TEST_URL="$url" $CARGO test -p seneschal-core --features vllm-tts --quiet -- --ignored openai_live 2>&1 | tail -n 50); then
-        stage_ok "test-vllm"
+    if (cd "$PROJECT_ROOT" && OPENAI_TTS_TEST_URL="$url" $CARGO test -p seneschal-core --features openai-tts --quiet -- --ignored openai_live 2>&1 | tail -n 50); then
+        stage_ok "test-openai"
     else
-        stage_fail "test-vllm" "real vLLM TTS tests failed"
+        stage_fail "test-openai" "real OpenAI-compatible TTS tests failed"
         return 1
     fi
 }
@@ -243,7 +243,7 @@ run_full() {
     run_fast || return 1
     stage_test_stt  || true
     stage_test_llm  || true
-    stage_test_vllm || true
+    stage_test_openai || true
     stage_audit     || true
     stage_coverage  || true
 }
@@ -282,7 +282,7 @@ main() {
         test-e2e|\
         test-stt|\
         test-llm|\
-        test-vllm|\
+        test-openai|\
         build|\
         audit|\
         coverage) run_stage "$MODE" ;;
@@ -290,7 +290,7 @@ main() {
         *)
             printf '%sUnknown mode/stage: %s%s\n' "$C_RED" "$MODE" "$C_RESET" >&2
             printf 'Valid modes: fast, full, all\n' >&2
-            printf 'Valid stages: fmt, lint, test, test-ci, test-e2e, test-stt, test-llm, test-vllm, build, audit, coverage\n' >&2
+            printf 'Valid stages: fmt, lint, test, test-ci, test-e2e, test-stt, test-llm, test-openai, build, audit, coverage\n' >&2
             exit 2
             ;;
     esac

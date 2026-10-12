@@ -47,22 +47,22 @@ Read from `.env` (dotenvy loads automatically):
 | `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |
-| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform), `avspeech` (macOS AVSpeechSynthesizer) or `openai` (Qwen3-TTS via a local vLLM-Omni service, requires `--features vllm-tts`) |
+| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform), `avspeech` (macOS AVSpeechSynthesizer) or `openai` (Qwen3-TTS via an OpenAI-compatible service, requires `--features openai-tts`) |
 | `AVSPEECH_VOICE` | `""` | macOS AVSpeech voice name. Empty string = auto-select first available system voice. At runtime, `avspeech.rs` picks the first voice on the system when this is empty or whitespace-only. |
 | `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |
-| `VLLM_TTS_URL` | `http://localhost:8025` | Base URL of the vLLM-Omni speech service (`TTS_PROVIDER=openai`) |
-| `VLLM_TTS_VOICE` | `vivian` | Preset Qwen3-TTS voice; list with `--list-voices` |
-| `VLLM_TTS_LANGUAGE` | `auto` | Language hint; `auto` is sent as `"Auto"` so the model adapts per utterance (ES/EN code-switching) |
-| `VLLM_TTS_INSTRUCTIONS` | _(empty)_ | Optional natural-language style/emotion instruction applied to every request |
-| `VLLM_TTS_SPEED` | `0.0` | Speech speed; `0` omits the field (service default) |
-| `VLLM_TTS_WARMUP` | `false` | Warm up the service at startup (the first request after container start takes ~90 s) |
-| `VLLM_TTS_TIMEOUT_MS` | `120000` | Per-request HTTP timeout; must cover the ~90 s warmup |
+| `OPENAI_TTS_URL` | `http://localhost:8025` | Base URL of the OpenAI-compatible speech service (`TTS_PROVIDER=openai`) |
+| `OPENAI_TTS_VOICE` | `vivian` | Preset Qwen3-TTS voice; list with `--list-voices` |
+| `OPENAI_TTS_LANGUAGE` | `auto` | Language hint; `auto` is sent as `"Auto"` so the model adapts per utterance (ES/EN code-switching) |
+| `OPENAI_TTS_INSTRUCTIONS` | _(empty)_ | Optional natural-language style/emotion instruction applied to every request |
+| `OPENAI_TTS_SPEED` | `0.0` | Speech speed; `0` omits the field (service default) |
+| `OPENAI_TTS_WARMUP` | `false` | Warm up the service at startup (the first request after container start takes ~90 s) |
+| `OPENAI_TTS_TIMEOUT_MS` | `120000` | Per-request HTTP timeout; must cover the ~90 s warmup |
 
 > **Qwen3-TTS checkpoint limitation (issue #16):** the service currently runs
 > the *CustomVoice* checkpoint, which supports preset voices + `instructions`.
 > Voice cloning (`task_type=Base`) and VoiceDesign require separate checkpoints
 > and are not supported by this integration yet — see
-> [`doc/tts-vllm-omni.md`](tts-vllm-omni.md).
+> [`doc/tts-openai.md`](tts-openai.md).
 | `TAVILY_API_KEY` | — | Tavily Search API key. Preferred `quick_search` backend when set (wins over Brave/SearXNG) |
 | `TAVILY_MAX_TOKENS` | `512` | Tokens for Tavily's AI-generated answer (0 = raw results only) |
 | `EXA_API_KEY` | — | Exa API key. Used by `quick_search` only when `TAVILY_API_KEY` is not set |
