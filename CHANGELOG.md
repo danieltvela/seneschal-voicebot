@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Features
+- **[#14](https://github.com/danieltvela/seneschal-voicebot/issues/14)**: Multi-GPU support — `cuda` build feature (Linux/NVIDIA), automatic per-model GPU assignment (`GPU_AUTO`) for VAD/Parakeet/Kokoro with `VAD_GPU`/`PARAKEET_GPU`/`TTS_GPU` overrides, GPU section in `--list-devices`, and `SENECHAL_CUDA=1` opt-in in the Linux launcher
+
 ## v0.1.0-alpha.9 (2026-08-29)
 
 ### Features

@@ -353,6 +353,24 @@ impl TTSKoko {
         Self::new_with_model_type(model_path, voices_path, None).await
     }
 
+    /// Like [`TTSKoko::new`] but pins the ONNX Runtime session to `device_id`
+    /// when built with the `cuda` feature (seneschal patch, issue #14).
+    /// `None` = CPU/default.
+    pub async fn new_with_device_id(
+        model_path: Option<&str>,
+        voices_path: Option<&str>,
+        device_id: Option<i32>,
+    ) -> Self {
+        // Use HF cache logic to ensure files are available
+        let (resolved_model_path, resolved_voices_path) = crate::utils::hf_cache::ensure_files_available(
+            model_path,
+            voices_path, 
+            None
+        ).await.expect("Failed to ensure model and voices files are available");
+        
+        Self::from_paths_with_device_id(resolved_model_path.to_string_lossy().as_ref(), resolved_voices_path.to_string_lossy().as_ref(), device_id).await
+    }
+
     /// Create a new TTSKoko instance with specific model type
     pub async fn new_with_model_type(model_path: Option<&str>, voices_path: Option<&str>, model_type: Option<&str>) -> Self {
         // Use HF cache logic to ensure files are available
@@ -370,7 +388,16 @@ impl TTSKoko {
         Self::from_config(model_path, voices_path, InitConfig::default()).await
     }
 
+    /// Like [`TTSKoko::from_paths`] but pins the CUDA device.
+    pub async fn from_paths_with_device_id(model_path: &str, voices_path: &str, device_id: Option<i32>) -> Self {
+        Self::from_config_with_device_id(model_path, voices_path, InitConfig::default(), device_id).await
+    }
+
     pub async fn from_config(model_path: &str, voices_path: &str, cfg: InitConfig) -> Self {
+        Self::from_config_with_device_id(model_path, voices_path, cfg, None).await
+    }
+
+    pub async fn from_config_with_device_id(model_path: &str, voices_path: &str, cfg: InitConfig, device_id: Option<i32>) -> Self {
         if !Path::new(model_path).exists() {
             utils::fileio::download_file_from_url(cfg.model_url.as_str(), model_path)
                 .await
@@ -384,7 +411,7 @@ impl TTSKoko {
         }
 
         let model = Arc::new(
-            ort_koko::OrtKoko::new(model_path.to_string())
+            ort_koko::OrtKoko::new_with_device(model_path.to_string(), device_id)
                 .expect("Failed to create Kokoro TTS model"),
         );
 

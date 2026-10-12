@@ -10,7 +10,7 @@ use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
-use super::whisper::WhisperSTTVADConfig;
+use super::whisper::{WhisperSTTVADConfig, load_vad};
 
 const SAMPLE_RATE: usize = 16_000;
 const VAD_PROBE_MS: usize = 200;
@@ -31,6 +31,45 @@ const MAX_ACCUM_PROBES: usize = 50;
 const TRIM_WINDOW_MS: usize = 20;
 const TRIM_WINDOW_SAMPLES: usize = SAMPLE_RATE * TRIM_WINDOW_MS / 1000;
 const MAX_TRIM_PERCENT: usize = 90;
+
+/// Load the Parakeet TDT model, placing the ONNX Runtime session on `gpu`
+/// when requested (issue #14).
+#[cfg(feature = "cuda")]
+fn load_parakeet_model(model_dir: &str, gpu: Option<i32>) -> parakeet_rs::Result<ParakeetTDT> {
+    use parakeet_rs::ExecutionConfig;
+
+    let config = match gpu {
+        Some(device) => Some(
+            ExecutionConfig::new().with_custom_configure(move |builder| {
+                use ort::ep::{CPU, CUDA};
+                // Register a single CUDA EP with the requested device id plus a CPU
+                // fallback. We intentionally keep parakeet-rs' `execution_provider`
+                // at its default (CPU) so it does not register a second, device-0
+                // CUDA EP before this custom configure runs.
+                builder
+                    .with_execution_providers([
+                        CUDA::default().with_device_id(device).build(),
+                        CPU::default().build().error_on_failure(),
+                    ])
+                    .map_err(Into::into)
+            }),
+        ),
+        None => None,
+    };
+
+    ParakeetTDT::from_pretrained(model_dir, config)
+}
+
+#[cfg(not(feature = "cuda"))]
+fn load_parakeet_model(model_dir: &str, gpu: Option<i32>) -> parakeet_rs::Result<ParakeetTDT> {
+    if let Some(device) = gpu {
+        tracing::warn!(
+            target: "sttvad",
+            "Parakeet assigned to GPU {device} but this build lacks the 'cuda' feature; running on CPU (rebuild with --features cuda, or set GPU_AUTO=0)"
+        );
+    }
+    ParakeetTDT::from_pretrained(model_dir, None)
+}
 
 pub struct ParakeetSttProvider {
     model: Arc<Mutex<ParakeetTDT>>,
@@ -85,24 +124,30 @@ impl ParakeetSttProvider {
 
         let model_dir = parakeet_model_dir
             .ok_or_else(|| anyhow!("PARAKEET_MODEL_DIR must be set when STT_PROVIDER=parakeet"))?;
-        let model = ParakeetTDT::from_pretrained(model_dir, None)
+        let model = load_parakeet_model(model_dir, base.parakeet_gpu)
             .with_context(|| format!("Failed to load Parakeet TDT model from: {}\n\nThe model directory must contain ONNX Runtime files (encoder-model.onnx, decoder_joint-model.onnx, vocab.txt).\nYou may have downloaded the wrong format — parakeet-rs requires the ONNX export, not the HuggingFace Transformers model (.safetensors) or NeMo checkpoint (.nemo).\n\nSolution: download the correct ONNX model from HuggingFace:\n  mkdir -p {}\n  cd {}\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.onnx\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt\n  # Optional external data (if present):\n  wget https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.onnx.data\n", model_dir, model_dir, model_dir))?;
 
-        let vad = WhisperVadProcessor::new(&base.vad_model).context("Failed to load VAD model")?;
+        let vad = load_vad(&base.vad_model, base.vad_gpu)?;
 
         let silence_samples_threshold = SAMPLE_RATE * base.silence_ms as usize / 1000;
         let vad_confirm_probes = base.vad_confirm_probes.max(1);
 
         tracing::info!(
             target: "sttvad",
-            "ParakeetSttProvider ready (parakeet: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {})",
+            "ParakeetSttProvider ready (parakeet: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {}, parakeet_gpu: {}, vad_gpu: {})",
             model_dir,
             base.vad_model,
             base.language,
             base.silence_ms,
             base.vad_start_threshold,
             vad_end_threshold,
-            vad_confirm_probes
+            vad_confirm_probes,
+            base.parakeet_gpu
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "cpu".into()),
+            base.vad_gpu
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "cpu".into()),
         );
 
         Ok(Self {

@@ -15,6 +15,7 @@ pub mod config;
 pub mod control_broadcast;
 pub mod db;
 pub mod events;
+pub mod gpu;
 pub mod i18n;
 pub mod permission;
 pub mod tools;

@@ -32,18 +32,34 @@ impl KokoroTts {
     /// `voice`       — voice style name (see `tts.get_available_voices()`)
     /// `language`    — BCP-47 code for espeak-ng phonemisation
     /// `speed`       — default speech speed (e.g. 1.3)
+    /// `device_id`   — CUDA device for the ONNX Runtime session (issue #14);
+    ///                 `None` = CPU. Ignored when built without `cuda`.
     pub async fn new(
         model_path: &str,
         voices_path: &str,
         voice: &str,
         language: &str,
         speed: f32,
+        device_id: Option<i32>,
     ) -> Result<Self> {
-        let inner = TTSKoko::new(Some(model_path), Some(voices_path)).await;
+        if device_id.is_some() && !cfg!(feature = "cuda") {
+            tracing::warn!(
+                target: "tts",
+                "Kokoro assigned to a GPU but this build lacks the 'cuda' feature; running on CPU (rebuild with --features cuda, or set GPU_AUTO=0)"
+            );
+        }
+        let inner =
+            TTSKoko::new_with_device_id(Some(model_path), Some(voices_path), device_id).await;
         tracing::info!(
             target: "tts",
-            "Kokoro TTS loaded: model={} voice={} lang={} speed={}",
-            model_path, voice, language, speed
+            "Kokoro TTS loaded: model={} voice={} lang={} speed={} device={}",
+            model_path,
+            voice,
+            language,
+            speed,
+            device_id
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "cpu".into())
         );
         Ok(Self {
             inner,

@@ -30,6 +30,7 @@ set includes the voice pipeline + essential tools + agents + plugins.
 | `parakeet` | NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
 | `speech` | macOS SFSpeechRecognizer STT | speech | macOS only, microphone permission |
 | `speaker` | Speaker verification | sherpa-rs | `models/speaker_embedding.onnx` |
+| `cuda` | CUDA for whisper.cpp + ONNX Runtime (Parakeet/Kokoro) | — | Linux/NVIDIA host, CUDA toolkit (`nvcc`); ONNX Runtime GPU binaries are downloaded at build time |
 
 **On macOS**: whisper-cpp-plus uses Metal by default (faster STT via metal feature).
 Model files: `models/ggml-large-v3-turbo.bin` + `models/*-encoder.mlmodelc` for CoreML encoder fallback.
@@ -37,6 +38,27 @@ Model files: `models/ggml-large-v3-turbo.bin` + `models/*-encoder.mlmodelc` for 
 **On Linux**: whisper-cpp-plus-sys compiles ggml-cpu with OpenMP but does not link
 `libgomp`, so the final link fails with undefined `GOMP_*` symbols. The workspace
 `.cargo/config.toml` adds `-C link-arg=-fopenmp` for Linux targets to fix this.
+
+## Multi-GPU (issue #14)
+
+On CUDA builds the local models can be spread across GPUs. `GPU_AUTO` (default
+on) assigns Silero VAD, Parakeet and Kokoro round-robin over the GPUs with the
+most free VRAM; `VAD_GPU`, `PARAKEET_GPU` and `TTS_GPU` pin a model to a device
+index or to `cpu`. Whisper follows whisper.cpp's default device (GPU 0 of the
+visible devices) — use `CUDA_VISIBLE_DEVICES` to reorder devices for it.
+
+```bash
+# Build with CUDA on a Linux/NVIDIA host
+cargo build --features "kokoro,parakeet,cuda"
+
+# Inspect detected GPUs and the resolved assignment
+./linux-seneschal.sh --list-devices
+SENECHAL_CUDA=1 ./linux-seneschal.sh   # opt-in CUDA build via the launcher
+```
+
+Device indices refer to the devices visible to the process (after
+`CUDA_VISIBLE_DEVICES` filtering). The external LLM server is pinned separately
+(e.g. `CUDA_VISIBLE_DEVICES=1 vllm serve ...`).
 
 ## Build commands
 

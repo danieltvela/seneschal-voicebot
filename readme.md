@@ -172,6 +172,7 @@ Seneschal is built from the ground up for voice interaction:
   - **SFSpeechRecognizer** via `speech` crate (macOS on-device ANE, ~40 languages, `--features speech`)
 - Streaming LLM via mlx-lm or oMLX (Apple MLX, KV-cache reuse, sub-second latency)
 - Sentence-by-sentence TTS playback (AVSpeechSynthesizer or Kokoro ONNX) - speaks while generating next sentence
+- **Multi-GPU hosts (issue #14)** — CUDA build (`--features cuda`) spreads VAD, Parakeet and Kokoro across the available GPUs (`GPU_AUTO`, per-model overrides)
 - Barge-in - user speech cancels active pipeline instantly
 - Persistent SQLite conversation history with session restoration
 

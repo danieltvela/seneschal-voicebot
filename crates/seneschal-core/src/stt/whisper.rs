@@ -4,7 +4,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
-use whisper_cpp_plus::{FullParams, SamplingStrategy, WhisperContext, WhisperVadProcessor};
+use whisper_cpp_plus::{
+    FullParams, SamplingStrategy, VadContextParams, WhisperContext, WhisperVadProcessor,
+};
 
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
@@ -26,6 +28,10 @@ pub struct WhisperSTTVADConfig {
     /// consecutive probes must all be above threshold. Default: 2 (400ms).
     /// Set to 1 to disable (current behavior).
     pub vad_confirm_probes: usize,
+    /// GPU device for the Silero VAD context. `None` = CPU.
+    pub vad_gpu: Option<i32>,
+    /// GPU device for the Parakeet ONNX model. `None` = CPU.
+    pub parakeet_gpu: Option<i32>,
 }
 
 impl Default for WhisperSTTVADConfig {
@@ -38,6 +44,8 @@ impl Default for WhisperSTTVADConfig {
             vad_start_threshold: 0.65,
             vad_end_threshold: 0.45,
             vad_confirm_probes: 2,
+            vad_gpu: None,
+            parakeet_gpu: None,
         }
     }
 }
@@ -62,6 +70,20 @@ const MAX_SEGMENT_SAMPLES: usize = SAMPLE_RATE * MAX_SEGMENT_MS / 1000;
 /// At 200ms per probe, 50 probes = 10 seconds. Prevents unbounded growth
 /// when the user says something very short and the VAD never confirms.
 const MAX_ACCUM_PROBES: usize = 50;
+
+/// Load the Silero VAD context on `gpu` when requested (issue #14).
+///
+/// Whisper itself is not device-pinned: upstream `whisper-cpp-plus` always
+/// uses whisper.cpp's default device (GPU 0 of the visible devices when built
+/// with the `cuda` feature). Use `CUDA_VISIBLE_DEVICES` to reorder devices.
+pub(crate) fn load_vad(model_path: &str, gpu: Option<i32>) -> Result<WhisperVadProcessor> {
+    let params = VadContextParams {
+        use_gpu: gpu.is_some(),
+        gpu_device: gpu.unwrap_or(0),
+        ..Default::default()
+    };
+    WhisperVadProcessor::new_with_params(model_path, params).context("Failed to load VAD model")
+}
 
 pub struct WhisperSttProvider {
     ctx: Arc<WhisperContext>,
@@ -118,22 +140,22 @@ impl WhisperSttProvider {
             WhisperContext::new(&config.whisper_model).context("Failed to load Whisper model")?,
         );
 
-        let vad =
-            WhisperVadProcessor::new(&config.vad_model).context("Failed to load VAD model")?;
+        let vad = load_vad(&config.vad_model, config.vad_gpu)?;
 
         let silence_samples_threshold = SAMPLE_RATE * config.silence_ms as usize / 1000;
         let vad_confirm_probes = config.vad_confirm_probes.max(1);
 
         tracing::info!(
             target: "sttvad",
-            "WhisperSTTVAD ready (whisper: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {})",
+            "WhisperSTTVAD ready (whisper: {}, vad: {}, lang: {}, silence_ms: {}, start_thr: {:.2}, end_thr: {:.2}, confirm_probes: {}, vad_gpu: {})",
             config.whisper_model,
             config.vad_model,
             config.language,
             config.silence_ms,
             config.vad_start_threshold,
             vad_end_threshold,
-            vad_confirm_probes
+            vad_confirm_probes,
+            config.vad_gpu.map(|i| i.to_string()).unwrap_or_else(|| "cpu".into()),
         );
 
         Ok(Self {

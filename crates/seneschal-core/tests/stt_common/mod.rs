@@ -96,6 +96,8 @@ pub fn default_config(language: &str) -> WhisperSTTVADConfig {
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
         vad_confirm_probes: 2,
+        vad_gpu: None,
+        parakeet_gpu: None,
     }
 }
 

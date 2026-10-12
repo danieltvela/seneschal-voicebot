@@ -22,6 +22,10 @@ Read from `.env` (dotenvy loads automatically):
 | `VAD_END_THRESHOLD` | `0.45` | Speech probability floor to keep a segment open. |
 | `VAD_CONFIRM_PROBES` | `2` | Consecutive speech probes (100ms each with `STT_PROVIDER=speech`) required before the VAD *commits* to STT. `SpeechStart` (LISTENING + barge-in) fires at commit time (~200ms) or on the short-utterance fallback after `VAD_SILENCE_MS` of silence — not on a single noisy probe. Short words that never reach the confirm count are still transcribed via the short-utterance fallback. Coughs/noise are rejected by `NoSpeechGate`. |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
+| `GPU_AUTO` | `1` | Auto-assign the local ONNX models (Silero VAD, Parakeet, Kokoro TTS) round-robin over the GPUs with the most free VRAM (CUDA builds, issue #14). `0` = manual only. |
+| `VAD_GPU` | — | Pin Silero VAD to a GPU index (`0`, `1`, ...) or `cpu`. Wins over `GPU_AUTO`. |
+| `PARAKEET_GPU` | — | Pin the Parakeet ONNX encoder/decoder to a GPU index or `cpu`. |
+| `TTS_GPU` | — | Pin Kokoro ONNX to a GPU index or `cpu`. |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
 | `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. |

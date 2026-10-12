@@ -2,14 +2,28 @@
 use ort::ep::cuda::CUDA;
 #[cfg(feature = "coreml")]
 use ort::ep::coreml::CoreML;
+#[cfg(any(not(feature = "cuda"), feature = "coreml"))]
 use ort::ep::cpu::CPU;
 use ort::session::builder::SessionBuilder;
 use ort::session::Session;
 
 pub trait OrtBase {
     fn load_model(&mut self, model_path: String) -> Result<(), String> {
+        self.load_model_with_device(model_path, None)
+    }
+
+    /// Like [`OrtBase::load_model`], but pins the CUDA execution provider to
+    /// `device_id` when built with the `cuda` feature (seneschal patch, issue #14).
+    /// `None` keeps the ONNX Runtime default (device 0).
+    fn load_model_with_device(
+        &mut self,
+        model_path: String,
+        #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] device_id: Option<i32>,
+    ) -> Result<(), String> {
         #[cfg(feature = "cuda")]
-        let providers = [CUDA::default().build()];
+        let providers = [CUDA::default()
+            .with_device_id(device_id.unwrap_or(0))
+            .build()];
 
         #[cfg(feature = "coreml")]
         let providers = [

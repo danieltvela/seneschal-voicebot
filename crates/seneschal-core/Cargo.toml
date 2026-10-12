@@ -47,6 +47,14 @@ optional = true
 version = "0.3.5"
 optional = true
 
+# ONNX Runtime, direct dependency only for per-model CUDA device pinning
+# (issue #14). Enabled by the `cuda` feature together with ort/cuda (the GPU
+# runtime is downloaded at build time by ort-sys).
+[dependencies.ort]
+version = "2.0.0-rc.13"
+optional = true
+features = ["cuda"]
+
 [target.'cfg(target_os = "macos")'.dependencies]
 speech = { version = "0.8", optional = true }
 objc2 = { version = "0.6", optional = true }
@@ -65,6 +73,10 @@ kokoro = ["dep:kokorox"]
 speaker = ["dep:sherpa-rs"]
 parakeet = ["dep:parakeet-rs"]
 speech = ["dep:speech"]
+# CUDA (Linux/NVIDIA, issue #14): ONNX Runtime GPU execution provider with
+# per-model device pinning. The whisper.cpp side is enabled separately via the
+# root `cuda` feature (`whisper-cpp-plus/cuda`).
+cuda = ["dep:ort", "kokorox?/cuda", "parakeet-rs?/cuda"]
 avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio"]
 # Feature flags used in #[cfg] attributes within the crate (propagated from root)
 tui = []

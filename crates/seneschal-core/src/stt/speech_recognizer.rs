@@ -12,7 +12,7 @@ use speech::prelude::*;
 use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
-use super::whisper::WhisperSTTVADConfig;
+use super::whisper::{WhisperSTTVADConfig, load_vad};
 
 const SAMPLE_RATE: f64 = 16_000.0;
 const CHANNELS: usize = 1;
@@ -214,8 +214,7 @@ impl SpeechRecognizerSttProvider {
         let recognizer = SpeechRecognizer::with_locale_checked(locale)
             .with_context(|| format!("Failed to create SpeechRecognizer for locale '{locale}'"))?;
 
-        let vad =
-            WhisperVadProcessor::new(&base.vad_model).context("Failed to load Silero VAD model")?;
+        let vad = load_vad(&base.vad_model, base.vad_gpu)?;
 
         let vad_end_threshold = if base.vad_end_threshold > base.vad_start_threshold {
             warn!(

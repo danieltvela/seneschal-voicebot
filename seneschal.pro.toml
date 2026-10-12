@@ -38,6 +38,17 @@ stt_early_reuse_enabled = false
 stt_early_min_tokens = 6
 stt_early_require_punctuation = true
 
+# ── GPU assignment (issue #14: multi-GPU hosts) ───────────────────────────────
+# gpu_auto: distribute the local ONNX models (Silero VAD, Parakeet, Kokoro TTS)
+# round-robin over the GPUs with the most free VRAM. Per-model overrides below
+# accept a device index ("0", "1", ...) or "cpu" and always win.
+# Whisper follows whisper.cpp's default device (GPU 0); use CUDA_VISIBLE_DEVICES
+# to reorder the visible devices for it.
+gpu_auto = true
+# vad_gpu = "0"
+# parakeet_gpu = "0"
+# tts_gpu = "1"
+
 # NoSpeechGate — post-STT quality filter
 stt_no_speech_threshold = 0.6
 stt_logprob_threshold = -1.0

@@ -148,6 +148,14 @@ async fn async_main() -> Result<()> {
     info!(target: "seneschal", "Starting seneschal...");
     let mut config = Config::from_env()?;
 
+    // ── GPU assignment (issue #14: multi-GPU hosts) ───────────────────────────
+    // Discover the visible GPUs once and resolve the device for each local
+    // model. Per-model overrides (VAD_GPU, PARAKEET_GPU, TTS_GPU) win
+    // over the automatic round-robin distribution (GPU_AUTO).
+    let gpu_devices = seneschal_common::gpu::discover_devices();
+    let gpu_assignments = seneschal_common::gpu::resolve_assignments(&config, &gpu_devices);
+    seneschal_common::gpu::log_summary(&gpu_devices, &gpu_assignments);
+
     // Route whisper.cpp / ggml diagnostics into `tracing` so the `whisper_*` /
     // `ggml_*` lines don't clutter the terminal/TUI screen.
     seneschal_core::stt::whisper_log::install();
@@ -175,6 +183,7 @@ async fn async_main() -> Result<()> {
         || std::env::args().any(|a| a == "--list-devices" || a == "list-devices");
     if list_devices {
         AudioCapture::print_devices()?;
+        seneschal_common::gpu::print_devices(&gpu_devices, &gpu_assignments);
         return Ok(());
     }
 
@@ -202,6 +211,7 @@ async fn async_main() -> Result<()> {
                     &config.kokoro_voice,
                     &config.kokoro_language,
                     config.kokoro_speed,
+                    gpu_assignments.tts.index(),
                 )
                 .await?;
                 k.list_voices();
@@ -997,7 +1007,7 @@ async fn async_main() -> Result<()> {
     }
 
     // ── STT + VAD unified processor ────────────────────────────────────────────
-    let mut stt_provider: Box<dyn SttProvider> = create_provider(&config)?;
+    let mut stt_provider: Box<dyn SttProvider> = create_provider(&config, &gpu_assignments)?;
     info!(
         target: "stt",
         "Initialized STT provider '{}' (configured: {})",
@@ -1100,6 +1110,7 @@ async fn async_main() -> Result<()> {
                 &config.kokoro_voice,
                 &config.kokoro_language,
                 config.kokoro_speed,
+                gpu_assignments.tts.index(),
             )
             .await?;
             TtsEngine::Kokoro(k)

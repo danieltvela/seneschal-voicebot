@@ -67,7 +67,18 @@ export PARAKEET_MODEL_DIR="${PARAKEET_MODEL_DIR:-models/parakeet-tdt-0.6b-v3-onn
 # TTS_PROVIDER=avspeech, el binario abortaría al arrancar.
 export TTS_PROVIDER=kokoro
 
-RUST_LOG=debug exec cargo run --bin seneschal --features control,parakeet,kokoro,tui,remote --release -- "$@" 2> >(grep -vE "^(whisper_|ggml_)" >&2)
+# ── GPU (issue #14): CUDA opt-in ─────────────────────────────────────────────
+# Con SENECHAL_CUDA=1 se compila con CUDA (whisper.cpp + ONNX Runtime GPU) y,
+# por defecto, GPU_AUTO reparte VAD/Parakeet/Kokoro entre las GPUs visibles.
+# Requiere toolkit CUDA instalado (nvcc) en el host. Requiere GPU_AUTO=0 o
+# overrides VAD_GPU/PARAKEET_GPU/TTS_GPU para un reparto manual.
+FEATURES="control,parakeet,kokoro,tui,remote"
+if [[ "${SENECHAL_CUDA:-0}" == "1" ]]; then
+    FEATURES="$FEATURES,cuda"
+fi
+echo "Building with features: $FEATURES"
+
+RUST_LOG=debug exec cargo run --bin seneschal --features "$FEATURES" --release -- "$@" 2> >(grep -vE "^(whisper_|ggml_)" >&2)
 
 ## Tools and agent debugging
 # RUST_LOG=pipeline=debug,llm=debug,tools=debug,agent=debug exec cargo run --bin seneschal --features control,parakeet,kokoro,tui,remote --release -- "$@" 2> >(grep -vE "^(whisper_|ggml_)" >&2)

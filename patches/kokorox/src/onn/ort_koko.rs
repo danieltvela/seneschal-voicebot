@@ -29,8 +29,14 @@ impl ort_base::OrtBase for OrtKoko {
 }
 impl OrtKoko {
     pub fn new(model_path: String) -> Result<Self, String> {
+        Self::new_with_device(model_path, None)
+    }
+
+    /// Create the Kokoro session, pinning the CUDA EP to `device_id` when the
+    /// `cuda` feature is enabled (seneschal patch, issue #14). `None` = default.
+    pub fn new_with_device(model_path: String, device_id: Option<i32>) -> Result<Self, String> {
         let mut instance = OrtKoko { sess: None };
-        instance.load_model(model_path)?;
+        instance.load_model_with_device(model_path, device_id)?;
         Ok(instance)
     }
 

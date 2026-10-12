@@ -958,6 +958,8 @@ async fn stt_transcribes_wav_file() {
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
         vad_confirm_probes: 2,
+        vad_gpu: None,
+        parakeet_gpu: None,
     };
     let stt = WhisperSttProvider::new(config).expect("failed to load Whisper model");
     let audio = load_wav_as_f32(wav_path).expect("failed to load WAV fixture");
@@ -1005,6 +1007,8 @@ async fn full_pipeline_wav_to_db() {
         vad_start_threshold: 0.65,
         vad_end_threshold: 0.45,
         vad_confirm_probes: 2,
+        vad_gpu: None,
+        parakeet_gpu: None,
     };
     let stt = WhisperSttProvider::new(config).unwrap();
     let audio = load_wav_as_f32(wav_path).unwrap();

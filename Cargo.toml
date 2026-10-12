@@ -194,6 +194,13 @@ tui = ["dep:seneschal-tui", "dep:ratatui", "dep:crossterm", "agents"]
 extras = ["dep:seneschal-extras", "agents", "plugins", "search", "mcp"]
 # Meta-feature: enable everything
 full = ["memory", "tools-core", "search", "mcp", "agents", "classifier", "plugins", "control", "remote", "tui", "extras"]
+# GPU acceleration (Linux/NVIDIA hosts, issue #14): enables CUDA for the
+# whisper.cpp backend and the ONNX Runtime models (Parakeet STT / Kokoro TTS).
+# Only meaningful together with the matching backend features, e.g.:
+#   cargo run --features "kokoro,parakeet,cuda"
+# Not part of `full`: CUDA builds are host-specific and require the CUDA
+# toolkit (nvcc) at compile time.
+cuda = ["seneschal-core/cuda", "whisper-cpp-plus/cuda"]
 
 [[bin]]
 name = "seneschal"

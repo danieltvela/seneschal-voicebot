@@ -59,7 +59,7 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 
 **Key decisions:**
 - **Single binary**: all stages connected by `tokio::sync` channels
-- **No speculative LLM on local GPUs**: single-GPU contention causes jitter
+- **No speculative LLM on local GPUs**: single-GPU contention causes jitter. On multi-GPU hosts the LLM server (out-of-process) is pinned with `CUDA_VISIBLE_DEVICES` and the voice models (VAD/Parakeet/Kokoro) can be spread over the remaining GPUs via `GPU_AUTO` (issue #14)
 - **LLM→TTS streaming**: buffer until sentence boundary, synthesize immediately
 - **Barge-in**: `CancellationToken` cancels active pipeline
 - **Pluggable STT**: Provider trait for Whisper, Parakeet, SFSpeechRecognizer

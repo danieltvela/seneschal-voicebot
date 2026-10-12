@@ -15,7 +15,10 @@ pub trait SttProvider: Send {
     fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality>;
 }
 
-pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
+pub fn create_provider(
+    config: &Config,
+    assignments: &seneschal_common::gpu::GpuAssignments,
+) -> Result<Box<dyn SttProvider>> {
     let whisper_cfg = WhisperSTTVADConfig {
         whisper_model: config.whisper_model.clone(),
         vad_model: config.vad_model.clone(),
@@ -24,6 +27,8 @@ pub fn create_provider(config: &Config) -> Result<Box<dyn SttProvider>> {
         vad_start_threshold: config.vad_start_threshold,
         vad_end_threshold: config.vad_end_threshold,
         vad_confirm_probes: config.vad_confirm_probes,
+        vad_gpu: assignments.vad.index(),
+        parakeet_gpu: assignments.parakeet.index(),
     };
 
     match config.stt_provider.to_lowercase().as_str() {

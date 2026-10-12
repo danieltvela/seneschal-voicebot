@@ -156,6 +156,23 @@ pub struct Config {
     /// Number of CPU threads for Whisper decoding (0 = auto).
     /// Set to physical core count for best throughput.
     pub whisper_threads: u32,
+
+    // ── GPU assignment (issue #14: multi-GPU hosts) ──────────────────────────
+    /// Master switch for automatic per-model GPU assignment (GPU_AUTO, default
+    /// true). When enabled, each local model (VAD, Parakeet, Kokoro) is
+    /// assigned round-robin to the GPUs with the most free VRAM. Per-model
+    /// overrides win. Whisper follows whisper.cpp's default device (GPU 0).
+    #[serde(default = "default_gpu_auto")]
+    pub gpu_auto: bool,
+    /// Force the Silero VAD device: "0", "1", ... or "cpu" (VAD_GPU).
+    #[serde(default)]
+    pub vad_gpu: Option<String>,
+    /// Force the Parakeet ONNX device (PARAKEET_GPU).
+    #[serde(default)]
+    pub parakeet_gpu: Option<String>,
+    /// Force the Kokoro ONNX TTS device (TTS_GPU).
+    #[serde(default)]
+    pub tts_gpu: Option<String>,
     /// A1 Conservative Early Reuse: enable checking for ready speculative results
     /// before waiting for the final complete decode. Default: false (disabled).
     pub stt_early_reuse_enabled: bool,
@@ -530,6 +547,11 @@ fn default_speaker_enabled() -> bool {
     true
 }
 
+/// Auto-assign local models to GPUs by default on multi-GPU hosts (issue #14).
+fn default_gpu_auto() -> bool {
+    true
+}
+
 /// STT auto-detects the spoken language by default (issue #217). A concrete
 /// code can be pinned via STT_LANGUAGE to keep fixed-language transcription.
 fn default_stt_language() -> String {
@@ -707,6 +729,20 @@ impl Config {
         }
         if let Ok(v) = env::var("WHISPER_THREADS") {
             self.whisper_threads = v.parse().context("Invalid WHISPER_THREADS")?;
+        }
+
+        // GPU assignment (issue #14)
+        if let Ok(v) = env::var("GPU_AUTO") {
+            self.gpu_auto = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("VAD_GPU") {
+            self.vad_gpu = Some(v);
+        }
+        if let Ok(v) = env::var("PARAKEET_GPU") {
+            self.parakeet_gpu = Some(v);
+        }
+        if let Ok(v) = env::var("TTS_GPU") {
+            self.tts_gpu = Some(v);
         }
         if let Ok(v) = env::var("STT_EARLY_REUSE_ENABLED") {
             self.stt_early_reuse_enabled = v.parse().context("Invalid STT_EARLY_REUSE_ENABLED")?;
@@ -1234,6 +1270,15 @@ impl Config {
 }
 
 #[cfg(test)]
+impl Config {
+    /// Config built from the embedded defaults only (no env, no cwd file).
+    /// Used by unit tests that need a fully-populated `Config`.
+    pub(crate) fn test_defaults() -> Self {
+        toml::from_str(DEFAULT_CONFIG_TOML).expect("embedded config must deserialize")
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1539,5 +1584,37 @@ mod tests {
             assert_eq!(config.primary_wake_word(), "seneschal");
             assert!(config.has_wake_word("seneschal"));
         });
+    }
+
+    #[test]
+    fn gpu_auto_defaults_true() {
+        use temp_env::with_vars;
+        with_vars(&[] as &[(&str, Option<&str>); 0], || {
+            let config = Config::from_env().unwrap();
+            assert!(config.gpu_auto);
+            assert!(config.vad_gpu.is_none());
+            assert!(config.parakeet_gpu.is_none());
+            assert!(config.tts_gpu.is_none());
+        });
+    }
+
+    #[test]
+    fn gpu_env_overrides_are_applied() {
+        use temp_env::with_vars;
+        with_vars(
+            [
+                ("GPU_AUTO", Some("0")),
+                ("VAD_GPU", Some("cpu")),
+                ("PARAKEET_GPU", Some("0")),
+                ("TTS_GPU", Some("1")),
+            ],
+            || {
+                let config = Config::from_env().unwrap();
+                assert!(!config.gpu_auto);
+                assert_eq!(config.vad_gpu.as_deref(), Some("cpu"));
+                assert_eq!(config.parakeet_gpu.as_deref(), Some("0"));
+                assert_eq!(config.tts_gpu.as_deref(), Some("1"));
+            },
+        );
     }
 }
