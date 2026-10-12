@@ -5,7 +5,7 @@
 | Directory | Purpose | Estado | Doc |
 |-----------|---------|--------|-----|
 | `src/audio/` | Audio pipeline: capture, VAD, resampling, playback, filler, speaker | 🟢 SALVAR | [audio-internals.md](audio-internals.md) |
-| `src/stt/` | Provider trait + Whisper + Parakeet + SFSpeechRecognizer implementations. 16kHz f32 mono. | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| `src/stt/` | Provider trait + shared VAD segmenter + Whisper + Parakeet + SFSpeechRecognizer + OpenAI-compatible remote (issue #17). 16kHz f32 mono. | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | `src/llm/` | HTTP client to `/v1/chat/completions`, session management | 🟢 SALVAR | [llm-provider.md](llm-provider.md) |
 | `src/tts/` | `avspeech.rs` (macOS AVSpeech), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX), `openai/` (OpenAI-compatible TTS; Qwen3-TTS via vLLM-Omni, issue #16) | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md), [tts-openai.md](tts-openai.md) |
 | `src/pipeline/` | Pipeline orchestration with FSM | 🟢 SALVAR | [MAIN_PROCESS.md](MAIN_PROCESS.md), [PROCESS_ARCHITECTURE.md](PROCESS_ARCHITECTURE.md) |

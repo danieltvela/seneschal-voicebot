@@ -1,18 +1,27 @@
 pub mod no_speech_gate;
 pub mod provider;
+pub mod segmenter;
+pub mod wav;
 pub mod whisper;
 pub mod whisper_log;
 
 #[cfg(feature = "parakeet")]
 pub mod parakeet;
 
+#[cfg(feature = "openai-stt")]
+pub mod openai;
+
 #[cfg(feature = "speech")]
 pub mod speech_recognizer;
 
 pub use no_speech_gate::{NoSpeechGate, TranscriptionQuality};
 pub use provider::{SttProvider, create_provider};
+pub use segmenter::{SegmenterConfig, SegmenterEvent, SpeechDetector, VadSegmenter};
 #[allow(unused_imports)]
 pub use whisper::{WhisperSTTVAD, WhisperSTTVADConfig, WhisperSttProvider};
+
+#[cfg(feature = "openai-stt")]
+pub use openai::{OpenAiSttConfig, OpenAiSttProvider};
 
 /// Events emitted while processing the audio stream.
 #[derive(Debug, Clone)]

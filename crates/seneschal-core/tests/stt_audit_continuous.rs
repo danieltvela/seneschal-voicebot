@@ -147,7 +147,7 @@ async fn stt_audit_latency_baseline() {
     let stt_en = new_provider("en");
 
     // Warm-up (Metal context init, model pages) — expect the biggest cost.
-    let (q_warm, ms_warm) = run_transcribe_complete(&stt_es, &es);
+    let (q_warm, ms_warm) = run_transcribe_complete(stt_es.as_ref(), &es);
     println!(
         "[baseline] es warm-up: {}ms RTF={:.3} text={:?}",
         ms_warm,
@@ -155,8 +155,8 @@ async fn stt_audit_latency_baseline() {
         q_warm.text
     );
     // Steady state: 2nd and 3rd calls.
-    let (q2, ms2) = run_transcribe_complete(&stt_es, &es);
-    let (_q3, ms3) = run_transcribe_complete(&stt_es, &es);
+    let (q2, ms2) = run_transcribe_complete(stt_es.as_ref(), &es);
+    let (_q3, ms3) = run_transcribe_complete(stt_es.as_ref(), &es);
     let dur = es.len() as f32 / SR as f32;
     println!(
         "[baseline] es steady: #2 {}ms RTF={:.3} | #3 {}ms RTF={:.3}",
@@ -165,8 +165,8 @@ async fn stt_audit_latency_baseline() {
         ms3,
         ms3 as f32 * 1e-3 / dur
     );
-    let (_qe_warm, msw) = run_transcribe_complete(&stt_en, &en);
-    let (qe2, msw2) = run_transcribe_complete(&stt_en, &en);
+    let (_qe_warm, msw) = run_transcribe_complete(stt_en.as_ref(), &en);
+    let (qe2, msw2) = run_transcribe_complete(stt_en.as_ref(), &en);
     let dure = en.len() as f32 / SR as f32;
     println!(
         "[baseline] en warm-up: {}ms | steady: {}ms RTF={:.3}",

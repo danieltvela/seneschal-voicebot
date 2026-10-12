@@ -25,7 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "=0.8.6", features = ["sqlite", "runtime-tokio-native-tls"] }
 uuid = { version = "1", features = ["v4"] }
 dashmap = "6"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 regex = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies.whisper-cpp-plus]
@@ -73,6 +73,9 @@ kokoro = ["dep:kokorox"]
 # OpenAI-compatible TTS provider (issue #16). No extra crates: reqwest is
 # already a dependency; the feature only gates the module.
 openai-tts = []
+# OpenAI-compatible remote STT provider (issue #17). No extra crates beyond
+# reqwest's `multipart` feature; the flag only gates the module.
+openai-stt = []
 speaker = ["dep:sherpa-rs"]
 parakeet = ["dep:parakeet-rs"]
 speech = ["dep:speech"]

@@ -6,7 +6,7 @@
 #
 # Modes:  fast (default) | full | all
 # Stages: fmt | lint | test | test-ci | test-e2e | test-stt | test-llm | test-openai
-#         | build | audit | coverage
+#         | test-stt-openai | build | audit | coverage
 #
 # Env overrides:
 #   QA_NO_COLOR=1     disable ANSI colors
@@ -176,6 +176,27 @@ stage_test_openai() {
     fi
 }
 
+stage_test_stt_openai() {
+    banner "Stage: test-stt-openai  (real OpenAI-compatible STT service, issue #17)"
+    local url="${STT_TEST_URL:-http://localhost:8024}"
+    if ! curl -fs --max-time 2 "$url/v1/models" >/dev/null 2>&1; then
+        stage_skip "test-stt-openai" "no OpenAI-compatible STT service reachable on $url"
+        return 0
+    fi
+    # Live HTTP contract tests plus the #217 code-switching audit running against
+    # the remote provider. Other audits assert Whisper-specific accuracy/timing.
+    if (cd "$PROJECT_ROOT" && \
+        STT_TEST_URL="$url" \
+        $CARGO test -p seneschal-core --features openai-stt --quiet --test openai_stt -- --ignored stt_openai_live 2>&1 | tail -n 30 && \
+        STT_AUDIT_PROVIDER=openai STT_URL="$url" \
+        $CARGO test -p seneschal-core --features openai-stt --quiet --test stt_audit_codeswitching -- --ignored 2>&1 | tail -n 30); then
+        stage_ok "test-stt-openai"
+    else
+        stage_fail "test-stt-openai" "remote OpenAI-compatible STT tests failed"
+        return 1
+    fi
+}
+
 stage_build() {
     _build_features="full"
     if [ "$(uname -s)" = "Darwin" ]; then
@@ -244,6 +265,7 @@ run_full() {
     stage_test_stt  || true
     stage_test_llm  || true
     stage_test_openai || true
+    stage_test_stt_openai || true
     stage_audit     || true
     stage_coverage  || true
 }
@@ -283,6 +305,7 @@ main() {
         test-stt|\
         test-llm|\
         test-openai|\
+        test-stt-openai|\
         build|\
         audit|\
         coverage) run_stage "$MODE" ;;
@@ -290,7 +313,7 @@ main() {
         *)
             printf '%sUnknown mode/stage: %s%s\n' "$C_RED" "$MODE" "$C_RESET" >&2
             printf 'Valid modes: fast, full, all\n' >&2
-            printf 'Valid stages: fmt, lint, test, test-ci, test-e2e, test-stt, test-llm, test-openai, build, audit, coverage\n' >&2
+            printf 'Valid stages: fmt, lint, test, test-ci, test-e2e, test-stt, test-llm, test-openai, test-stt-openai, build, audit, coverage\n' >&2
             exit 2
             ;;
     esac

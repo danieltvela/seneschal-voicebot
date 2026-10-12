@@ -164,6 +164,19 @@ pub struct Config {
     /// Number of CPU threads for Whisper decoding (0 = auto).
     /// Set to physical core count for best throughput.
     pub whisper_threads: u32,
+    /// Remote STT base URL (STT_PROVIDER=openai, issue #17). The provider POSTs
+    /// to `{stt_url}/v1/audio/transcriptions` (OpenAI-compatible).
+    #[serde(default = "default_stt_url")]
+    pub stt_url: String,
+    /// Bearer token sent as `Authorization: Bearer <key>`. Empty = no auth.
+    #[serde(default)]
+    pub stt_api_key: String,
+    /// Model name sent in the remote transcription `model` field.
+    #[serde(default = "default_stt_model")]
+    pub stt_model: String,
+    /// Per-request timeout (ms) for a remote transcription (issue #17).
+    #[serde(default = "default_stt_timeout_ms")]
+    pub stt_timeout_ms: u64,
 
     // ── GPU assignment (issue #14: multi-GPU hosts) ──────────────────────────
     /// Master switch for automatic per-model GPU assignment (GPU_AUTO, default
@@ -599,6 +612,23 @@ fn default_stt_language() -> String {
     "auto".to_string()
 }
 
+/// Reference remote STT deployment (issue #17): `seneschal-asr` (Qwen3-ASR)
+/// served by vLLM at `http://localhost:8024`.
+fn default_stt_url() -> String {
+    "http://localhost:8024".to_string()
+}
+
+/// Model id served by the reference remote STT deployment (issue #17).
+fn default_stt_model() -> String {
+    "qwen3-asr".to_string()
+}
+
+/// Bounded per-utterance round trip; a 20 s segment takes <1 s on the reference
+/// service, so 10 s leaves ample headroom under shared-GPU contention.
+fn default_stt_timeout_ms() -> u64 {
+    10_000
+}
+
 /// Default thinking wire shape: name-based auto-detection.
 fn default_thinking_style() -> String {
     "auto".to_string()
@@ -780,7 +810,7 @@ impl Config {
 
         // STT
         if let Ok(v) = env::var("STT_PROVIDER") {
-            self.stt_provider = v.to_lowercase();
+            self.stt_provider = v.trim().to_lowercase();
         }
         if let Ok(v) = env::var("WHISPER_MODEL") {
             self.whisper_model = v;
@@ -790,6 +820,19 @@ impl Config {
         }
         if let Ok(v) = env::var("WHISPER_THREADS") {
             self.whisper_threads = v.parse().context("Invalid WHISPER_THREADS")?;
+        }
+        // Remote STT (issue #17)
+        if let Ok(v) = env::var("STT_URL") {
+            self.stt_url = v;
+        }
+        if let Ok(v) = env::var("STT_API_KEY") {
+            self.stt_api_key = v;
+        }
+        if let Ok(v) = env::var("STT_MODEL") {
+            self.stt_model = v;
+        }
+        if let Ok(v) = env::var("STT_TIMEOUT_MS") {
+            self.stt_timeout_ms = v.parse().context("Invalid STT_TIMEOUT_MS")?;
         }
 
         // GPU assignment (issue #14)
@@ -1254,15 +1297,14 @@ impl Config {
 
         if !matches!(
             self.stt_provider.as_str(),
-            "whisper" | "parakeet" | "speech"
+            "whisper" | "parakeet" | "speech" | "openai"
         ) {
-            // Note: `openai` is a TTS provider, not STT. This guards the
-            // transcription backend only (see TTS_PROVIDER for speech output).
             anyhow::bail!(
                 "Invalid STT_PROVIDER '{}'. Supported values: \
                  whisper (default, whisper.cpp + Silero VAD, no extra feature), \
                  parakeet (needs --features parakeet + PARAKEET_MODEL_DIR), \
-                 speech (macOS SFSpeechRecognizer, needs --features speech). \
+                 speech (macOS SFSpeechRecognizer, needs --features speech), \
+                 openai (OpenAI-compatible remote STT, needs --features openai-stt). \
                  Note: for TTS backends use TTS_PROVIDER (avspeech, kokoro, openai).",
                 self.stt_provider
             );

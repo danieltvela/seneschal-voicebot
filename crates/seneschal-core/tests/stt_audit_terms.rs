@@ -22,8 +22,8 @@ fn terms_for_language(language: &str) -> (usize, usize, String, String, u128, u1
     let stt = new_provider(language);
     let es = load_wav_f32(&ensure_fixture_terms_es().unwrap()).unwrap();
     let en = load_wav_f32(&ensure_fixture_terms_en().unwrap()).unwrap();
-    let (q_es, ms_es) = run_transcribe_complete(&stt, &es);
-    let (q_en, ms_en) = run_transcribe_complete(&stt, &en);
+    let (q_es, ms_es) = run_transcribe_complete(stt.as_ref(), &es);
+    let (q_en, ms_en) = run_transcribe_complete(stt.as_ref(), &en);
     let dur_es = es.len() as f32 / SR as f32;
     let dur_en = en.len() as f32 / SR as f32;
     println!(
@@ -210,7 +210,7 @@ async fn stt_audit_qwen_repeated() {
 
     for lang in ["es", "auto"] {
         let stt = new_provider(lang);
-        let (q, ms) = run_transcribe_complete(&stt, &audio);
+        let (q, ms) = run_transcribe_complete(stt.as_ref(), &audio);
         println!("[qwen_repeated_{lang}] ({}ms): {:?}", ms, q.text);
         let h = check_tokens(
             &format!("qwen_repeated_{lang}"),

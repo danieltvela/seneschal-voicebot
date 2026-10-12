@@ -432,7 +432,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `VAD_SILENCE_MS` | `300` | Silence threshold (ms) before processing speech |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model file |
 | **STT Provider** | | |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), or `parakeet` (requires `--features parakeet`) |
+| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), `parakeet` (requires `--features parakeet`), or `openai` (remote OpenAI-compatible service, requires `--features openai-stt`) |
 | `PARAKEET_MODEL_DIR` | - | Path to Parakeet ONNX model directory (required when `STT_PROVIDER=parakeet`) |
 | **STT (Whisper)** | | |
 | `WHISPER_MODEL` | *required* | Path to Whisper `.bin` model |
@@ -518,7 +518,7 @@ See [.env.example](.env.example) for complete environment variable reference.
 
 ### STT Provider Selection
 
-Seneschal supports three STT backends, selectable at runtime via `STT_PROVIDER`:
+Seneschal supports four STT backends, selectable at runtime via `STT_PROVIDER`:
 
 #### Whisper (default)
 
@@ -552,6 +552,23 @@ STT_PROVIDER=parakeet PARAKEET_MODEL_DIR=./models/parakeet-tdt-0.6b-v2 cargo run
 - Both providers use the same Silero VAD (no change to VAD behavior)
 - Parakeet is batch-based: audio is buffered during speech, then transcribed on silence
 - ONNX Runtime adds ~200 MB to the binary size — feature-gated to keep default builds lean
+
+#### OpenAI-compatible remote (requires `--features openai-stt`)
+
+VAD and utterance segmentation stay **local** (shared Silero segmenter); only each finalized utterance is POSTed to an OpenAI-compatible `POST /v1/audio/transcriptions` endpoint. The reference deployment is `seneschal-asr` (vLLM serving Qwen3-ASR) at `http://localhost:8024`; any compatible server works (vLLM ASR, whisper.cpp server, Speaches, ...).
+
+```bash
+cargo build --release --features openai-stt
+STT_PROVIDER=openai STT_URL=http://localhost:8024 STT_MODEL=qwen3-asr cargo run
+```
+
+**Config:** `STT_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_TIMEOUT_MS`.
+
+**Languages:** `STT_LANGUAGE=auto` (default) omits the `language` field so the server auto-detects per utterance (ES/EN code-switching); a concrete code is normalized to its primary subtag (`es-ES` → `es`).
+
+**Notes:**
+- Transcription is dispatched asynchronously — the pipeline is never blocked. The in-flight request is aborted on barge-in and bounded by `STT_TIMEOUT_MS`.
+- The `json` response has no Whisper quality metrics, so `NoSpeechGate` relies on empty-text rejection plus a locally computed `compression_ratio` (same pass-through as Parakeet).
 
 #### SFSpeechRecognizer (requires `--features speech`, macOS only)
 

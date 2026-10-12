@@ -12,6 +12,7 @@
 #   make test-stt   — ignored STT tests (needs WHISPER_MODEL)
 #   make test-llm   — ignored LLM tests (needs running LLM server)
 #   make test-openai  — ignored OpenAI-compatible TTS tests (needs service on :8025)
+#   make test-stt-openai — ignored OpenAI-compatible STT tests + #217 audit (needs service on :8024)
 #   make build      — cargo build --features full (+ speech,avspeech on macOS)
 #   make audit      — cargo audit (needs cargo-audit)
 #   make coverage   — cargo llvm-cov summary (needs cargo-llvm-cov)
@@ -23,7 +24,7 @@
 SHELL := /usr/bin/env bash
 QA    := bash scripts/qa.sh
 
-.PHONY: help qa qa-fast qa-full fmt lint test test-ci test-e2e test-stt test-llm test-openai build audit coverage
+.PHONY: help qa qa-fast qa-full fmt lint test test-ci test-e2e test-stt test-llm test-openai test-stt-openai build audit coverage
 
 help:
 	@printf 'Seneschal QA targets:\n'
@@ -37,6 +38,8 @@ help:
 	@printf '  make test-e2e   cargo test e2e -- --ignored (wiremock e2e)\n'
 	@printf '  make test-stt   ignored STT tests (needs WHISPER_MODEL)\n'
 	@printf '  make test-llm   ignored LLM tests (needs running LLM server)\n'
+	@printf '  make test-openai  ignored OpenAI-compatible TTS tests (needs service on :8025)\n'
+	@printf '  make test-stt-openai  ignored OpenAI-compatible STT tests + #217 audit (needs :8024)\n'
 	@printf '  make build      cargo build --features full (+ speech,avspeech on macOS)\n'
 	@printf '  make audit      cargo audit (needs cargo-audit)\n'
 	@printf '  make coverage   cargo llvm-cov summary (needs cargo-llvm-cov)\n'
@@ -57,6 +60,7 @@ test-e2e:   ; @$(QA) test-e2e
 test-stt:   ; @$(QA) test-stt
 test-llm:   ; @$(QA) test-llm
 test-openai:  ; @$(QA) test-openai
+test-stt-openai: ; @$(QA) test-stt-openai
 build:      ; @$(QA) build
 audit:      ; @$(QA) audit
 coverage:   ; @$(QA) coverage

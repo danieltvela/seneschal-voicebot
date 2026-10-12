@@ -34,6 +34,13 @@ stt_provider = "whisper"
 stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"
 whisper_threads = 0
+# Remote STT (issue #17) — usado cuando stt_provider = "openai".
+# VAD + segmentación siguen siendo locales; sólo la locución finalizada se
+# envía a POST {stt_url}/v1/audio/transcriptions (API compatible OpenAI).
+stt_url = "http://localhost:8024"
+stt_model = "qwen3-asr"
+stt_timeout_ms = 10000          # round trip acotado por locución
+# stt_api_key = ""              # bearer token opcional
 stt_early_reuse_enabled = false
 stt_early_min_tokens = 6
 stt_early_require_punctuation = true

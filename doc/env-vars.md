@@ -17,7 +17,7 @@ Read from `.env` (dotenvy loads automatically):
 | `AUDIO_OUTPUT_DEVICE` | _(default)_ | Speaker device name (same matching rules as `AUDIO_INPUT_DEVICE`). |
 | `LIST_AUDIO_DEVICES` | `false` | When `1`, print available input **and** output devices and exit (also `--list-devices`). |
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), or `parakeet` (requires `--features parakeet`). Note: `openai` is a **TTS** provider (`TTS_PROVIDER`), not an STT provider. |
+| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), `parakeet` (requires `--features parakeet`), or `openai` (local VAD + remote batch transcription via an OpenAI-compatible `/v1/audio/transcriptions` service, requires `--features openai-stt`). |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
 | `VAD_SILENCE_MS` | `300` | ms of continuous silence before SpeechEnd. Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. |
@@ -30,6 +30,10 @@ Read from `.env` (dotenvy loads automatically):
 | `PARAKEET_GPU` | — | Pin the Parakeet ONNX encoder/decoder to a GPU index or `cpu`. |
 | `TTS_GPU` | — | Pin Kokoro ONNX to a GPU index or `cpu`. |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
+| `STT_URL` | `http://localhost:8024` | Base URL of the OpenAI-compatible STT service (`STT_PROVIDER=openai`); the provider POSTs to `{STT_URL}/v1/audio/transcriptions`. Reference deployment: `seneschal-asr` (vLLM serving `Qwen3-ASR`). |
+| `STT_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>` to the remote STT service. Empty = no auth header. |
+| `STT_MODEL` | `qwen3-asr` | Model name sent in the remote transcription `model` field. |
+| `STT_TIMEOUT_MS` | `10000` | Per-utterance timeout (ms) for a remote transcription; bounds the HTTP round trip. |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
 | `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. |
 | `LLM_MODEL` | `qwen3.8-27b` | Model name sent in the `model` field of API requests. |

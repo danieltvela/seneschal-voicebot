@@ -13,6 +13,32 @@ pub trait SttProvider: Send {
     fn provider_name(&self) -> &'static str;
     async fn process_audio(&mut self, audio: &[f32], tx: &mpsc::Sender<SpeechEvent>) -> Result<()>;
     fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality>;
+
+    /// Best-effort startup check that the configured backend is reachable
+    /// (issue #17: "surface a bad URL/model early").
+    ///
+    /// Local backends accept the no-op default; remote backends override it.
+    /// Callers should log and continue on failure, since an external service may
+    /// still be starting.
+    async fn verify_server(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Abort any in-flight transcription request (barge-in / pipeline cancel).
+    ///
+    /// Local backends are synchronous and accept the no-op default; remote
+    /// backends (issue #17) cancel the pending HTTP request so no bandwidth is
+    /// wasted on a superseded utterance.
+    fn cancel_inflight(&mut self) {}
+
+    /// Number of remote transcriptions currently in flight.
+    ///
+    /// Synchronous/local backends return 0 (their work happens inside
+    /// `process_audio`). Used for observability and by test harnesses that need
+    /// to wait for out-of-band results.
+    fn inflight_transcriptions(&self) -> usize {
+        0
+    }
 }
 
 pub fn create_provider(
@@ -72,15 +98,36 @@ pub fn create_provider(
                 );
             }
         }
+        "openai" => {
+            #[cfg(feature = "openai-stt")]
+            {
+                let provider = super::openai::OpenAiSttProvider::new(
+                    whisper_cfg,
+                    super::openai::OpenAiSttConfig {
+                        base_url: config.stt_url.clone(),
+                        api_key: config.stt_api_key.clone(),
+                        model: config.stt_model.clone(),
+                        language: config.stt_language.clone(),
+                        timeout_ms: config.stt_timeout_ms,
+                    },
+                )?;
+                Ok(Box::new(provider))
+            }
+
+            #[cfg(not(feature = "openai-stt"))]
+            {
+                bail!(
+                    "STT_PROVIDER=openai requested but the 'openai-stt' feature is not enabled. Rebuild with: cargo run --features openai-stt"
+                );
+            }
+        }
         other => {
-            // Note: this is the *speech recognition* backend. `openai` is a TTS
-            // provider (TTS_PROVIDER), not STT — a common mix-up when the TTS
-            // backend is set to the OpenAI-compatible speech API.
             bail!(
                 "Invalid STT_PROVIDER '{other}'. Supported values: \
                  whisper (default, whisper.cpp + Silero VAD, no extra feature), \
                  parakeet (needs --features parakeet + PARAKEET_MODEL_DIR), \
-                 speech (macOS SFSpeechRecognizer, needs --features speech). \
+                 speech (macOS SFSpeechRecognizer, needs --features speech), \
+                 openai (OpenAI-compatible remote STT, needs --features openai-stt). \
                  Note: for TTS backends use TTS_PROVIDER (avspeech, kokoro, openai)."
             )
         }

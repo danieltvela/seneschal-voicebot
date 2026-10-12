@@ -1050,6 +1050,11 @@ async fn async_main() -> Result<()> {
         stt_provider.provider_name(),
         config.stt_provider
     );
+    // Remote STT (issue #17): surface a bad URL/model early. Best-effort — the
+    // service may still be starting, so a failure is a warning, not fatal.
+    if let Err(e) = stt_provider.verify_server().await {
+        warn!(target: "stt", "Remote STT startup check failed: {e:#} (continuing)");
+    }
 
     // ── NoSpeechGate: post-STT quality filter ──────────────────────────────────
     let no_speech_gate = NoSpeechGate {
@@ -2626,6 +2631,9 @@ async fn async_main() -> Result<()> {
 
                                 info!(target: "pipeline", "SpeechStart — firing BARGE_IN");
                                 events.barge_in_tx.send(utterance_epoch.load(Ordering::SeqCst)).ok();
+                                // Remote STT (issue #17): abort any in-flight
+                                // transcription now that the user barged in.
+                                stt_provider.cancel_inflight();
                                 announcement_window.lock().unwrap().set_user_speaking(true);
                                 announcement_window.lock().unwrap().interrupt();
                                 info!(target: "pipeline", "SpeechStart — interrupted pending announcements");

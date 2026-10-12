@@ -14,12 +14,16 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "openai-stt")]
+use seneschal_core::stt::openai::{OpenAiSttConfig, OpenAiSttProvider};
 use seneschal_core::stt::{
-    SpeechEvent, TranscriptionQuality, WhisperSTTVADConfig, WhisperSttProvider,
+    SpeechEvent, SttProvider, TranscriptionQuality, WhisperSTTVADConfig, WhisperSttProvider,
 };
+use std::collections::VecDeque;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// Pipeline sample rate (matches production: `sample_rate = 16000`).
@@ -105,8 +109,81 @@ pub fn default_config(language: &str) -> WhisperSTTVADConfig {
 /// machine is stateful, so every test owns its own instance to avoid
 /// cross-test interference when cargo runs tests in parallel within a binary.
 /// Model load cost (~2-5 s each) is acceptable for a manually-run audit suite.
-pub fn new_provider(language: &str) -> WhisperSttProvider {
-    WhisperSttProvider::new(default_config(language)).expect("failed to load Whisper/VAD models")
+///
+/// The backend is selected by `STT_AUDIT_PROVIDER` (`whisper` default, or
+/// `openai` for the remote provider, issue #17). Remote runs build the same
+/// local VAD segmenter; only the transcription is delegated over HTTP.
+pub fn new_provider(language: &str) -> Box<dyn SttProvider> {
+    match provider_kind().as_str() {
+        "whisper" => Box::new(
+            WhisperSttProvider::new(default_config(language))
+                .expect("failed to load Whisper/VAD models"),
+        ),
+        "openai" => new_openai_provider(language),
+        other => {
+            panic!("unsupported STT_AUDIT_PROVIDER '{other}' (expected 'whisper' or 'openai')")
+        }
+    }
+}
+
+/// Backend selected for the audit run (issue #17).
+pub fn provider_kind() -> String {
+    std::env::var("STT_AUDIT_PROVIDER")
+        .unwrap_or_else(|_| "whisper".to_string())
+        .trim()
+        .to_lowercase()
+}
+
+/// Remote STT base URL used when `STT_AUDIT_PROVIDER=openai`.
+pub fn remote_stt_url() -> String {
+    std::env::var("STT_URL").unwrap_or_else(|_| "http://localhost:8024".to_string())
+}
+
+/// Skip (exit 0) when the remote STT service is unreachable, mirroring
+/// `skip_if_no_models` for the local audits.
+pub fn skip_if_no_remote_service() {
+    let url = remote_stt_url();
+    let rest = url.split("://").nth(1).unwrap_or(&url);
+    let hostport = rest.split('/').next().unwrap_or(rest);
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(80)),
+        None => (hostport.to_string(), 80),
+    };
+    let addr = (host.as_str(), port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.next());
+    let reachable = addr
+        .map(|a| TcpStream::connect_timeout(&a, Duration::from_millis(750)).is_ok())
+        .unwrap_or(false);
+    if !reachable {
+        eprintln!("SKIP: remote STT service {url} unreachable");
+        std::process::exit(0);
+    }
+}
+
+#[cfg(feature = "openai-stt")]
+fn new_openai_provider(language: &str) -> Box<dyn SttProvider> {
+    skip_if_no_models();
+    skip_if_no_remote_service();
+
+    let base = default_config(language);
+    let cfg = OpenAiSttConfig {
+        base_url: remote_stt_url(),
+        api_key: std::env::var("STT_API_KEY").unwrap_or_default(),
+        model: std::env::var("STT_MODEL").unwrap_or_else(|_| "qwen3-asr".to_string()),
+        language: language.to_string(),
+        timeout_ms: std::env::var("STT_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10_000),
+    };
+    Box::new(OpenAiSttProvider::new(base, cfg).expect("failed to build the openai STT provider"))
+}
+
+#[cfg(not(feature = "openai-stt"))]
+fn new_openai_provider(_language: &str) -> Box<dyn SttProvider> {
+    panic!("STT_AUDIT_PROVIDER=openai requires --features openai-stt");
 }
 
 // -- Fixture generation ------------------------------------------------------
@@ -335,12 +412,66 @@ impl RunReport {
     }
 }
 
+/// Record a provider event into the running report.
+///
+/// `starts` is a FIFO of `SpeechStart` stream positions: segments are created
+/// in order, but remote `SpeechEnd`s may complete out of order, so each end is
+/// paired with the oldest unmatched start.
+fn record_event(
+    ev: SpeechEvent,
+    starts: &mut VecDeque<f32>,
+    segments: &mut Vec<SegmentTiming>,
+    stream_now: f32,
+    infer_wall_ms: u128,
+) {
+    match ev {
+        SpeechEvent::SpeechStart => {
+            starts.push_back(stream_now);
+        }
+        SpeechEvent::SpeechEnd(quality) => {
+            segments.push(SegmentTiming {
+                t_start_stream: starts.pop_front().unwrap_or(0.0),
+                t_close_stream: stream_now,
+                infer_wall_ms,
+                quality,
+            });
+        }
+        SpeechEvent::Speech(p) => {
+            println!("[partial] {p}");
+        }
+    }
+}
+
+/// Wait (bounded) for in-flight remote transcriptions so their events are
+/// recorded in order before more audio is fed. Local providers report 0.
+async fn settle(
+    stt: &dyn SttProvider,
+    rx: &mut mpsc::Receiver<SpeechEvent>,
+    starts: &mut VecDeque<f32>,
+    segments: &mut Vec<SegmentTiming>,
+    stream_now: f32,
+) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while stt.inflight_transcriptions() > 0 && Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+            Ok(Some(ev)) => record_event(ev, starts, segments, stream_now, 0),
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+}
+
 /// Feed `audio` to the provider in production-sized chunks (100 ms) and
 /// collect events with stream-time + wall-clock instrumentation.
-pub async fn run_stream(stt: &mut WhisperSttProvider, audio: &[f32]) -> RunReport {
+///
+/// Remote providers (issue #17) dispatch transcription asynchronously; the
+/// harness waits for each pending result before feeding on, which keeps events
+/// in order and makes `t_close_stream` meaningful for them too.
+pub async fn run_stream(stt: &mut Box<dyn SttProvider>, audio: &[f32]) -> RunReport {
+    let stt: &mut dyn SttProvider = stt.as_mut();
     let (tx, mut rx) = mpsc::channel(256);
     let mut segments: Vec<SegmentTiming> = Vec::new();
-    let mut start_at: Option<f32> = None;
+    let mut starts: VecDeque<f32> = VecDeque::new();
     let mut fed = 0usize;
 
     'feed: loop {
@@ -354,23 +485,15 @@ pub async fn run_stream(stt: &mut WhisperSttProvider, audio: &[f32]) -> RunRepor
         stt.process_audio(chunk, &tx).await.unwrap();
         let stream_now = fed as f32 / SR as f32;
         while let Ok(ev) = rx.try_recv() {
-            match ev {
-                SpeechEvent::SpeechStart => {
-                    start_at = Some(stream_now);
-                }
-                SpeechEvent::SpeechEnd(quality) => {
-                    segments.push(SegmentTiming {
-                        t_start_stream: start_at.take().unwrap_or(0.0),
-                        t_close_stream: stream_now,
-                        infer_wall_ms: t_call.elapsed().as_millis(),
-                        quality,
-                    });
-                }
-                SpeechEvent::Speech(p) => {
-                    println!("[partial] {p}");
-                }
-            }
+            record_event(
+                ev,
+                &mut starts,
+                &mut segments,
+                stream_now,
+                t_call.elapsed().as_millis(),
+            );
         }
+        settle(stt, &mut rx, &mut starts, &mut segments, stream_now).await;
     }
 
     // Flush: 4 s of silence guarantees the final segment closes
@@ -382,24 +505,26 @@ pub async fn run_stream(stt: &mut WhisperSttProvider, audio: &[f32]) -> RunRepor
         fed += chunk.len();
         let stream_now = fed as f32 / SR as f32;
         while let Ok(ev) = rx.try_recv() {
-            match ev {
-                SpeechEvent::SpeechStart => {
-                    start_at = Some(stream_now);
-                }
-                SpeechEvent::SpeechEnd(quality) => {
-                    segments.push(SegmentTiming {
-                        t_start_stream: start_at.take().unwrap_or(0.0),
-                        t_close_stream: stream_now,
-                        infer_wall_ms: t_call.elapsed().as_millis(),
-                        quality,
-                    });
-                }
-                SpeechEvent::Speech(p) => {
-                    println!("[partial] {p}");
-                }
-            }
+            record_event(
+                ev,
+                &mut starts,
+                &mut segments,
+                stream_now,
+                t_call.elapsed().as_millis(),
+            );
         }
+        settle(stt, &mut rx, &mut starts, &mut segments, stream_now).await;
     }
+
+    // Safety net for any straggler result.
+    if stt.inflight_transcriptions() > 0 {
+        let stream_now = fed as f32 / SR as f32;
+        settle(stt, &mut rx, &mut starts, &mut segments, stream_now).await;
+    }
+
+    // Remote results may arrive out of order; order segments by their
+    // (synchronous) SpeechStart position so the report reads chronologically.
+    segments.sort_by(|a, b| a.t_start_stream.total_cmp(&b.t_start_stream));
 
     RunReport {
         segments,
@@ -407,10 +532,10 @@ pub async fn run_stream(stt: &mut WhisperSttProvider, audio: &[f32]) -> RunRepor
     }
 }
 
-/// One-shot transcription through the same code path used by the provider
-/// (`transcribe_complete` -> internal `transcribe()`), with wall timing.
+/// One-shot transcription through the trait's `transcribe_complete`, with wall
+/// timing.
 pub fn run_transcribe_complete(
-    stt: &WhisperSttProvider,
+    stt: &dyn SttProvider,
     audio: &[f32],
 ) -> (TranscriptionQuality, u128) {
     let t = Instant::now();
