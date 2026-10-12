@@ -83,9 +83,3 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 | Common workflows | [`doc/common-workflows.md`](doc/common-workflows.md) |
 | iOS / watch companion (dual-channel) | [`doc/IOS_COMPANION.md`](doc/IOS_COMPANION.md) |
 | Apple Watch networking constraints | [`doc/APPLE_WATCH_CLIENT.md`](doc/APPLE_WATCH_CLIENT.md) |
-
----
-
-## Repository Map
-
-A full codemap is available at `codemap.md`. Read it before any task. For deep work on a folder, also read that folder's `codemap.md`.
