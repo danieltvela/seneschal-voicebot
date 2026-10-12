@@ -13,8 +13,11 @@ Read from `.env` (dotenvy loads automatically):
 | `VISIBLE_AGENT_ENABLED` | `false` | When `1` or `true`, enables visible agent mode (`mode = "visible"` in agent config). Visible agents launch in a PTY with a Terminal window for real-time monitoring. |
 | `AUDIO_SAMPLE_RATE` | `16000` | Audio sample rate |
 | `AUDIO_CHANNELS` | `1` | Audio channels |
+| `AUDIO_INPUT_DEVICE` | _(default)_ | Microphone device name. Case-insensitive **partial** match against the CPAL device name; append `#N` to pick the Nth match. Run `--list-devices` or `LIST_AUDIO_DEVICES=1` to see names. **Linux/ALSA:** use the CPAL name (e.g. `USB Audio`), which can differ from the OS "friendly" name (the product name lives only in `/proc/asound/cards`). |
+| `AUDIO_OUTPUT_DEVICE` | _(default)_ | Speaker device name (same matching rules as `AUDIO_INPUT_DEVICE`). |
+| `LIST_AUDIO_DEVICES` | `false` | When `1`, print available input **and** output devices and exit (also `--list-devices`). |
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), or `parakeet` (requires `--features parakeet`) |
+| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), or `parakeet` (requires `--features parakeet`). Note: `openai` is a **TTS** provider (`TTS_PROVIDER`), not an STT provider. |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
 | `VAD_SILENCE_MS` | `300` | ms of continuous silence before SpeechEnd. Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. |
@@ -44,9 +47,22 @@ Read from `.env` (dotenvy loads automatically):
 | `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |
-| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform) or `avspeech` (macOS AVSpeechSynthesizer) |
+| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform), `avspeech` (macOS AVSpeechSynthesizer) or `openai` (Qwen3-TTS via a local vLLM-Omni service, requires `--features vllm-tts`) |
 | `AVSPEECH_VOICE` | `""` | macOS AVSpeech voice name. Empty string = auto-select first available system voice. At runtime, `avspeech.rs` picks the first voice on the system when this is empty or whitespace-only. |
 | `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |
+| `VLLM_TTS_URL` | `http://localhost:8025` | Base URL of the vLLM-Omni speech service (`TTS_PROVIDER=openai`) |
+| `VLLM_TTS_VOICE` | `vivian` | Preset Qwen3-TTS voice; list with `--list-voices` |
+| `VLLM_TTS_LANGUAGE` | `auto` | Language hint; `auto` is sent as `"Auto"` so the model adapts per utterance (ES/EN code-switching) |
+| `VLLM_TTS_INSTRUCTIONS` | _(empty)_ | Optional natural-language style/emotion instruction applied to every request |
+| `VLLM_TTS_SPEED` | `0.0` | Speech speed; `0` omits the field (service default) |
+| `VLLM_TTS_WARMUP` | `false` | Warm up the service at startup (the first request after container start takes ~90 s) |
+| `VLLM_TTS_TIMEOUT_MS` | `120000` | Per-request HTTP timeout; must cover the ~90 s warmup |
+
+> **Qwen3-TTS checkpoint limitation (issue #16):** the service currently runs
+> the *CustomVoice* checkpoint, which supports preset voices + `instructions`.
+> Voice cloning (`task_type=Base`) and VoiceDesign require separate checkpoints
+> and are not supported by this integration yet — see
+> [`doc/tts-vllm-omni.md`](tts-vllm-omni.md).
 | `TAVILY_API_KEY` | — | Tavily Search API key. Preferred `quick_search` backend when set (wins over Brave/SearXNG) |
 | `TAVILY_MAX_TOKENS` | `512` | Tokens for Tavily's AI-generated answer (0 = raw results only) |
 | `EXA_API_KEY` | — | Exa API key. Used by `quick_search` only when `TAVILY_API_KEY` is not set |

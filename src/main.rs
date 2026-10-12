@@ -61,6 +61,8 @@ use seneschal_core::tts::AvSpeechTts;
 #[cfg(feature = "kokoro")]
 use seneschal_core::tts::KokoroTts;
 use seneschal_core::tts::TtsEngine;
+#[cfg(feature = "vllm-tts")]
+use seneschal_core::tts::{VllmTts, VllmTtsConfig};
 use seneschal_extras::agent_bridge::{register_plugin_agent_tools, resolve_plugin_agents};
 use seneschal_extras::analysis::ContextLens;
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
@@ -77,6 +79,19 @@ use seneschal_tools_core::CurrentTimeTool;
 
 #[cfg(test)]
 mod e2e_tests;
+
+/// Build the vLLM-Omni TTS provider configuration from the runtime config.
+#[cfg(feature = "vllm-tts")]
+fn vllm_tts_config(config: &Config) -> VllmTtsConfig {
+    VllmTtsConfig {
+        base_url: config.vllm_tts_url.clone(),
+        voice: config.vllm_tts_voice.clone(),
+        language: config.vllm_tts_language.clone(),
+        instructions: config.vllm_tts_instructions.clone(),
+        speed: config.vllm_tts_speed,
+        timeout_ms: config.vllm_tts_timeout_ms,
+    }
+}
 
 const AUDIO_CHANNEL_CAPACITY: usize = 200;
 const MAX_SPEECH_BUFFER_SECS: u32 = 30;
@@ -223,9 +238,30 @@ async fn async_main() -> Result<()> {
                 );
                 std::process::exit(1);
             }
+            #[cfg(feature = "vllm-tts")]
+            "openai" => {
+                let tts = match VllmTts::new(vllm_tts_config(&config)) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("TTS_PROVIDER=openai: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(e) = tts.list_voices().await {
+                    eprintln!("Could not list voices: {e}");
+                    std::process::exit(1);
+                }
+            }
+            #[cfg(not(feature = "vllm-tts"))]
+            "openai" => {
+                eprintln!(
+                    "TTS_PROVIDER=openai requires the 'vllm-tts' feature: cargo run --features vllm-tts"
+                );
+                std::process::exit(1);
+            }
             _ => {
                 eprintln!(
-                    "Unknown TTS_PROVIDER '{}'. Available: avspeech, kokoro",
+                    "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via vLLM-Omni, needs --features vllm-tts)",
                     config.tts_provider
                 );
                 std::process::exit(1);
@@ -1121,9 +1157,33 @@ async fn async_main() -> Result<()> {
                 "TTS_PROVIDER=kokoro requires the 'kokoro' feature: cargo run --features kokoro"
             );
         }
+        #[cfg(feature = "vllm-tts")]
+        "openai" => {
+            info!(
+                target: "tts",
+                "TTS provider: vLLM-Omni / Qwen3-TTS (OpenAI-compatible speech API, url={}, voice={}, language={})",
+                config.vllm_tts_url,
+                config.vllm_tts_voice,
+                config.vllm_tts_language
+            );
+            let t = VllmTts::new(vllm_tts_config(&config))?;
+            if let Err(e) = t.verify_voice().await {
+                warn!(target: "tts", "TTS voice check failed: {e} (continuing)");
+            }
+            if config.vllm_tts_warmup {
+                t.warmup().await?;
+            }
+            TtsEngine::Vllm(t)
+        }
+        #[cfg(not(feature = "vllm-tts"))]
+        "openai" => {
+            anyhow::bail!(
+                "TTS_PROVIDER=openai requires the 'vllm-tts' feature: cargo run --features vllm-tts"
+            );
+        }
         _ => {
             anyhow::bail!(
-                "Unknown TTS_PROVIDER '{}'. Available: avspeech, kokoro",
+                "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via vLLM-Omni, needs --features vllm-tts)",
                 config.tts_provider
             );
         }

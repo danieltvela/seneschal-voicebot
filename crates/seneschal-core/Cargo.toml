@@ -70,6 +70,9 @@ objc2-avf-audio = { version = "0.3.1", features = [
 
 [features]
 kokoro = ["dep:kokorox"]
+# vLLM-Omni / Qwen3-TTS provider (issue #16). No extra crates: reqwest is
+# already a dependency; the feature only gates the module.
+vllm-tts = []
 speaker = ["dep:sherpa-rs"]
 parakeet = ["dep:parakeet-rs"]
 speech = ["dep:speech"]

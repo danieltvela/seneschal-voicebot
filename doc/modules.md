@@ -7,7 +7,7 @@
 | `src/audio/` | Audio pipeline: capture, VAD, resampling, playback, filler, speaker | 🟢 SALVAR | [audio-internals.md](audio-internals.md) |
 | `src/stt/` | Provider trait + Whisper + Parakeet + SFSpeechRecognizer implementations. 16kHz f32 mono. | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | `src/llm/` | HTTP client to `/v1/chat/completions`, session management | 🟢 SALVAR | [llm-provider.md](llm-provider.md) |
-| `src/tts/` | `avspeech.rs` (macOS AVSpeech), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX) | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| `src/tts/` | `avspeech.rs` (macOS AVSpeech), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX), `vllm/` (Qwen3-TTS via vLLM-Omni, issue #16) | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md), [tts-vllm-omni.md](tts-vllm-omni.md) |
 | `src/pipeline/` | Pipeline orchestration with FSM | 🟢 SALVAR | [MAIN_PROCESS.md](MAIN_PROCESS.md), [PROCESS_ARCHITECTURE.md](PROCESS_ARCHITECTURE.md) |
 | `src/config.rs` | Environment-based config | 🟢 SALVAR (dividir) | [env-vars.md](env-vars.md), [config.md](config.md) |
 | `src/db/` | SQLite persistence: sessions, messages, user_profile, memories, FTS5 | 🟡 AISLAR (`seneschal-memory`) | [s-dream-format.md](s-dream-format.md) |

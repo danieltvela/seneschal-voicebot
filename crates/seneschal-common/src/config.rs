@@ -9,6 +9,14 @@ const DEFAULT_CONFIG_TOML: &str = include_str!("../../../seneschal.pro.toml");
 
 // ── Shared config sub-structs (moved from agents::config and mcp::config) ──────
 
+/// Merge one optional env var into a string field, leaving it untouched when
+/// the variable is unset.
+fn merge_env_string(field: &mut String, var: &str) {
+    if let Ok(v) = env::var(var) {
+        *field = v;
+    }
+}
+
 /// Agent configuration loaded from TOML.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentTomlConfig {
@@ -326,6 +334,39 @@ pub struct Config {
     /// Default Kokoro speech speed (KOKORO_SPEED, default 1.3).
     pub kokoro_speed: f32,
 
+    // ── TTS: vLLM-Omni / Qwen3-TTS (issue #16) ──────────────────────────────
+    /// Base URL of the local vLLM-Omni speech service (VLLM_TTS_URL,
+    /// default "http://localhost:8025"). Only used when `tts_provider = "openai"`.
+    #[serde(default = "default_vllm_tts_url")]
+    pub vllm_tts_url: String,
+    /// Preset voice name (VLLM_TTS_VOICE, default "vivian"). Discover the full
+    /// list with `--list-voices` or `GET /v1/audio/voices`.
+    #[serde(default = "default_vllm_tts_voice")]
+    pub vllm_tts_voice: String,
+    /// Language hint sent as `language` (VLLM_TTS_LANGUAGE, default "auto").
+    /// "auto" (case-insensitive) is sent as the literal `"Auto"` so the model
+    /// adapts per utterance (ES/EN code-switching). Never pin a single
+    /// language unless the user explicitly wants to.
+    #[serde(default = "default_vllm_tts_language")]
+    pub vllm_tts_language: String,
+    /// Natural-language style/emotion instruction applied to every synthesis
+    /// request (VLLM_TTS_INSTRUCTIONS, default ""). Empty = omitted.
+    #[serde(default)]
+    pub vllm_tts_instructions: String,
+    /// Speech speed (VLLM_TTS_SPEED, default 0.0 = service default). Sent as
+    /// `speed` only when > 0.
+    #[serde(default)]
+    pub vllm_tts_speed: f32,
+    /// Warm up the service at startup with a throwaway request
+    /// (VLLM_TTS_WARMUP, default false). The first request after container
+    /// start takes ~90 s; warming up avoids that latency on the first turn.
+    #[serde(default)]
+    pub vllm_tts_warmup: bool,
+    /// HTTP timeout for a synthesis request in milliseconds
+    /// (VLLM_TTS_TIMEOUT_MS, default 120000) — must cover the ~90 s warmup.
+    #[serde(default = "default_vllm_tts_timeout_ms")]
+    pub vllm_tts_timeout_ms: u64,
+
     // ── Context consolidation ────────────────────────────────────────────────
     /// Approximate context window of the LLM model in tokens.
     /// Context consolidation triggers when the prompt exceeds the configured
@@ -561,6 +602,26 @@ fn default_stt_language() -> String {
 /// Default thinking wire shape: name-based auto-detection.
 fn default_thinking_style() -> String {
     "auto".to_string()
+}
+
+/// Local vLLM-Omni speech service base URL (issue #16).
+fn default_vllm_tts_url() -> String {
+    "http://localhost:8025".to_string()
+}
+
+/// Default Qwen3-TTS CustomVoice preset (issue #16).
+fn default_vllm_tts_voice() -> String {
+    "vivian".to_string()
+}
+
+/// Adaptive language by default — the model decides per utterance (issue #16).
+fn default_vllm_tts_language() -> String {
+    "auto".to_string()
+}
+
+/// Generous timeout: the first request after container start takes ~90 s.
+fn default_vllm_tts_timeout_ms() -> u64 {
+    120_000
 }
 
 /// Split a raw WAKE_WORD value into its individual wake words (issue #228).
@@ -827,6 +888,20 @@ impl Config {
         }
         if let Ok(v) = env::var("KOKORO_SPEED") {
             self.kokoro_speed = v.parse().context("Invalid KOKORO_SPEED")?;
+        }
+        // vLLM-Omni / Qwen3-TTS (issue #16)
+        merge_env_string(&mut self.vllm_tts_url, "VLLM_TTS_URL");
+        merge_env_string(&mut self.vllm_tts_voice, "VLLM_TTS_VOICE");
+        merge_env_string(&mut self.vllm_tts_language, "VLLM_TTS_LANGUAGE");
+        merge_env_string(&mut self.vllm_tts_instructions, "VLLM_TTS_INSTRUCTIONS");
+        if let Ok(v) = env::var("VLLM_TTS_SPEED") {
+            self.vllm_tts_speed = v.parse().context("Invalid VLLM_TTS_SPEED")?;
+        }
+        if let Ok(v) = env::var("VLLM_TTS_WARMUP") {
+            self.vllm_tts_warmup = v == "1" || v.to_lowercase() == "true";
+        }
+        if let Ok(v) = env::var("VLLM_TTS_TIMEOUT_MS") {
+            self.vllm_tts_timeout_ms = v.parse().context("Invalid VLLM_TTS_TIMEOUT_MS")?;
         }
 
         // Context consolidation
@@ -1181,8 +1256,14 @@ impl Config {
             self.stt_provider.as_str(),
             "whisper" | "parakeet" | "speech"
         ) {
+            // Note: `openai` is a TTS provider, not STT. This guards the
+            // transcription backend only (see TTS_PROVIDER for speech output).
             anyhow::bail!(
-                "Invalid STT_PROVIDER '{}'. Supported values: whisper, parakeet, speech",
+                "Invalid STT_PROVIDER '{}'. Supported values: \
+                 whisper (default, whisper.cpp + Silero VAD, no extra feature), \
+                 parakeet (needs --features parakeet + PARAKEET_MODEL_DIR), \
+                 speech (macOS SFSpeechRecognizer, needs --features speech). \
+                 Note: for TTS backends use TTS_PROVIDER (avspeech, kokoro, openai).",
                 self.stt_provider
             );
         }

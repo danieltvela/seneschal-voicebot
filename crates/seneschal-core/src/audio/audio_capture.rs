@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use async_channel::Sender;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig};
+use cpal::{Device, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, trace, warn};
@@ -176,23 +176,27 @@ impl AudioCapture {
     pub fn print_devices() -> Result<()> {
         let host = cpal::default_host();
 
-        // Print default device
+        // Print default devices
         if let Some(default_device) = host.default_input_device() {
             println!(
                 "Default input device: {}",
                 default_device.description()?.name()
             );
         }
+        if let Some(default_device) = host.default_output_device() {
+            println!(
+                "Default output device: {}",
+                default_device.description()?.name()
+            );
+        }
 
         println!("\nAvailable input devices:");
-
-        let devices = host
+        for (idx, device) in host
             .input_devices()
-            .context("Failed to enumerate input devices")?;
-
-        for (idx, device) in devices.enumerate() {
+            .context("Failed to enumerate input devices")?
+            .enumerate()
+        {
             if let Ok(device_description) = device.description() {
-                // Try to get supported config info
                 let config_info = device
                     .default_input_config()
                     .map(|c| {
@@ -213,6 +217,39 @@ impl AudioCapture {
                 );
             }
         }
+
+        println!("\nAvailable output devices:");
+        for (idx, device) in host
+            .output_devices()
+            .context("Failed to enumerate output devices")?
+            .enumerate()
+        {
+            if let Ok(device_description) = device.description() {
+                let config_info = device
+                    .default_output_config()
+                    .map(|c| {
+                        format!(
+                            "{} Hz, {} ch, {:?}",
+                            c.sample_rate(),
+                            c.channels(),
+                            c.sample_format()
+                        )
+                    })
+                    .unwrap_or_else(|_| "config unavailable".to_string());
+
+                println!(
+                    "  [{}] {} ({})",
+                    idx,
+                    device_description.name(),
+                    config_info
+                );
+            }
+        }
+
+        println!(
+            "\nSet AUDIO_INPUT_DEVICE / AUDIO_OUTPUT_DEVICE to a device name above \
+             (partial, case-insensitive match; add #N to pick the Nth match)."
+        );
 
         Ok(())
     }
@@ -240,6 +277,68 @@ impl AudioCapture {
         let channels = self.config.channels;
         let sample_rate = self.config.sample_rate;
 
+        // Buffer to accumulate samples
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::with_capacity(
+            samples_per_chunk * channels as usize,
+        )));
+
+        // Build the input stream generically so any device sample format works
+        // (converted to f32 via cpal/dasp's FromSample).
+        macro_rules! build {
+            ($t:ty) => {
+                Self::build_input_stream::<$t>(
+                    &self.device,
+                    &self.config,
+                    Arc::clone(&buffer),
+                    tx.clone(),
+                    samples_per_chunk,
+                    sample_rate,
+                    channels,
+                    capture_active.clone(),
+                )?
+            };
+        }
+
+        let stream = match self.sample_format {
+            SampleFormat::I8 => build!(i8),
+            SampleFormat::I16 => build!(i16),
+            SampleFormat::I24 => build!(cpal::I24),
+            SampleFormat::I32 => build!(i32),
+            SampleFormat::I64 => build!(i64),
+            SampleFormat::U8 => build!(u8),
+            SampleFormat::U16 => build!(u16),
+            SampleFormat::U24 => build!(cpal::U24),
+            SampleFormat::U32 => build!(u32),
+            SampleFormat::U64 => build!(u64),
+            SampleFormat::F32 => build!(f32),
+            SampleFormat::F64 => build!(f64),
+            other => {
+                return Err(anyhow!("Unsupported input sample format: {other:?}"));
+            }
+        };
+
+        stream.play().context("Failed to start audio stream")?;
+        info!(target: "audio", "Audio capture started");
+
+        Ok(stream)
+    }
+
+    /// Build an input stream for any device sample format, converting to f32.
+    #[allow(clippy::too_many_arguments)]
+    fn build_input_stream<T>(
+        device: &Device,
+        config: &StreamConfig,
+        buffer: Arc<std::sync::Mutex<Vec<f32>>>,
+        tx: Sender<AudioChunk>,
+        samples_per_chunk: usize,
+        sample_rate: u32,
+        channels: u16,
+        capture_active: Option<Arc<AtomicBool>>,
+    ) -> Result<cpal::Stream>
+    where
+        T: SizedSample + Sample,
+        f32: FromSample<T>,
+    {
         let err_fn = move |err: cpal::StreamError| {
             let msg = err.to_string();
             crate::audio::log_stream_error(err);
@@ -256,84 +355,24 @@ impl AudioCapture {
             }
         };
 
-        // Buffer to accumulate samples
-        let buffer = Arc::new(std::sync::Mutex::new(Vec::with_capacity(
-            samples_per_chunk * channels as usize,
-        )));
-        let buffer_clone = Arc::clone(&buffer);
-
-        let stream = match self.sample_format {
-            SampleFormat::I16 => {
-                let tx = tx.clone();
-                self.device.build_input_stream(
-                    &self.config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        // Convert i16 to f32
-                        let samples: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                        Self::process_samples(
-                            &buffer_clone,
-                            samples,
-                            &tx,
-                            samples_per_chunk,
-                            sample_rate,
-                            channels,
-                        );
-                    },
-                    err_fn,
-                    None,
-                )?
-            }
-            SampleFormat::U16 => {
-                let tx = tx.clone();
-                self.device.build_input_stream(
-                    &self.config,
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        // Convert u16 to f32
-                        let samples: Vec<f32> = data
-                            .iter()
-                            .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
-                            .collect();
-                        Self::process_samples(
-                            &buffer_clone,
-                            samples,
-                            &tx,
-                            samples_per_chunk,
-                            sample_rate,
-                            channels,
-                        );
-                    },
-                    err_fn,
-                    None,
-                )?
-            }
-            SampleFormat::F32 => {
-                let tx = tx.clone();
-                self.device.build_input_stream(
-                    &self.config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        Self::process_samples(
-                            &buffer_clone,
-                            data.to_vec(),
-                            &tx,
-                            samples_per_chunk,
-                            sample_rate,
-                            channels,
-                        );
-                    },
-                    err_fn,
-                    None,
-                )?
-            }
-            sample_format => {
-                return Err(anyhow!("Unsupported sample format: {:?}", sample_format));
-            }
-        };
-
-        stream.play().context("Failed to start audio stream")?;
-        info!(target: "audio", "Audio capture started");
-
-        Ok(stream)
+        device
+            .build_input_stream(
+                config,
+                move |data: &[T], _: &cpal::InputCallbackInfo| {
+                    let samples: Vec<f32> = data.iter().map(|&s| f32::from_sample(s)).collect();
+                    Self::process_samples(
+                        &buffer,
+                        samples,
+                        &tx,
+                        samples_per_chunk,
+                        sample_rate,
+                        channels,
+                    );
+                },
+                err_fn,
+                None,
+            )
+            .context("Failed to build input stream")
     }
 
     fn process_samples(

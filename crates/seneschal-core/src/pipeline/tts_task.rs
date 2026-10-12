@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{Notify, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::error;
 
 use super::fsm::PipelineState;
@@ -27,6 +27,9 @@ pub type RemoteTtsTx = Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<T
 /// - Sets `Idle` when playback finishes AND the LLM has signalled it is done
 ///   streaming (so no more sentences are coming), or when barge-in cancels
 ///   the in-flight response. Issue #34.
+///
+/// Playback is incremental (issue #16): the provider streams PCM chunks and
+/// they are written to the speaker as they arrive.
 #[allow(clippy::too_many_arguments)]
 pub async fn tts_task(
     events: Arc<PipelineEvents>,
@@ -46,18 +49,13 @@ pub async fn tts_task(
     remote_tts_tx: RemoteTtsTx,
 ) {
     let mut cancel_rx = events.barge_in_tx.subscribe();
-    let mut play_handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>> = None;
     let mut first_sentence = true;
     let mut last_utterance_id: Option<u64> = None;
-    let mut no_more_sentences = false;
-    let playback_done = Arc::new(Notify::new());
+    // Set when the LLM signalled end-of-response; used to go idle as soon as the
+    // final sentence finishes playing.
+    let mut llm_done = false;
 
     loop {
-        if no_more_sentences && play_handle.is_none() {
-            try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
-            no_more_sentences = false;
-        }
-
         // Drain queue first for low latency; block only when empty.
         let next = match sentences_rx.try_recv() {
             Ok(frame) => Some(frame),
@@ -68,25 +66,12 @@ pub async fn tts_task(
                         handle_barge_in(
                             &play_cancel,
                             &pipeline_state_tx,
-                            &mut play_handle,
                             &mut sentences_rx,
                             &mut cancel_rx,
                             &mut first_sentence,
-                            &mut no_more_sentences,
                             &tui_tx,
                             &announcement_window,
                         ).await;
-                        continue;
-                    }
-                    _ = playback_done.notified() => {
-                        if let Some(h) = play_handle.take() {
-                            match h.await {
-                                Ok(Ok(())) => {}
-                                Ok(Err(e)) => error!(target: "audio", "Playback error: {}", e),
-                                Err(e) => error!(target: "audio", "Playback task join failed: {}", e),
-                            }
-                        }
-                        announcement_window.lock().unwrap().finish_playback();
                         continue;
                     }
                 }
@@ -107,6 +92,11 @@ pub async fn tts_task(
                 }
                 announcement_window.lock().unwrap().queue_audio();
 
+                // A new utterance id means a fresh response started.
+                if last_utterance_id != Some(utterance_id) {
+                    llm_done = false;
+                }
+
                 if has_audio_device {
                     if last_utterance_id != Some(utterance_id) {
                         let _ = pipeline_state_tx.send(PipelineState::Speaking { utterance_id });
@@ -121,137 +111,69 @@ pub async fn tts_task(
                     }
                 }
 
-                // Ensure previous playback fully stops before starting next sentence.
-                if let Some(mut h) = play_handle.take() {
-                    let mut cancelled = false;
-                    loop {
-                        tokio::select! {
-                            result = &mut h => {
-                                if let Ok(Err(e)) = result {
-                                    error!(target: "audio", "Playback error: {}", e);
-                                }
-                                break;
-                            },
-                            _ = cancel_rx.recv() => {
-                                play_cancel.store(true, Ordering::SeqCst);
-                                cancelled = true;
-                                // Keep awaiting the playback task until CPAL callback sees
-                                // play_cancel and the task actually finishes.
-                            }
-                        }
-                    }
-                    if cancelled {
-                        handle_barge_in(
-                            &play_cancel,
-                            &pipeline_state_tx,
-                            &mut play_handle,
-                            &mut sentences_rx,
-                            &mut cancel_rx,
-                            &mut first_sentence,
-                            &mut no_more_sentences,
-                            &tui_tx,
-                            &announcement_window,
-                        )
-                        .await;
-                        continue;
-                    }
-                }
+                let outcome = exec_sentence(
+                    &tts,
+                    &audio_output,
+                    &remote_tts_tx,
+                    &events,
+                    &TtsEngineStreamArgs {
+                        sentence: &sentence,
+                        sample_rate: tts_sample_rate,
+                        cancel: &play_cancel,
+                        has_audio_device,
+                    },
+                )
+                .await;
 
-                let tts_c = Arc::clone(&tts);
-                let sentence_c = sentence.clone();
-                let mut synth_handle =
-                    tokio::task::spawn_blocking(move || tts_c.synthesize(&sentence_c));
-
-                let samples = tokio::select! {
-                    _ = cancel_rx.recv() => {
-                        synth_handle.abort();
-                        handle_barge_in(
-                            &play_cancel,
-                            &pipeline_state_tx,
-                            &mut play_handle,
-                            &mut sentences_rx,
-                            &mut cancel_rx,
-                            &mut first_sentence,
-                            &mut no_more_sentences,
-                            &tui_tx,
-                            &announcement_window,
-                        ).await;
-                        continue;
-                    }
-                    result = &mut synth_handle => {
-                        match result {
-                            Ok(Ok(s)) => s,
-                            Ok(Err(e)) => {
-                                error!(target: "tts", "TTS synthesis error: {}", e);
-                                if let Some(ref tx) = tui_tx {
-                                    tx.send(TuiEvent::Error(format!("TTS synthesis error: {e}"))).ok();
-                                }
-                                continue;
-                            }
-                            Err(e) => {
-                                error!(target: "tts", "TTS task panicked: {e}");
-                                if let Some(ref tx) = tui_tx {
-                                    tx.send(TuiEvent::Error(format!("TTS task panicked: {e}"))).ok();
-                                }
-                                continue;
-                            }
+                let playback_completed = match outcome {
+                    SentenceOutcome::Completed => true,
+                    SentenceOutcome::Cancelled => false,
+                    SentenceOutcome::Error(e) => {
+                        error!(target: "tts", "TTS synthesis error: {}", e);
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::Error(format!("TTS synthesis error: {e}")))
+                                .ok();
                         }
+                        true
                     }
                 };
 
-                if first_sentence {
+                if !playback_completed {
+                    // Cancelled mid-playback: barge-in path drains and resets.
+                    handle_barge_in(
+                        &play_cancel,
+                        &pipeline_state_tx,
+                        &mut sentences_rx,
+                        &mut cancel_rx,
+                        &mut first_sentence,
+                        &tui_tx,
+                        &announcement_window,
+                    )
+                    .await;
+                    continue;
+                }
+
+                if first_sentence && has_audio_device {
                     first_sentence = false;
                     if let Some(t0) = t_vad_end.lock().unwrap().as_ref() {
                         tracing::info!(target: "performance", "[+{}ms] SpeechStart → FirstAudioPlayback", t0.elapsed().as_millis());
                     }
                 }
 
-                // Prefer remote client when one is connected (exclusive TTS routing).
-                {
-                    let maybe_tx = remote_tts_tx.lock().await.clone();
-                    if let Some(tx) = maybe_tx {
-                        let n = samples.len();
-                        let packet = TtsAudioPacket {
-                            samples,
-                            sample_rate: tts_sample_rate,
-                        };
-                        info!(
-                            target: "remote",
-                            "Routing TTS to remote client ({n} samples @ {tts_sample_rate} Hz)"
-                        );
-                        if tx.send(packet).await.is_err() {
-                            tracing::warn!(target: "remote", "Remote TTS channel closed");
-                        }
-                        // Remote sink owns playback duration; don't block on local CPAL.
-                        announcement_window.lock().unwrap().start_playback();
-                        announcement_window.lock().unwrap().finish_playback();
-                        continue;
-                    }
-                }
+                announcement_window.lock().unwrap().finish_playback();
 
-                let out_c = Arc::clone(&audio_output);
-                let cancel_c = Arc::clone(&play_cancel);
-                let notify_c = Arc::clone(&playback_done);
-                let rate = tts_sample_rate;
-                play_handle = Some(tokio::task::spawn(async move {
-                    let r = match tokio::task::spawn_blocking(move || {
-                        out_c.play_blocking(&samples, rate, &cancel_c)
-                    })
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => Err(anyhow::anyhow!("playback task join failed: {e}")),
-                    };
-                    notify_c.notify_one();
-                    r
-                }));
-                announcement_window.lock().unwrap().start_playback();
+                // Last sentence of the response already played → go idle.
+                if llm_done {
+                    try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
+                    llm_done = false;
+                }
             }
             Some(PipelineFrame::LLMResponseDone { .. }) => {
-                no_more_sentences = true;
-                if play_handle.is_none() {
+                llm_done = true;
+                // No sentence was playing (e.g. empty response) → idle now.
+                if last_utterance_id.is_none() {
                     try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
-                    no_more_sentences = false;
+                    llm_done = false;
                 }
             }
             Some(_) => continue,
@@ -260,42 +182,133 @@ pub async fn tts_task(
     }
 }
 
+/// Result of synthesising + playing one sentence.
+enum SentenceOutcome {
+    Completed,
+    /// Barge-in interrupted playback (the caller must run the barge-in path).
+    Cancelled,
+    Error(anyhow::Error),
+}
+
+/// Synthesise `sentence` and stream it to the speaker (or remote sink).
 #[allow(clippy::too_many_arguments)]
+async fn exec_sentence(
+    tts: &Arc<TtsEngine>,
+    audio_output: &Arc<AudioOutput>,
+    remote_tts_tx: &RemoteTtsTx,
+    events: &Arc<PipelineEvents>,
+    args: &TtsEngineStreamArgs<'_>,
+) -> SentenceOutcome {
+    let mut stream = match tts.synthesize_stream(args.sentence).await {
+        Ok(s) => s,
+        Err(e) => return SentenceOutcome::Error(e),
+    };
+
+    // A dedicated cancel subscription lets us abort inside this helper without
+    // stealing the main loop's receiver.
+    let mut cancel_rx = events.barge_in_tx.subscribe();
+
+    // Remote sink owns playback: accumulate chunks and send one packet.
+    let remote_active = remote_tts_tx.lock().await.clone();
+    if let Some(tx) = remote_active {
+        let mut all: Vec<f32> = Vec::new();
+        loop {
+            tokio::select! {
+                _ = cancel_rx.recv() => return SentenceOutcome::Cancelled,
+                chunk = stream.rx.recv() => match chunk {
+                    Some(chunk) => all.extend_from_slice(&chunk),
+                    None => break,
+                },
+            }
+        }
+        let n = all.len();
+        let packet = TtsAudioPacket {
+            samples: all,
+            sample_rate: args.sample_rate,
+        };
+        info!(
+            target: "remote",
+            "Routing TTS to remote client ({n} samples @ {} Hz)",
+            args.sample_rate
+        );
+        if tx.send(packet).await.is_err() {
+            tracing::warn!(target: "remote", "Remote TTS channel closed");
+        }
+        return SentenceOutcome::Completed;
+    }
+
+    if !args.has_audio_device {
+        // Headless: drain the stream so the producer task finishes cleanly.
+        while stream.rx.recv().await.is_some() {}
+        return SentenceOutcome::Completed;
+    }
+
+    let session = match audio_output.start_stream(stream.sample_rate, Arc::clone(args.cancel)) {
+        Ok(s) => s,
+        Err(e) => return SentenceOutcome::Error(e),
+    };
+
+    loop {
+        tokio::select! {
+            _ = cancel_rx.recv() => {
+                session.finish();
+                drop(stream);
+                return SentenceOutcome::Cancelled;
+            }
+            chunk = stream.rx.recv() => {
+                match chunk {
+                    Some(samples) => {
+                        if args.cancel.load(Ordering::Relaxed) {
+                            session.finish();
+                            drop(stream);
+                            return SentenceOutcome::Cancelled;
+                        }
+                        session.push(&samples);
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    session.finish();
+    session.wait();
+    SentenceOutcome::Completed
+}
+
+/// Bundle of args for [`exec_sentence`] (avoids a long parameter list).
+struct TtsEngineStreamArgs<'a> {
+    sentence: &'a str,
+    sample_rate: u32,
+    cancel: &'a Arc<AtomicBool>,
+    has_audio_device: bool,
+}
+
+/// Handle a barge-in: cancel playback, drain queues, reset per-turn state.
 async fn handle_barge_in(
     play_cancel: &Arc<AtomicBool>,
     pipeline_state_tx: &Arc<watch::Sender<PipelineState>>,
-    play_handle: &mut Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     sentences_rx: &mut mpsc::Receiver<PipelineFrame>,
     cancel_rx: &mut broadcast::Receiver<u64>,
     first_sentence: &mut bool,
-    no_more_sentences: &mut bool,
     tui_tx: &Option<TuiEventTx>,
     announcement_window: &Arc<Mutex<crate::pipeline::announcement_window::AnnouncementWindow>>,
 ) {
     // Single ownership of play_cancel in this task avoids cross-writer races.
     play_cancel.store(true, Ordering::SeqCst);
-
-    if let Some(handle) = play_handle.take() {
-        match handle.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => error!(target: "audio", "Playback error during barge-in: {}", e),
-            Err(e) => error!(target: "audio", "Playback task join failed during barge-in: {}", e),
-        }
-    }
     announcement_window.lock().unwrap().finish_playback();
 
     while sentences_rx.try_recv().is_ok() {}
     while cancel_rx.try_recv().is_ok() {}
 
     *first_sentence = true;
-    *no_more_sentences = false;
     play_cancel.store(false, Ordering::SeqCst);
 
     try_set_idle(pipeline_state_tx, tui_tx, announcement_window);
 }
 
 fn try_set_idle(
-    pipeline_state_tx: &watch::Sender<PipelineState>,
+    pipeline_state_tx: &Arc<watch::Sender<PipelineState>>,
     tui_tx: &Option<TuiEventTx>,
     announcement_window: &Arc<Mutex<crate::pipeline::announcement_window::AnnouncementWindow>>,
 ) {

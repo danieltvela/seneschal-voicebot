@@ -73,7 +73,16 @@ pub fn create_provider(
             }
         }
         other => {
-            bail!("Invalid STT_PROVIDER '{other}'. Supported values: whisper, parakeet, speech")
+            // Note: this is the *speech recognition* backend. `openai` is a TTS
+            // provider (TTS_PROVIDER), not STT — a common mix-up when the TTS
+            // backend is set to the OpenAI-compatible speech API.
+            bail!(
+                "Invalid STT_PROVIDER '{other}'. Supported values: \
+                 whisper (default, whisper.cpp + Silero VAD, no extra feature), \
+                 parakeet (needs --features parakeet + PARAKEET_MODEL_DIR), \
+                 speech (macOS SFSpeechRecognizer, needs --features speech). \
+                 Note: for TTS backends use TTS_PROVIDER (avspeech, kokoro, openai)."
+            )
         }
     }
 }
