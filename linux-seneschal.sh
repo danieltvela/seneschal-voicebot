@@ -75,8 +75,15 @@ export STT_TIMEOUT_MS=10000
 # TTS_PROVIDER=kokoro
 export TTS_PROVIDER=openai
 export OPENAI_TTS_URL=http://localhost:8025
-export OPENAI_TTS_VOICE=aiden
+# Voz clonada registrada en el checkpoint Base (issue #18): muestra de la voz
+# macOS "Jorge (Enhanced)" (ut.aiff -> ut.wav, 17 s). Sustituye a los presets
+# CustomVoice, que el checkpoint Base rechaza con task_type=CustomVoice.
+export OPENAI_TTS_VOICE=jorge-enhanced
 export OPENAI_TTS_LANGUAGE=auto
+# La primera síntesis de una voz recién registrada tarda ~60 s (extracción de
+# la referencia + compile); con warmup ese coste se paga al arrancar, y es
+# rápido (~1 s) cuando el contenedor ya tiene la referencia en caché.
+export OPENAI_TTS_WARMUP=1
 
 
 

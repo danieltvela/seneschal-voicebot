@@ -21,6 +21,21 @@ fn cfg(url: &str) -> OpenAiTtsConfig {
     }
 }
 
+/// Live-service config: the voice comes from `OPENAI_TTS_TEST_VOICE` so the
+/// same test works against a CustomVoice deployment (preset names) and a Base
+/// deployment (registered voice names). The timeout covers the first request
+/// per voice on Base, which costs ~60 s (reference extraction + compile).
+fn live_cfg(url: &str) -> OpenAiTtsConfig {
+    OpenAiTtsConfig {
+        base_url: url.to_string(),
+        voice: std::env::var("OPENAI_TTS_TEST_VOICE").unwrap_or_else(|_| "vivian".to_string()),
+        language: "auto".to_string(),
+        instructions: String::new(),
+        speed: 0.0,
+        timeout_ms: 180_000,
+    }
+}
+
 /// Build raw i16-LE PCM bytes.
 fn pcm(samples: &[i16]) -> Vec<u8> {
     samples.iter().flat_map(|s| s.to_le_bytes()).collect()
@@ -175,8 +190,11 @@ async fn empty_text_is_rejected() {
 //
 // Run against a real OpenAI-compatible service:
 //   OPENAI_TTS_TEST_URL=http://localhost:8025 \
+//   OPENAI_TTS_TEST_VOICE=jorge \
 //     cargo test -p seneschal-core --features openai-tts -- --ignored openai_live
 //
+// `OPENAI_TTS_TEST_VOICE` names the voice to synthesise with (default
+// `vivian`); a Base checkpoint deployment requires a registered voice.
 // `make test-openai` wraps this and skips when the service is unreachable.
 
 /// Live check: first audio chunk arrives quickly and carries 24 kHz PCM.
@@ -185,7 +203,7 @@ async fn empty_text_is_rejected() {
 async fn openai_live_first_chunk_latency_and_format() {
     let url = std::env::var("OPENAI_TTS_TEST_URL")
         .unwrap_or_else(|_| "http://localhost:8025".to_string());
-    let tts = OpenAiTts::new(cfg(&url)).unwrap();
+    let tts = OpenAiTts::new(live_cfg(&url)).unwrap();
 
     let start = std::time::Instant::now();
     let mut stream = tts

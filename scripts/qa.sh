@@ -182,7 +182,9 @@ stage_test_openai() {
         stage_skip "test-openai" "no OpenAI-compatible TTS service reachable on $url"
         return 0
     fi
-    if (cd "$PROJECT_ROOT" && OPENAI_TTS_TEST_URL="$url" $CARGO test -p seneschal-core --features openai-tts --quiet -- --ignored openai_live 2>&1 | tail -n 50); then
+    if (cd "$PROJECT_ROOT" && OPENAI_TTS_TEST_URL="$url" \
+        OPENAI_TTS_TEST_VOICE="${OPENAI_TTS_TEST_VOICE:-jorge}" \
+        $CARGO test -p seneschal-core --features openai-tts --quiet -- --ignored openai_live 2>&1 | tail -n 50); then
         stage_ok "test-openai"
     else
         stage_fail "test-openai" "real OpenAI-compatible TTS tests failed"
