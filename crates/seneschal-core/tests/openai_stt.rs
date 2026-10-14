@@ -97,6 +97,11 @@ async fn feed(provider: &mut Provider, tx: &mpsc::Sender<SpeechEvent>, probes: u
     for _ in 0..probes {
         let chunk = vec![0.1f32; PROBE];
         provider.process_audio(&chunk, tx).await.unwrap();
+        // Production feeds one 100 ms chunk per real 100 ms, so detached HTTP
+        // work finishes while the utterance is still open. Without this pause
+        // the whole utterance is consumed in a single poll and every live
+        // request is still in flight when the segment closes.
+        tokio::time::sleep(Duration::from_millis(2)).await;
     }
 }
 
@@ -148,10 +153,17 @@ async fn auto_language_is_omitted_and_request_shape_is_correct() {
 
     let events = drain(&mut rx);
     assert_eq!(starts(&events), 1, "expected SpeechStart, got {events:?}");
-    assert_eq!(
-        next_speech_end(&mut rx).await.as_deref(),
-        Some("Hola mundo")
-    );
+    // The detached final task may have completed before the drain (it runs
+    // while the feed loop yields): accept the event from either side.
+    let drained = events.iter().find_map(|e| match e {
+        SpeechEvent::SpeechEnd { quality, .. } => Some(quality.text.clone()),
+        _ => None,
+    });
+    let text = match drained {
+        Some(text) => Some(text),
+        None => next_speech_end(&mut rx).await,
+    };
+    assert_eq!(text.as_deref(), Some("Hola mundo"));
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
@@ -466,8 +478,62 @@ async fn live_prefix_requests_emit_partials_before_final() {
     );
 }
 
+/// P3 regression (production path): the pipeline calls `cancel_inflight()` from
+/// its `SpeechStart` handler — the barge-in of the segment that just opened.
+/// That call must not drop the live state, or the remote provider never sends
+/// prefix requests (observed in production: zero live POSTs, zero partials).
+#[tokio::test]
+async fn cancel_inflight_on_speechstart_keeps_live_transcription() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "hola"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut base = base_config();
+    base.live = LiveStreamConfig {
+        enabled: true,
+        interval_ms: 200,
+        window_ms: 15_000,
+    };
+    let mut probs = vec![0.9f32; 20];
+    probs.extend_from_slice(&[0.0; 5]);
+    let (detector, len) = scripted(&probs);
+    let mut p = OpenAiSttProvider::with_detector(detector, &base, cfg(&server.uri()))
+        .expect("provider construction");
+
+    let (tx, mut rx) = mpsc::channel(64);
+    // Feed up to the SpeechStart, then barge-in exactly like audio_events does.
+    feed(&mut p, &tx, 2).await;
+    assert_eq!(
+        starts(&drain(&mut rx)),
+        1,
+        "the segment must open before the barge-in"
+    );
+    p.cancel_inflight();
+
+    feed(&mut p, &tx, len - 2).await;
+
+    let mut partials = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(SpeechEvent::Speech(_))) => partials += 1,
+            Ok(Some(SpeechEvent::SpeechEnd { .. })) => break,
+            Ok(Some(_)) => continue,
+            _ => panic!("stream ended without SpeechEnd (partials={partials})"),
+        }
+    }
+    assert!(
+        partials >= 1,
+        "live transcription must survive the SpeechStart barge-in (P3)"
+    );
+}
+
 // ── Live service integration (ignored by default) ──────────────────────────────
-//
 // Run against a real OpenAI-compatible STT service:
 //   STT_TEST_URL=http://localhost:8024 \
 //     cargo test -p seneschal-core --features openai-stt -- --ignored stt_openai_live

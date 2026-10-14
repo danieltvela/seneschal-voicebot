@@ -279,6 +279,13 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
         for event in self.segmenter.feed(audio) {
             match event {
                 SegmenterEvent::SpeechStart { segment_seq } => {
+                    // A new segment supersedes the previous one: abort its live
+                    // prefix requests before attaching to the new one.
+                    if let Some(mut superseded) = self.live.take() {
+                        for p in superseded.pending.drain(..) {
+                            p.token.cancel();
+                        }
+                    }
                     self.live = Some(LiveRemote {
                         seq: segment_seq,
                         covered_upto: 0,
@@ -369,7 +376,13 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
         Ok(())
     }
 
-    /// Cancel the in-flight transcription request, if any (barge-in).
+    /// Cancel the in-flight *final* transcription request (barge-in).
+    ///
+    /// The live prefix state is deliberately kept: the pipeline calls this
+    /// from its `SpeechStart` handler, i.e. immediately after the segmenter
+    /// opened a new segment, so dropping `self.live` here would disable live
+    /// transcription (contract P3) for the utterance the user just started.
+    /// Superseded live requests are cancelled when the next segment opens.
     pub fn cancel_inflight(&mut self) {
         if let Some(token) = self.pending.take() {
             token.cancel();
@@ -377,11 +390,6 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
                 target: "stt",
                 "Cancelled in-flight remote transcription (barge-in)"
             );
-        }
-        if let Some(mut live) = self.live.take() {
-            for p in live.pending.drain(..) {
-                p.token.cancel();
-            }
         }
     }
 

@@ -3,14 +3,21 @@
 //! Whisper, Parakeet and the remote OpenAI-compatible provider (issue #17) all
 //! need the same thing: turn a stream of 16 kHz mono f32 chunks into
 //! `SpeechStart` / utterance-closed events using Silero VAD, with a
-//! consecutive-probe confirmation window, a silence timeout, a real-audio
-//! pre-roll so the recognizer never loses the onset, and a hard cap on
-//! segment length.
+//! consecutive-probe confirmation window, a silence timeout and a real-audio
+//! pre-roll so the recognizer never loses the onset.
+//!
+//! A segment is closed by VAD silence alone: once `silence_ms` of audio below
+//! the end threshold has accumulated and the post-roll grace has run out, the
+//! utterance is finalized. The silence is measured at the detector's window
+//! resolution (not per whole probe), so a pause shorter than `silence_ms`
+//! cannot be counted as the timeout. There is no time-based cut either, so an
+//! utterance stays one segment for as long as the user keeps speaking (contract
+//! P5).
 //!
 //! Contract properties locked by tests (see `doc/stt-contract.md`):
-//! P1 speech-start commit budget, P4 onset preservation via pre-roll, and the
-//! hysteresis behavior that keeps soft tails and mid-sentence dips inside one
-//! segment.
+//! P1 speech-start commit budget, P4 onset preservation via pre-roll, P5
+//! silence-only close, and the hysteresis behavior that keeps soft tails and
+//! mid-sentence dips inside one segment.
 //!
 //! Before this module each provider carried its own copy of that state machine.
 //! It now lives here once. The three consumers are configured to share the
@@ -18,9 +25,9 @@
 //!
 //! | Provider  | probe | pre-roll        | post-roll |
 //! |-----------|-------|-----------------|-----------|
-//! | whisper   | 100ms | 300ms real audio| 200ms     |
-//! | parakeet  | 100ms | 300ms real audio| 200ms     |
-//! | openai    | 100ms | 300ms real audio| 200ms     |
+//! | whisper   | 200ms | 300ms real audio| 200ms     |
+//! | parakeet  | 200ms | 300ms real audio| 200ms     |
+//! | openai    | 200ms | 300ms real audio| 200ms     |
 //!
 //! `speech_recognizer.rs` (macOS SFSpeechRecognizer) intentionally keeps its own
 //! logic: it streams audio to Apple and uses a different state machine with its
@@ -49,14 +56,43 @@ pub const DEFAULT_PROBE_MS: usize = 200;
 /// audio was discarded and the first word was mistranscribed.
 pub const DEFAULT_PREROLL_MS: usize = 300;
 
+/// Peak the VAD input is normalized to when the captured signal is quiet.
+pub const VAD_TARGET_PEAK: f32 = 0.5;
+
+/// Probes quieter than this are boosted before the VAD (see [`vad_input_gain`]).
+pub const VAD_NORMALIZE_BELOW: f32 = 0.1;
+
+/// Cap on that boost, so a near-silent probe stays quiet instead of amplifying
+/// the noise floor into speech. Silero is content-based above a sane level
+/// (measured: white noise boosted to a 0.5 peak still scores 0.02–0.11), so the
+/// cap can be wide enough to compensate a capture 50 dB below full scale.
+pub const VAD_MAX_GAIN: f32 = 500.0;
+
+/// Gain applied to one probe before the VAD model.
+///
+/// Conference speakerphones and some USB/ALSA capture paths deliver a signal
+/// 20–40 dB below full scale, and Silero's probabilities collapse on very quiet
+/// input — measured on this model: the same speech scores 0.6–0.9 at peak 0.1,
+/// 0.2–0.8 at peak 0.03 and 0.05–0.36 at peak 0.01. Speech then reads as
+/// silence, so the turn closes while the user is still talking (observed in
+/// production: 1 s silence credits plus live partials growing with new words).
+/// Probes below [`VAD_NORMALIZE_BELOW`] are scaled up to [`VAD_TARGET_PEAK`],
+/// capped at [`VAD_MAX_GAIN`] so genuine silence stays below the thresholds.
+pub fn vad_input_gain(peak: f32) -> f32 {
+    if peak >= VAD_NORMALIZE_BELOW || peak <= f32::EPSILON {
+        return 1.0;
+    }
+    (VAD_TARGET_PEAK / peak).min(VAD_MAX_GAIN)
+}
+
 /// Fallback pad of zeros when the pre-roll ring is empty (speech starts on the
 /// very first probe of the stream). Gives the recognizer acoustic context
 /// before an abrupt audio start.
 pub const PRE_SILENCE_MS: usize = 200;
 
-/// Hard cap on a single speech segment before forcing a cut.
-const MAX_SEGMENT_MS: usize = 20_000;
-pub(crate) const MAX_SEGMENT_SAMPLES: usize = SAMPLE_RATE * MAX_SEGMENT_MS / 1000;
+/// Preallocation for the segment buffer (4 s of speech). The buffer grows with
+/// the utterance; a segment has no length limit (contract P5).
+const SEGMENT_BUF_INITIAL_SAMPLES: usize = SAMPLE_RATE * 4;
 
 /// Size of the sliding decision window used to confirm a speech start:
 /// `vad_confirm_probes` speech decisions within the last 3 probes.
@@ -79,30 +115,78 @@ pub trait SpeechDetector: Send {
     /// Return the average speech probability for one `VAD_PROBE_SAMPLES` chunk
     /// (0.0 when the detector reports no speech at all).
     fn probe(&mut self, chunk: &[f32]) -> f32;
+
+    /// Per-window speech probabilities of the model for the last
+    /// [`SpeechDetector::probe`] call, in chronological order — the finest
+    /// resolution the detector exposes (7 windows per 200 ms probe on the
+    /// reference Silero model). The segmenter charges a probe only for the
+    /// audio that is really below the end threshold (contract P5). An empty
+    /// slice makes it treat the probe as a single all-or-nothing decision.
+    fn window_probs(&self) -> &[f32] {
+        &[]
+    }
+
+    /// Gain the detector applied to the last probe (1.0 = untouched). Detectors
+    /// that normalize a quiet capture surface it here so the logs report the
+    /// real input level.
+    fn input_gain(&self) -> f32 {
+        1.0
+    }
 }
 
 /// [`SpeechDetector`] backed by the Silero VAD model via `whisper-cpp-plus`.
 pub struct SileroDetector {
     vad: WhisperVadProcessor,
+    /// Per-window probabilities of the last probe.
+    window_probs: Vec<f32>,
+    /// Gain applied to the last probe (1.0 = untouched).
+    input_gain: f32,
+    /// Reused buffer for a boosted probe.
+    scratch: Vec<f32>,
 }
 
 impl SileroDetector {
     pub fn new(vad: WhisperVadProcessor) -> Self {
-        Self { vad }
+        Self {
+            vad,
+            window_probs: Vec::new(),
+            input_gain: 1.0,
+            scratch: Vec::new(),
+        }
     }
 }
 
 impl SpeechDetector for SileroDetector {
     fn probe(&mut self, chunk: &[f32]) -> f32 {
-        if !self.vad.detect_speech(chunk) {
-            return 0.0;
-        }
-        let probs = self.vad.get_probs();
-        if probs.is_empty() {
+        let peak = chunk.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let gain = vad_input_gain(peak);
+        self.input_gain = gain;
+        let samples: &[f32] = if gain == 1.0 {
+            chunk
+        } else {
+            self.scratch.clear();
+            self.scratch.extend(chunk.iter().map(|s| s * gain));
+            &self.scratch
+        };
+
+        // `detect_speech` runs the model and fills the probability array. The
+        // raw windows are used even when the model's own (0.5) threshold
+        // reports "no speech", so the configured start/end thresholds decide.
+        let _ = self.vad.detect_speech(samples);
+        self.window_probs = self.vad.get_probs();
+        if self.window_probs.is_empty() {
             0.0
         } else {
-            probs.iter().sum::<f32>() / probs.len() as f32
+            self.window_probs.iter().sum::<f32>() / self.window_probs.len() as f32
         }
+    }
+
+    fn window_probs(&self) -> &[f32] {
+        &self.window_probs
+    }
+
+    fn input_gain(&self) -> f32 {
+        self.input_gain
     }
 }
 
@@ -259,7 +343,7 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             current_segment_seq: 0,
             in_speech: false,
             in_post_roll: false,
-            speech_buf: Vec::with_capacity(MAX_SEGMENT_SAMPLES),
+            speech_buf: Vec::with_capacity(SEGMENT_BUF_INITIAL_SAMPLES),
             silence_samples: 0,
             post_roll_remaining: 0,
             pre_roll: Vec::with_capacity(SAMPLE_RATE * config.preroll_ms / 1000),
@@ -341,12 +425,12 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             if self.in_post_roll {
                 // ── Post-roll grace period ──
                 self.speech_buf.extend_from_slice(chunk);
-                let silence = avg_prob < self.vad_end_threshold;
-                if silence {
+                let silent_samples = self.probe_silence_samples(chunk.len(), avg_prob);
+                if silent_samples > 0 {
                     self.post_roll_remaining = self.post_roll_remaining.saturating_sub(chunk.len());
                     // Count post-roll silence too, so the finalized segment can
                     // report where the spoken part ends.
-                    self.silence_samples += chunk.len();
+                    self.silence_samples += silent_samples;
                     if self.post_roll_remaining == 0 {
                         self.finalize_segment(events);
                     }
@@ -358,20 +442,27 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             } else {
                 // ── Confirmed speech, accumulating ──
                 self.speech_buf.extend_from_slice(chunk);
-                let silence = avg_prob < self.vad_end_threshold;
+                let silent_samples = self.probe_silence_samples(chunk.len(), avg_prob);
 
-                if silence {
-                    self.silence_samples += chunk.len();
+                if silent_samples > 0 {
+                    self.silence_samples += silent_samples;
+                    tracing::debug!(
+                        target: "sttvad",
+                        "Silence in segment {}: +{:.0}ms (avg_prob={:.3}, input_gain=×{:.0}) → {:.0}ms of {:.0}ms",
+                        self.current_segment_seq,
+                        silent_samples as f32 * 1000.0 / SAMPLE_RATE as f32,
+                        avg_prob,
+                        self.detector.input_gain(),
+                        self.silence_samples as f32 * 1000.0 / SAMPLE_RATE as f32,
+                        self.silence_samples_threshold as f32 * 1000.0 / SAMPLE_RATE as f32,
+                    );
                 } else {
                     self.silence_samples = 0;
                 }
 
-                let max_segment_reached = self.speech_buf.len() >= MAX_SEGMENT_SAMPLES;
                 let silence_timeout = self.silence_samples >= self.silence_samples_threshold;
 
-                if max_segment_reached {
-                    self.finalize_segment(events);
-                } else if silence_timeout {
+                if silence_timeout {
                     if self.post_roll_samples == 0 {
                         self.finalize_segment(events);
                     } else {
@@ -429,13 +520,24 @@ impl<D: SpeechDetector> VadSegmenter<D> {
                     events.push(SegmenterEvent::SpeechStart {
                         segment_seq: self.current_segment_seq,
                     });
+                    let gain = self.detector.input_gain();
                     tracing::debug!(
                         target: "sttvad",
-                        "Speech confirmed after {} probes ({:.1}s, pre-roll {}ms)",
+                        "Speech confirmed after {} probes ({:.1}s, pre-roll {}ms, input_gain=×{:.0})",
                         self.vad_confirm_probes,
                         self.speech_buf.len() as f32 / SAMPLE_RATE as f32,
-                        preroll_len * 1000 / SAMPLE_RATE
+                        preroll_len * 1000 / SAMPLE_RATE,
+                        gain
                     );
+                    if gain > 2.0 {
+                        tracing::warn!(
+                            target: "sttvad",
+                            "Quiet microphone input: VAD probe peak is low, boosting ×{:.0} before the model. \
+                             Speech detection and the silence timeout become unreliable at this capture level; \
+                             raise the microphone gain (or the device's level) if the transcripts suffer.",
+                            gain
+                        );
+                    }
                 }
             } else {
                 // Silence during accumulation — keep accumulating audio (it's
@@ -499,6 +601,39 @@ impl<D: SpeechDetector> VadSegmenter<D> {
         if overflow > 0 {
             self.pre_roll.drain(..overflow);
         }
+    }
+
+    /// Samples of one probe that count as silence: the part of the probe whose
+    /// per-window probability is below the end threshold, at the detector's
+    /// finest resolution.
+    ///
+    /// Two conditions must hold, otherwise the probe breaks the silence run
+    /// (returns 0): the probe average is below the end threshold — a probe
+    /// carrying speech ends the run, so a fading tail or a soft syllable cannot
+    /// accumulate silence (contract P5 hysteresis) — and most of its windows
+    /// are below the threshold. When the detector exposes no windows the
+    /// average decides and the whole probe counts.
+    ///
+    /// Probe-granular counting charged a probe that merely brushed the
+    /// threshold a full `probe_ms`, so a pause well under `VAD_SILENCE_MS` could
+    /// be counted as the timeout (contract P5: the timeout is real
+    /// below-threshold audio, not probe arithmetic).
+    fn probe_silence_samples(&self, chunk_len: usize, avg_prob: f32) -> usize {
+        if avg_prob >= self.vad_end_threshold {
+            return 0;
+        }
+        let probs = self.detector.window_probs();
+        if probs.is_empty() {
+            return chunk_len;
+        }
+        let below = probs
+            .iter()
+            .filter(|&&p| p < self.vad_end_threshold)
+            .count();
+        if below * 2 < probs.len() {
+            return 0;
+        }
+        chunk_len * below / probs.len()
     }
 
     fn finalize_segment(&mut self, events: &mut Vec<SegmenterEvent>) {
@@ -598,6 +733,32 @@ mod tests {
             let p = self.probs.get(self.idx).copied().unwrap_or(0.0);
             self.idx += 1;
             p
+        }
+    }
+
+    /// Detector whose probes expose per-window probabilities, so the
+    /// window-resolved silence accounting can be exercised.
+    struct WindowDetector {
+        probes: Vec<Vec<f32>>,
+        idx: usize,
+    }
+
+    impl SpeechDetector for WindowDetector {
+        fn probe(&mut self, _chunk: &[f32]) -> f32 {
+            let windows = self.probes.get(self.idx).cloned().unwrap_or_default();
+            self.idx += 1;
+            if windows.is_empty() {
+                0.0
+            } else {
+                windows.iter().sum::<f32>() / windows.len() as f32
+            }
+        }
+
+        fn window_probs(&self) -> &[f32] {
+            self.probes
+                .get(self.idx.saturating_sub(1))
+                .map(|w| w.as_slice())
+                .unwrap_or(&[])
         }
     }
 
@@ -797,6 +958,81 @@ mod tests {
         );
     }
 
+    /// P5 accounting: silence is charged at the detector's window resolution,
+    /// so a probe that merely *contains* silence does not add a full
+    /// `probe_ms`. Five half-silent probes (2 500 counted samples, with a
+    /// 4 800-sample timeout) must keep the segment open; probe-granular
+    /// counting would have charged 8 000 samples and closed it.
+    #[test]
+    fn silence_is_measured_at_window_resolution() {
+        let speech = vec![0.9f32; 8];
+        // 8 windows per probe, half of them below the 0.45 end threshold, and
+        // an average (0.38) below it too.
+        let mixed = vec![0.01, 0.01, 0.02, 0.03, 0.60, 0.70, 0.80, 0.90];
+        let mut probes = vec![speech.clone(), speech];
+        probes.extend(std::iter::repeat_n(mixed, 6));
+        let mut seg = VadSegmenter::new(WindowDetector { probes, idx: 0 }, config(0, false))
+            .expect("segmenter");
+        let chunk = vec![0.1f32; seg.probe_samples()];
+
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            events.extend(seg.feed(&chunk)); // confirm
+        }
+        for _ in 0..5 {
+            events.extend(seg.feed(&chunk)); // 5 × 800 samples = 4 000 < 4 800
+        }
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, SegmenterEvent::SegmentReady { .. })),
+            "half-silent probes must not close the segment: {events:?}"
+        );
+        assert!(seg.in_speech());
+
+        events = seg.feed(&chunk); // 6th probe reaches 4 800 → timeout
+        assert!(
+            matches!(events.as_slice(), [SegmenterEvent::SegmentReady { .. }]),
+            "the silence timeout must close the segment at 4 800 counted samples, got {events:?}"
+        );
+    }
+
+    /// P5 hysteresis: a probe that is mostly speech-like breaks the run even
+    /// when its quiet edges push the average under the end threshold, so a
+    /// fading tail cannot add up to a timeout.
+    #[test]
+    fn mostly_speech_probe_breaks_the_silence_run() {
+        let speech = vec![0.9f32; 8];
+        // Average 0.39 (below 0.45) but only 3 of 8 windows are quiet.
+        let quiet_edges = vec![0.01, 0.30, 0.44, 0.46, 0.47, 0.48, 0.49, 0.50];
+        let mut probes = vec![speech.clone(), speech];
+        probes.extend(std::iter::repeat_n(quiet_edges, 6));
+        let mut seg = VadSegmenter::new(WindowDetector { probes, idx: 0 }, config(0, false))
+            .expect("segmenter");
+        let chunk = vec![0.1f32; seg.probe_samples()];
+
+        let mut events = Vec::new();
+        for _ in 0..8 {
+            events.extend(seg.feed(&chunk));
+        }
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, SegmenterEvent::SegmentReady { .. })),
+            "a fading tail must not close the segment: {events:?}"
+        );
+        assert!(seg.in_speech());
+    }
+
+    /// The probe-granular fallback still applies to detectors that expose no
+    /// window probabilities (contract P5 unchanged for scripted providers).
+    #[test]
+    fn silence_falls_back_to_probe_granularity() {
+        let mut seg = build(0, false);
+        let events = run(&mut seg, &[0.9, 0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(segments(&events).len(), 1, "got {events:?}");
+    }
+
     /// A single isolated burst (cough/click) must fail to confirm even with
     /// the gap-tolerant window.
     #[test]
@@ -871,23 +1107,34 @@ mod tests {
         assert!(!seg.closing_silence_started());
     }
 
-    /// The 20 s hard cap still forces a cut on endless speech.
+    /// P5 (contract): only VAD silence closes a segment. Continuous speech
+    /// longer than any previous fixed cap stays one open utterance until the
+    /// user stops speaking, and the finalized audio keeps every spoken probe.
     #[test]
-    fn max_segment_cap_cuts() {
+    fn continuous_speech_is_not_cut_before_silence() {
         let mut seg = build(0, false);
-        let mut probs = vec![0.9, 0.9];
-        probs.extend(std::iter::repeat_n(0.9, 250)); // > 20 s of speech
+        // 30 s of unbroken speech (100 ms test probes) — longer than the old
+        // 20 s hard cap.
+        let mut probs = vec![0.9f32; 300];
+        let events = run(&mut seg, &probs);
+        assert!(
+            segments(&events).is_empty(),
+            "speech must not be cut mid-utterance, got {events:?}"
+        );
+        assert!(seg.in_speech(), "the segment must still be open");
+
+        // The user stops: only then does the silence timeout close it.
+        probs.clear();
+        probs.extend_from_slice(&[0.0, 0.0, 0.0]);
         let events = run(&mut seg, &probs);
         let segs = segments(&events);
+        assert_eq!(segs.len(), 1, "got {events:?}");
         assert!(
-            !segs.is_empty(),
-            "hard cap must close the segment before 21 s"
-        );
-        assert!(
-            segs[0].len() >= SAMPLE_RATE * 19,
-            "first cut must land near the 20 s cap, got {:.2}s",
+            segs[0].len() >= SAMPLE_RATE * 30,
+            "the finalized segment must keep all 30 s of speech, got {:.2}s",
             segs[0].len() as f32 / SAMPLE_RATE as f32
         );
+        assert!(!seg.in_speech(), "the segment must be closed");
     }
 
     /// Segment ids are monotonic and every SegmentReady echoes the seq of the
@@ -958,5 +1205,21 @@ mod tests {
         };
         let seg = VadSegmenter::new(ScriptedDetector::new(&[]), cfg).unwrap();
         assert_eq!(seg.vad_end_threshold, 0.4);
+    }
+
+    /// Quiet captures are boosted to a sane peak so Silero keeps reporting
+    /// speech; loud ones and near-silence are left alone.
+    #[test]
+    fn vad_input_gain_normalizes_quiet_probes() {
+        let approx = |a: f32, b: f32| (a - b).abs() <= b * 1e-3;
+        assert_eq!(vad_input_gain(0.5), 1.0, "normal level is untouched");
+        assert_eq!(vad_input_gain(0.1), 1.0, "at the threshold, no boost");
+        assert!(approx(vad_input_gain(0.02), 25.0), "0.02 → 0.5");
+        assert!(approx(vad_input_gain(0.01), 50.0), "0.01 → 0.5");
+        assert!(
+            approx(vad_input_gain(0.001), VAD_MAX_GAIN),
+            "cap keeps silence quiet"
+        );
+        assert_eq!(vad_input_gain(0.0), 1.0, "digital silence is untouched");
     }
 }

@@ -190,8 +190,9 @@ pub struct WhisperSttProvider {
 language, and silence threshold in milliseconds. Defaults to 500ms silence.
 
 The VAD runs Silero on 200ms probe windows with a configurable probability threshold
-(0.5). A 300ms pre-roll buffer prevents clipping the first phoneme. 20s hard cap on
-any single speech segment.
+(0.5). A 300ms pre-roll buffer prevents clipping the first phoneme. A segment closes
+only when the VAD has heard `VAD_SILENCE_MS` of silence (plus the post-roll grace);
+there is no time-based cut, so a long utterance stays one segment until the user stops.
 
 `src/stt/whisper.rs` contains legacy `WhisperStt` based on whisper-rs. It is deprecated
 and maintained for backwards compatibility only.

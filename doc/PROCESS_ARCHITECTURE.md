@@ -90,7 +90,8 @@ Silero VAD on 200ms probe windows, and manages a speech/silence state machine.
 - On `SpeechEnd`: transcribes the accumulated buffer via Whisper and emits
   `SpeechEvent::SpeechEnd(transcript)`.
 - On `Silence`: resets internal buffers.
-- Hard cap of 20 seconds per speech segment before forcing a cut.
+- No length cap: continuous speech keeps the segment open until the VAD has
+  seen `VAD_SILENCE_MS` of silence.
 
 Events are forwarded to the pipeline through `mpsc::Sender<SpeechEvent>`.
 The main loop converts `SpeechEnd` into `PipelineFrame::TranscriptReady`.

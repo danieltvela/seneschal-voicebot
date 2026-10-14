@@ -22,6 +22,23 @@ The `speech` provider predates the shared machine and keeps its own; it must
 satisfy the same contract properties (locked by the audits). Unifying it onto
 `VadSegmenter` is tracked as follow-up work.
 
+## Input level
+
+The VAD input is normalized per probe: a probe whose peak is below 0.1 is
+scaled up to a 0.5 peak (capped at ×50). Silero's probabilities collapse on very
+quiet captures — measured on this model, the same speech scores 0.6–0.9 at peak
+≥ 0.1, 0.2–0.8 at peak 0.03 and 0.05–0.36 at peak 0.01 — so a quiet microphone
+(USB speakerphones deliver 20–40 dB below full scale, and their ALSA capture
+control is usually a switch rather than a gain) made clear speech read as
+silence: the turn closed mid-dictation while the remote ASR, which is robust to
+level, kept transcribing correctly. Quiet noise stays below 0.11 after the
+boost, so genuine silence still closes the segment. The applied gain is logged
+(`input_gain=×N`) together with a warning while the capture is quiet. *Locked by
+`vad_input_gain_normalizes_quiet_probes` (unit) and
+`stt_audit_quiet_capture_es` (real VAD: a fixture attenuated to peak
+0.03/0.01/0.003 stays a single utterance and closes only after the speech
+offset).*
+
 ## Properties
 
 ### P1 — Immediate start detection
@@ -55,8 +72,13 @@ partial re-decodes of the buffered speech every `STT_LIVE_INTERVAL_MS`
 emitted as `SpeechEvent::Speech`. The full-buffer-transcribed-only-after-close
 pattern is forbidden for all providers (the remote provider dispatches prefix
 POSTs). `STT_LIVE_ENABLED=0` restores the historical batch-at-close behavior.
-*Locked by `partial_decodes_follow_interval_and_stay_single_flight` (unit),
-`live_prefix_requests_emit_partials_before_final` (wiremock),
+The `SpeechStart` barge-in (the pipeline calls `cancel_inflight` from that
+handler) must abort only work belonging to the **superseded** utterance: the
+segment just opened keeps its live state, or the remote provider would never
+send prefix requests. *Locked by
+`partial_decodes_follow_interval_and_stay_single_flight` (unit),
+`live_prefix_requests_emit_partials_before_final` and
+`cancel_inflight_on_speechstart_keeps_live_transcription` (wiremock),
 `stt_audit_live_partial_es` (real model: ≥1 partial before SpeechEnd).*
 
 ### P4 — Complete final text, gated launch
@@ -76,13 +98,30 @@ the final text (partials are ungated). *Locked by `onset_preserved_via_preroll`,
 `stt_audit_onset_es` (first words present through a soft ramp),
 `stt_audit_tail_es` (last words present, fading tail).*
 
-### P5 — Prompt close
+### P5 — Prompt close, silence-only
 `SegmentReady` fires ≈ `VAD_SILENCE_MS` after the last speech, plus the
 post-roll grace (`VAD_POST_ROLL_MS`, one-shot "last-chance" live decode on
 entry); the segment audio extends at least `VAD_SILENCE_MS` past the last
-speech probe and never closes before the speech offset. *Locked by
-`segment_includes_trailing_silence`, `noise_between_thresholds_keeps_segment_open`
-(hysteresis), `max_segment_cap_cuts`, `stt_audit_tail_es`.*
+speech probe and never closes before the speech offset. A segment has **no
+length limit**: while the VAD keeps reporting speech the utterance stays open,
+however long it runs, so the transcript is never handed to the LLM before the
+user stops talking.
+
+The silence is measured at the detector's window resolution (7 windows per
+200 ms probe on Silero), not per whole probe: a probe counts only for the
+fraction of its windows below `VAD_END_THRESHOLD`, and a probe whose average is
+at or above that threshold ends the run — a fading tail or a soft syllable
+cannot add up to a timeout. A pause shorter than `VAD_SILENCE_MS` therefore
+cannot close the segment; Silero's own reaction lag adds ~100–200 ms on top of
+the configured value. *Locked by `segment_includes_trailing_silence`,
+`noise_between_thresholds_keeps_segment_open` (hysteresis),
+`continuous_speech_is_not_cut_before_silence`,
+`silence_is_measured_at_window_resolution`,
+`mostly_speech_probe_breaks_the_silence_run` (unit),
+`stt_audit_pause_tolerance_es` (real model: 600/800 ms pauses stay inside a
+1000 ms window), `stt_audit_tail_es` (fading tail stays one utterance) and
+`stt_audit_continuous_es`/`_en` (≥25 s of unbroken speech closes as one segment,
+only after the measured speech offset).*
 
 ### P6 — Provider uniformity
 whisper / parakeet / openai share one state machine and the same defaults

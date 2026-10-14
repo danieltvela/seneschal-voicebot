@@ -126,8 +126,10 @@ named test). Summary:
 ```
 Mic (CPAL, 100 ms chunks) → resample 16 kHz mono
   → SttProvider::process_audio
-      → VadSegmenter (Silero probes, 200 ms; confirm 2-of-3 with gap tolerance;
-        real-audio pre-roll 300 ms; post-roll grace 200 ms; 20 s hard cap)
+      → VadSegmenter (Silero probes, 200 ms; quiet captures normalized before
+        the model; confirm 2-of-3 with gap tolerance;
+        real-audio pre-roll 300 ms; post-roll grace 200 ms; closed by VAD
+        silence only — no time-based cut)
           → SpeechStart { segment_seq }   → barge-in (cancels LLM/TTS/STT)
           → Speech(partial)               → live re-decode every 1 s (P3)
           → SegmentReady { seq, audio, trailing_silence }

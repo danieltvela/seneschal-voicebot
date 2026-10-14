@@ -50,6 +50,138 @@ async fn vad_probe_calibration() {
             p
         );
     }
+
+    // Window resolution: the segmenter charges silence at this granularity, so
+    // the printout shows how much of each probe is really below 0.45.
+    let mut vad3 = load_vad(&model_paths().1, None).unwrap();
+    println!("[calib] -- window probs (200 ms probes) --");
+    for i in 0..25 {
+        let chunk = &audio[i * 3200..(i + 1) * 3200];
+        let _ = vad3.detect_speech(chunk);
+        let probs = vad3.get_probs();
+        let rounded: Vec<f32> = probs.iter().map(|p| (p * 100.0).round() / 100.0).collect();
+        let silent = probs.iter().filter(|&&p| p < 0.45).count();
+        println!(
+            "[calib] windows {i} ({:.2}s): n={} silent={silent} {:?}",
+            i as f32 * 0.2,
+            probs.len(),
+            rounded
+        );
+    }
+}
+
+/// Level robustness: a capture 30–40 dB below full scale (peak 0.01–0.03, what
+/// the reference USB speakerphone delivers, and what the ALSA mixer cannot
+/// raise — its capture control is a switch, not a gain) must still be detected
+/// as speech. Without the VAD input normalization Silero reports 0.01–0.4 for
+/// clear speech, so the silence timeout fired mid-utterance and the LLM
+/// answered while the user was still talking.
+#[tokio::test]
+#[ignore = "STT audit: real Silero VAD model (make test-stt)"]
+async fn stt_audit_quiet_capture_es() {
+    skip_if_no_models();
+    use seneschal_core::stt::segmenter::{
+        SegmenterConfig, SegmenterEvent, SileroDetector, VadSegmenter,
+    };
+
+    let audio = load_wav_f32(&ensure_fixture_cont_es().unwrap()).unwrap();
+    let offset = speech_offset(&audio, 0.02);
+    let src_peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+
+    for target_peak in [0.03f32, 0.01, 0.003] {
+        let gain = target_peak / src_peak;
+        let quiet: Vec<f32> = audio.iter().map(|s| s * gain).collect();
+        let cfg = SegmenterConfig {
+            silence_ms: 1000,
+            vad_start_threshold: 0.65,
+            vad_end_threshold: 0.45,
+            vad_confirm_probes: 2,
+            post_roll_ms: 200,
+            trim_leading_silence: false,
+            probe_ms: 200,
+            preroll_ms: 300,
+        };
+        let mut seg = VadSegmenter::new(
+            SileroDetector::new(
+                seneschal_core::stt::whisper::load_vad(&model_paths().1, None).unwrap(),
+            ),
+            cfg,
+        )
+        .expect("segmenter");
+
+        let mut fed = 0usize;
+        let mut starts = 0usize;
+        let mut closes: Vec<(f32, f32)> = Vec::new();
+        let mut drain = |seg: &mut VadSegmenter<SileroDetector>,
+                         fed: &mut usize,
+                         starts: &mut usize,
+                         closes: &mut Vec<(f32, f32)>,
+                         chunk: &[f32]| {
+            *fed += chunk.len();
+            for ev in seg.feed(chunk) {
+                match ev {
+                    SegmenterEvent::SpeechStart { .. } => *starts += 1,
+                    SegmenterEvent::SegmentReady { audio, .. } => {
+                        closes.push((*fed as f32 / SR as f32, audio.len() as f32 / SR as f32))
+                    }
+                }
+            }
+        };
+        for chunk in quiet.chunks(1600) {
+            drain(&mut seg, &mut fed, &mut starts, &mut closes, chunk);
+        }
+        let silence = vec![0.0f32; SR * 4];
+        for chunk in silence.chunks(1600) {
+            drain(&mut seg, &mut fed, &mut starts, &mut closes, chunk);
+        }
+
+        println!(
+            "[quiet peak={target_peak}] starts={starts} closes={closes:?} (speech offset {offset:.2}s)"
+        );
+        assert_eq!(starts, 1, "peak {target_peak}: exactly one utterance");
+        assert_eq!(
+            closes.len(),
+            1,
+            "peak {target_peak}: quiet speech must not be cut mid-utterance, got {closes:?}"
+        );
+        let (close_t, len) = closes[0];
+        assert!(
+            close_t >= offset,
+            "peak {target_peak}: segment closed at {close_t:.2}s, before the speech ended ({offset:.2}s)"
+        );
+        assert!(
+            len >= offset * 0.9,
+            "peak {target_peak}: the segment must keep the utterance ({len:.2}s of {offset:.2}s)"
+        );
+    }
+}
+
+/// P5 (accounting): a pause shorter than the configured silence window must not
+/// close the segment. Silence is charged at the detector's window resolution,
+/// so pauses of 600 ms and 800 ms stay inside one utterance with
+/// `silence_ms = 1000` (probe-granular counting charged a whole 200 ms probe per
+/// boundary probe and closed the turn).
+#[tokio::test]
+#[ignore = "STT audit: real Whisper + VAD models (make test-stt)"]
+async fn stt_audit_pause_tolerance_es() {
+    skip_if_no_models();
+    let audio = load_wav_f32(&ensure_fixture_pauses_es().unwrap()).unwrap();
+    let mut stt = new_provider_with_silence_ms("es", 1000);
+    let rep = run_stream(&mut stt, &audio).await;
+    rep.print("pauses_es");
+
+    assert_eq!(
+        rep.segments.len(),
+        1,
+        "600/800 ms pauses must stay inside a 1000 ms silence window, got {} segments",
+        rep.segments.len()
+    );
+    let text = &rep.segments[0].quality.text;
+    check_tokens("pauses_es", text, &["tolerancia", "segunda", "tercera"]);
+    assert!(
+        has_token(text, "tolerancia") && has_token(text, "tercera"),
+        "the transcript must cover all three phrases, got {text:?}"
+    );
 }
 
 /// P1 + P4: a soft (ramped) onset must still (a) commit within the budget and

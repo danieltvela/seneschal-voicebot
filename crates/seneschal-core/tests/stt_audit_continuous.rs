@@ -1,10 +1,11 @@
 //! STT audit — Scenario 1: continuous speech (no pauses) + latency baseline.
 //!
-//! Feeds >20 s of continuous synthetic speech through the real
+//! Feeds >25 s of continuous synthetic speech through the real
 //! `WhisperSttProvider::process_audio` pipeline (Silero VAD probes +
 //! batched Whisper inference on SpeechEnd) and measures:
 //!   * when SpeechStart fires (VAD commit latency vs audio onset),
-//!   * whether the 20 s hard segment cap (`MAX_SEGMENT_MS`) cuts the stream,
+//!   * that no segment closes while the user is still speaking (contract P5:
+//!     the VAD silence timeout closes an utterance, never a fixed-length cut),
 //!   * when SpeechEnd + transcript arrives after speech offset (VAD silence
 //!     tail + inference time),
 //!   * RTF = inference wall time / segment audio duration.
@@ -16,10 +17,11 @@ mod stt_common;
 
 use stt_common::*;
 
-/// Continuous Spanish speech (~27 s, max internal pause 240 ms) must be cut
-/// by the 20 s hard cap into >= 2 segments, and every segment must yield a
-/// non-empty transcript. This test FAILs if the VAD fails to close segments
-/// or if inference produces no text.
+/// Continuous Spanish speech (~27 s, max internal pause 240 ms) longer than
+/// any fixed segment limit must stay ONE segment: the VAD silence timeout
+/// closes it only after the user stops speaking, and the transcript covers the
+/// whole utterance. This test FAILs if a segment closes while speech is still
+/// being fed, or if the transcript is incomplete.
 #[tokio::test]
 #[ignore = "STT audit: real Whisper + VAD models (make test-stt)"]
 async fn stt_audit_continuous_es() {
@@ -38,43 +40,36 @@ async fn stt_audit_continuous_es() {
     let rep = run_stream(&mut stt, &audio).await;
     rep.print("cont_es");
 
-    // Expect at least 2 segments: continuous speech must hit the 20 s cap.
-    assert!(
-        rep.segments.len() >= 2,
-        "expected >=2 segments (20s hard cap on continuous speech), got {}",
+    // One utterance: continuous speech must not be cut mid-stream, however
+    // long it runs (this is where the old 20 s hard cap used to fire).
+    assert_eq!(
+        rep.segments.len(),
+        1,
+        "continuous speech must stay one segment until the VAD sees silence, got {}",
         rep.segments.len()
     );
-    // First segment must close near the 20 s cap (start ~0 + cap).
-    let first_close = rep.segments[0].t_close_stream;
+    let seg = &rep.segments[0];
     assert!(
-        (19.0..=21.5).contains(&first_close),
-        "first segment should close near the 20s cap, closed at {:.2}s",
-        first_close
+        seg.t_close_stream >= offset,
+        "segment closed at {:.2}s, before the speech ended at {:.2}s — a \
+         segment must never be finalized while the user is still speaking",
+        seg.t_close_stream,
+        offset
     );
-    // Every segment must produce a non-empty transcript.
-    for (i, seg) in rep.segments.iter().enumerate() {
-        assert!(
-            !seg.quality.text.trim().is_empty(),
-            "segment {} produced an empty transcript",
-            i
-        );
-    }
-    // No segment may be shorter than 5 s here: the cap is 20 s and the
-    // stream is continuous, so only the tail fragment can be short.
-    let short_head = rep
-        .segments
-        .iter()
-        .take(rep.segments.len() - 1)
-        .filter(|s| s.t_close_stream - s.t_start_stream < 5.0)
-        .count();
-    assert_eq!(
-        short_head, 0,
-        "VAD unexpectedly cut continuous speech into tiny segments"
+    // Every spoken word must be transcribed, first and last included.
+    assert!(
+        !seg.quality.text.trim().is_empty(),
+        "segment produced an empty transcript"
+    );
+    assert!(
+        has_token(&seg.quality.text, "auditando") && has_token(&seg.quality.text, "concretas"),
+        "transcript must cover the whole utterance, got {:?}",
+        seg.quality.text
     );
     // VAD commit latency: SpeechStart must fire within 600 ms of audio onset
     // (100 ms probes + 2-probe confirm ≈ 200-300 ms; Silero's own reaction
     // lag on synthetic audio adds a little).
-    let start_lat = rep.segments[0].t_start_stream - onset;
+    let start_lat = seg.t_start_stream - onset;
     assert!(
         start_lat < 0.6,
         "SpeechStart fired {:.2}s after onset (budget 600 ms)",
@@ -82,20 +77,11 @@ async fn stt_audit_continuous_es() {
     );
     println!(
         "[cont_es] VAD commit latency = {:.3}s (start@{:.3}s vs onset@{:.3}s)",
-        start_lat, rep.segments[0].t_start_stream, onset
+        start_lat, seg.t_start_stream, onset
     );
-    // SpeechEnd latency after real speech offset: silence tail (<=~0.6s)
-    // + inference of the final segment.
-    let last = rep.segments.last().unwrap();
-    let end_after_offset = last.t_close_stream + 4.0 - offset; // flush silence is part of the stream
     println!(
         "[cont_es] final segment: close@{:.3}s, speech offset@{:.3}s, infer={}ms",
-        last.t_close_stream, offset, last.infer_wall_ms
-    );
-    assert!(
-        end_after_offset < 15.0,
-        "SpeechEnd + transcript arrived unrealistically late ({:.1}s)",
-        end_after_offset
+        seg.t_close_stream, offset, seg.infer_wall_ms
     );
 }
 
@@ -106,28 +92,40 @@ async fn stt_audit_continuous_en() {
     skip_if_no_models();
     let audio = load_wav_f32(&ensure_fixture_cont_en().unwrap()).unwrap();
     let onset = speech_onset(&audio, 0.02);
+    let offset = speech_offset(&audio, 0.02);
     println!(
-        "[cont_en] fixture: {}s, onset={:.3}s",
+        "[cont_en] fixture: {}s, onset={:.3}s, offset={:.3}s",
         audio.len() as f32 / SR as f32,
-        onset
+        onset,
+        offset
     );
     let mut stt = new_provider("en");
     let rep = run_stream(&mut stt, &audio).await;
     rep.print("cont_en");
 
-    assert!(
-        rep.segments.len() >= 2,
-        "expected >=2 segments from continuous English speech, got {}",
+    assert_eq!(
+        rep.segments.len(),
+        1,
+        "continuous English speech must stay one segment until the VAD sees silence, got {}",
         rep.segments.len()
     );
-    for (i, seg) in rep.segments.iter().enumerate() {
-        assert!(
-            !seg.quality.text.trim().is_empty(),
-            "segment {} empty transcript",
-            i
-        );
-    }
-    let start_lat = rep.segments[0].t_start_stream - onset;
+    let seg = &rep.segments[0];
+    assert!(
+        seg.t_close_stream >= offset,
+        "segment closed at {:.2}s, before the speech ended at {:.2}s",
+        seg.t_close_stream,
+        offset
+    );
+    assert!(
+        !seg.quality.text.trim().is_empty(),
+        "segment produced an empty transcript"
+    );
+    assert!(
+        has_token(&seg.quality.text, "auditing") && has_token(&seg.quality.text, "pipeline"),
+        "transcript must cover the whole utterance, got {:?}",
+        seg.quality.text
+    );
+    let start_lat = seg.t_start_stream - onset;
     assert!(
         start_lat < 1.5,
         "SpeechStart fired {:.2}s after onset",

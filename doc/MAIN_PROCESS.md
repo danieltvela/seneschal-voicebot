@@ -126,7 +126,7 @@ WhisperSTTVAD internals (`src/stt/mod.rs`):
 - Silero VAD runs on 200ms probe windows (threshold 0.5)
 - 300ms pre-roll retained before VAD onset
 - whisper-cpp-plus (`WhisperContext`) transcribes on SpeechEnd
-- Max segment: 20s before forced cut
+- Segment closes on `VAD_SILENCE_MS` of silence (no length cap)
 - Config: `WHISPER_MODEL`, `VAD_MODEL`, `SENECHAL_LANGUAGE`, `VAD_SILENCE_MS`
 
 ---

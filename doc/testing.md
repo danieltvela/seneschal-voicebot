@@ -27,7 +27,8 @@ and three test layers that lock it:
    gating).
 3. **L3 — real-model audits** (`make test-stt`, `#[ignore]`, espeak fixtures
    under `target/stt-fixtures/`): `tests/stt_audit_contract.rs` (onset/tail/
-   live), `stt_audit_continuous.rs` (20 s cap, commit budget), plus
+   live), `stt_audit_continuous.rs` (silence-only close on >25 s of unbroken
+   speech, commit budget), plus
    code-switching and terms audits. Provider selection via
    `STT_AUDIT_PROVIDER=whisper|openai`. The audits assert wall-clock RTF and
    commit budgets measured against real decode work, so run them serialized

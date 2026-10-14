@@ -185,15 +185,19 @@ pub fn skip_if_no_remote_service() {
 
 #[cfg(feature = "openai-stt")]
 fn new_openai_provider(language: &str) -> Box<dyn SttProvider> {
+    new_openai_provider_with(default_config(language))
+}
+
+#[cfg(feature = "openai-stt")]
+fn new_openai_provider_with(base: WhisperSTTVADConfig) -> Box<dyn SttProvider> {
     skip_if_no_models();
     skip_if_no_remote_service();
 
-    let base = default_config(language);
     let cfg = OpenAiSttConfig {
         base_url: remote_stt_url(),
         api_key: std::env::var("STT_API_KEY").unwrap_or_default(),
         model: std::env::var("STT_MODEL").unwrap_or_else(|_| "qwen3-asr".to_string()),
-        language: language.to_string(),
+        language: base.language.clone(),
         timeout_ms: std::env::var("STT_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -205,6 +209,21 @@ fn new_openai_provider(language: &str) -> Box<dyn SttProvider> {
 #[cfg(not(feature = "openai-stt"))]
 fn new_openai_provider(_language: &str) -> Box<dyn SttProvider> {
     panic!("STT_AUDIT_PROVIDER=openai requires --features openai-stt");
+}
+
+/// Provider for the backend selected by `STT_AUDIT_PROVIDER` with a caller
+/// supplied silence window (audits that measure a non-default `silence_ms`).
+pub fn new_provider_with_silence_ms(language: &str, silence_ms: u32) -> Box<dyn SttProvider> {
+    let mut base = default_config(language);
+    base.silence_ms = silence_ms;
+    match provider_kind().as_str() {
+        "whisper" => Box::new(
+            WhisperSttProvider::new(base).expect("failed to build the whisper STT provider"),
+        ),
+        #[cfg(feature = "openai-stt")]
+        "openai" => new_openai_provider_with(base),
+        other => panic!("STT_AUDIT_PROVIDER={other} is not supported by this audit"),
+    }
 }
 
 // -- Fixture generation ------------------------------------------------------
@@ -230,7 +249,7 @@ fn run(cmd: &str, args: &[&str], _out: &Path) -> Result<()> {
 }
 
 /// espeak-ng -> wav -> ffmpeg -> 16 kHz mono s16le.
-fn synth(text: &str, voice: &str, rate: u32, out: &Path) -> Result<()> {
+pub fn synth(text: &str, voice: &str, rate: u32, out: &Path) -> Result<()> {
     let tmp_raw = out.with_extension("raw.wav");
     run(
         "espeak-ng",
@@ -268,7 +287,7 @@ fn synth(text: &str, voice: &str, rate: u32, out: &Path) -> Result<()> {
 }
 
 /// Concatenate 16 kHz mono s16le WAVs with `silence_ms` of silence between.
-fn concat_wavs(inputs: &[PathBuf], silence_ms: u32, out: &Path) -> Result<()> {
+pub fn concat_wavs(inputs: &[PathBuf], silence_ms: u32, out: &Path) -> Result<()> {
     let data = inputs
         .iter()
         .map(|p| read_wav_pcm16(p))
@@ -678,7 +697,8 @@ pub fn check_tokens(label: &str, text: &str, tokens: &[&str]) -> usize {
 
 // -- Audio fixtures used across the audit -------------------------------------
 
-/// Continuous Spanish speech, no pauses, ~25-30 s (must exceed the 20 s cap).
+/// Continuous Spanish speech, no pauses, ~27 s (longer than any fixed segment
+/// limit, so it must stay a single VAD segment until the silence timeout).
 pub const CONT_ES: &str = "Estoy auditando el sistema de reconocimiento de voz porque la latencia \
 resulta alta cuando hablo en continuo y además las transcripciones de los nombres de modelos de \
 inteligencia artificial salen mal, por lo que voy a medir el tiempo de detección del habla, la \
@@ -723,6 +743,27 @@ pub const TERM_TOKENS: &[&str] = &[
 pub fn ensure_fixture_cont_es() -> Result<PathBuf> {
     fixture("cont_es.wav", || {
         synth(CONT_ES, "es", 165, &fixture_dir().join("cont_es.wav"))
+    })
+}
+
+/// Three phrases separated by two short pauses (600 ms and 800 ms), both below
+/// the 1000 ms silence timeout the pause-tolerance audit configures.
+pub const PAUSE_A: &str = "Vamos a comprobar la tolerancia a las pausas del detector de voz";
+pub const PAUSE_B: &str = "esta segunda frase llega despues de una pausa breve";
+pub const PAUSE_C: &str = "y la tercera cierra la prueba de las pausas";
+
+pub fn ensure_fixture_pauses_es() -> Result<PathBuf> {
+    fixture("pauses_es.wav", || {
+        let dir = fixture_dir();
+        let a = dir.join("pauses_a.wav");
+        let b = dir.join("pauses_b.wav");
+        let c = dir.join("pauses_c.wav");
+        let ab = dir.join("pauses_ab.wav");
+        synth(PAUSE_A, "es", 165, &a)?;
+        synth(PAUSE_B, "es", 165, &b)?;
+        synth(PAUSE_C, "es", 165, &c)?;
+        concat_wavs(&[a, b], 600, &ab)?;
+        concat_wavs(&[ab, c], 800, &dir.join("pauses_es.wav"))
     })
 }
 

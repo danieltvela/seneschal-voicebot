@@ -143,8 +143,10 @@ pub struct Config {
     /// the short-utterance finalize; coughs/noise are rejected by NoSpeechGate.
     /// Default: 2 (≈400–600 ms at the default 200 ms probe).
     pub vad_confirm_probes: usize,
-    /// VAD probe window in ms (VAD_PROBE_MS). Default: 100 (contract P1: the
-    /// start commit lands within `vad_confirm_probes × probe` of the onset).
+    /// VAD probe window in ms (VAD_PROBE_MS). Default: 200 — 100 ms windows
+    /// make Silero's probability oscillate (calibration audit
+    /// `vad_probe_calibration`), which breaks the confirm chain and closes
+    /// segments on mid-sentence dips.
     #[serde(default = "default_vad_probe_ms")]
     pub vad_probe_ms: usize,
     /// Real-audio pre-roll prepended to confirmed segments, in ms
@@ -639,10 +641,11 @@ fn default_stt_language() -> String {
     "auto".to_string()
 }
 
-/// Contract P1: with 100 ms probes the start commit lands ~200 ms after the
-/// onset (2 confirm probes).
+/// Calibrated probe window (contract P1/P5): 200 ms probes keep Silero's
+/// probabilities stable enough for the confirm chain and the silence timeout;
+/// 100 ms windows oscillate mid-speech on this model.
 fn default_vad_probe_ms() -> usize {
-    100
+    200
 }
 
 /// Contract P4: real-audio pre-roll so the utterance onset is never lost.

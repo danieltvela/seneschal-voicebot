@@ -40,7 +40,7 @@ Module: `src/audio/`, `src/stt/`
 
 ### WhisperSTTVAD (`src/stt/mod.rs` + `src/stt/whisper.rs`)
 - [x] Unified STT+VAD via whisper-cpp-plus + Silero VAD
-- [x] 200ms probe windows, 300ms pre-roll, 20s hard cap
+- [x] 200ms probe windows, 300ms pre-roll, silence-only segment close (no length cap)
 - [x] `SpeechEvent::SpeechStart`, `SpeechEvent::SpeechEnd(transcript)`, `SpeechEvent::Silence`
 - [x] Configurable silence threshold (`VAD_SILENCE_MS`), language (`SENECHAL_LANGUAGE`)
 - [ ] **Transcription timeout**: if whisper-cpp-plus takes > 5 seconds for a segment, abort and log; fall back to empty transcript
