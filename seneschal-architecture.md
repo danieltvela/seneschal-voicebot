@@ -379,8 +379,9 @@ let (barge_in_tx, _) = broadcast::channel::<u64>(4); // payload = utterance_id
 let (pause_tx, _)    = broadcast::channel::<()>(2);
 ```
 
-- `barge_in_tx`: only the VAD actor sends this on `SpeechStart`. All pipeline actors
-  cancel their current work immediately.
+- `barge_in_tx`: only the VAD actor sends this on `SpeechStart` (acoustic onset).
+  The LLM, sentence and TTS actors cancel their current work immediately; STT/VAD
+  keep running, and a dispatched deep-worker task is never cancelled.
 - `pause_tx`: only `consolidation_task` sends this. Only `llm_task` listens.
 
 This makes barge-in and consolidation pause independent — they can no longer

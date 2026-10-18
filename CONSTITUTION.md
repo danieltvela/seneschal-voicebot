@@ -95,11 +95,16 @@ is still generating sentence N+1.
 **Rationale:** First word heard by the user in under 1 second.
 
 ### 7. Barge-In
-When the user speaks while the pipeline is active:
-1. VAD detects `SpeechStart` → sends cancellation via `broadcast barge_in_tx`.
-2. llm_task aborts the HTTP stream.
+When the user starts to speak (acoustic onset) while the pipeline is active:
+1. VAD detects `SpeechStart` (first speech probe) → sends cancellation via `broadcast barge_in_tx`.
+2. llm_task aborts the in-flight HTTP request (including one just sent) and any running foreground tool call.
 3. sen_task drains buffered tokens.
-4. tts_task stops audio playback via `play_cancel: AtomicBool`.
+4. tts_task stops audio playback via `play_cancel: AtomicBool` and drops the queued sentences.
+5. The filler "processing" tone is stopped.
+
+**STT/VAD are never cancelled** — the new utterance keeps accumulating and
+transcribing. A **deep-worker task already dispatched keeps running** (only a
+launch still pending at barge-in is skipped).
 
 Cancellation is **immediate and idempotent** — all actors must handle receiving
 a cancel signal even after they have already completed.

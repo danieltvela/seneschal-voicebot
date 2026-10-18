@@ -159,13 +159,24 @@ impl WhisperSttProvider {
         audio: &[f32],
         tx: &mpsc::Sender<SpeechEvent>,
     ) -> Result<()> {
-        self.streamer.poll(&tx).await;
+        self.streamer.poll(tx).await;
 
         for event in self.segmenter.feed(audio) {
             match event {
                 SegmenterEvent::SpeechStart { segment_seq } => {
                     self.streamer.on_segment_start(segment_seq);
                     let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
+                }
+                SegmenterEvent::SpeechAborted { segment_seq } => {
+                    // The onset (barge-in already fired) never confirmed: emit
+                    // an empty end so the pipeline drops it and leaves
+                    // LISTENING. NoSpeechGate rejects the empty transcription.
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq,
+                            quality: TranscriptionQuality::empty(),
+                        })
+                        .await;
                 }
                 SegmenterEvent::SegmentReady {
                     segment_seq,

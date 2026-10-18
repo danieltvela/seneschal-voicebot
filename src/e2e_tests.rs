@@ -408,11 +408,13 @@ impl E2eHarness {
 
     // ── Barge-in helpers ──────────────────────────────────────────────────
 
-    /// Signal barge-in: all tasks will cancel current work.
+    /// Signal barge-in: all tasks cancel current work.
+    ///
+    /// Deliberately does NOT touch `play_cancel`: in production only
+    /// `tts_task::handle_barge_in` sets it, so writing it here would mask a
+    /// failure to honor the barge-in (the regression this suite guards).
     pub fn barge_in(&self) {
         self.events.barge_in_tx.send(0).ok();
-        self.play_cancel
-            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Check that DB contains both User and Assistant messages for this session.
@@ -441,12 +443,10 @@ impl E2eHarness {
     pub async fn run_with_delayed_barge_in(&self, transcript: &str, delay_ms: u64) {
         self._reset_for_run();
         let (h_llm, h_sen, h_tts) = self._spawn_and_send(transcript).await;
-        let cancel = Arc::clone(&self.play_cancel);
         let events = Arc::clone(&self.events);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             events.barge_in_tx.send(0).ok();
-            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
     }
@@ -456,7 +456,6 @@ impl E2eHarness {
         self._reset_for_run();
         let (h_llm, h_sen, h_tts) = self._spawn_and_send(transcript).await;
         let mut state_rx = self.state_rx.clone();
-        let cancel = Arc::clone(&self.play_cancel);
         let events = Arc::clone(&self.events);
         tokio::spawn(async move {
             loop {
@@ -474,7 +473,6 @@ impl E2eHarness {
                         };
                         if desc == target {
                             events.barge_in_tx.send(0).ok();
-                            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                             break;
                         }
                     }
@@ -1392,6 +1390,89 @@ async fn e2e_deep_worker_delegation_flow() {
         !dumped.contains("Plan: 1)"),
         "worker internals leaked into the voice history"
     );
+}
+
+/// Barge-in must NOT cancel a running deep-worker task: the delegation is
+/// dispatched and detached by design, so the worker keeps working across the
+/// interruption (only a *pending* launch is cancelled). The engine never
+/// subscribes to the barge-in broadcast.
+#[tokio::test]
+#[ignore]
+async fn e2e_deep_worker_survives_barge_in() {
+    use std::time::Duration;
+
+    let worker_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(make_sse("Plan: trabajar"))
+                .append_header("content-type", "text/event-stream"),
+        )
+        .mount(&worker_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(make_sse("Resultado final del worker."))
+                .append_header("content-type", "text/event-stream"),
+        )
+        .mount(&worker_server)
+        .await;
+
+    let worker_provider: Arc<dyn LlmProvider> = Arc::new(OpenAiLlmProvider::new(
+        &worker_server.uri(),
+        "worker-model",
+        512,
+        0.0,
+    ));
+    let (proactive_tx, _proactive_rx) = mpsc::channel::<ProactiveEvent>(16);
+    let params = seneschal_worker::DeepWorkerParams {
+        system_prompt: "worker".to_string(),
+        thinking: true,
+        thinking_mode: seneschal_worker::ThinkingMode::External,
+        max_iterations: 3,
+        timeout: Duration::from_secs(10),
+    };
+    let worker_tools = Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
+    let (engine, _event_rx) = seneschal_worker::DeepWorkerEngine::new(
+        worker_provider,
+        Arc::clone(&worker_tools),
+        proactive_tx,
+        params,
+    );
+
+    let h = E2eHarness::new().await;
+    h.tools
+        .lock()
+        .unwrap()
+        .register(seneschal_worker::RunDeepTaskTool::new(engine));
+    h.mock_llm_response_raw(make_sse_tool_call(
+        "run_deep_task",
+        &serde_json::json!({ "task": "una tarea larga de fondo" }),
+    ))
+    .await;
+
+    let (h_llm, h_sen, h_tts) = h.spawn_pipeline("delega esta tarea").await;
+    // Let the delegation dispatch to the detached worker.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    h.barge_in();
+    E2eHarness::_wait_for_tasks(h_llm, h_sen, h_tts).await;
+
+    // The detached worker must still complete its two-step flow.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let hits = worker_server.received_requests().await.unwrap().len();
+        if hits >= 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "deep worker was cancelled by barge-in (hits={hits})"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 /// `enabled=false` regression (issue #236, criterion 1): without the tool

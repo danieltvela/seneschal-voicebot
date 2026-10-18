@@ -9,6 +9,20 @@ pub struct TranscriptionQuality {
     pub compression_ratio: f32,
 }
 
+impl TranscriptionQuality {
+    /// Empty transcription used to close an aborted onset (a `SpeechStart`
+    /// whose segment never confirmed). The `NoSpeechGate` rejects it, so it
+    /// never reaches the LLM — it only resets the pipeline state.
+    pub fn empty() -> Self {
+        Self {
+            text: String::new(),
+            no_speech_prob: 0.0,
+            avg_logprob: 0.0,
+            compression_ratio: 0.0,
+        }
+    }
+}
+
 /// Post-STT quality gate that rejects non-speech transcriptions.
 #[derive(Debug, Clone)]
 pub struct NoSpeechGate {

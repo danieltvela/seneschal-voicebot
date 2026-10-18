@@ -28,7 +28,7 @@ Canonical values (compiled-in fallback defaults, `seneschal.pro.toml:14-30`; all
 | `VAD_SILENCE_MS` | 300 | Below-threshold audio required to close the segment |
 | `VAD_START_THRESHOLD` | 0.65 | Speech probability to open a segment |
 | `VAD_END_THRESHOLD` | 0.45 | Probability floor that keeps a segment open (hysteresis) |
-| `VAD_CONFIRM_PROBES` | 2 | Speech decisions within a sliding N+1 window before commit |
+| `VAD_CONFIRM_PROBES` | 2 | Speech decisions within a sliding N+1 window before the segment **confirms** (live decoding + close). `SpeechStart`/barge-in fire earlier, on the first speech probe. |
 | `VAD_PROBE_MS` | 200 | Probe window (100 ms makes Silero probabilities oscillate) |
 | `VAD_PREROLL_MS` | 300 | Real-audio pre-roll prepended to confirmed segments |
 | `VAD_POST_ROLL_MS` | 200 | Grace after the timeout in which resumed speech cancels the closure |

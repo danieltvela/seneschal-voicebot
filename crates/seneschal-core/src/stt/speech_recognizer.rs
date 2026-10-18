@@ -50,7 +50,7 @@ struct SharedState {
 enum VadAction {
     /// Silence or accumulating — feed nothing to Apple.
     None,
-    /// First speech-like probe — emit SpeechStart immediately (fast barge-in).
+    /// First speech-like probe — `SpeechStart` fires here (fast barge-in).
     AccumStarted,
     /// Speech confirmed — create task and feed the accumulated buffer.
     Start(Vec<f32>),
@@ -62,6 +62,9 @@ enum VadAction {
     End,
     /// Accumulation timed out without confirmation — emit empty SpeechEnd to reset state.
     Discard,
+    /// Unconfirmed single blip — emit empty SpeechEnd so the pipeline (whose
+    /// barge-in already fired at the onset) leaves LISTENING.
+    Abort,
 }
 
 /// Decision from pure accumulator bookkeeping (no VAD model required).
@@ -371,7 +374,7 @@ impl SpeechRecognizerSttProvider {
                 AccumDecision::Abort => {
                     debug!(target: "stt", "Accum abort (noise blip)");
                     self.reset_accum();
-                    VadAction::None
+                    VadAction::Abort
                 }
                 AccumDecision::Confirmed => {
                     let buf = self.take_utterance_audio();
@@ -759,11 +762,12 @@ impl SttProvider for SpeechRecognizerSttProvider {
             match self.process_probe(&chunk) {
                 VadAction::None => {}
                 VadAction::AccumStarted => {
-                    // First speech-like probe only starts accumulation. SpeechStart is
-                    // deferred until Confirm (Start) or short-utterance finalize
-                    // (StartShort) so a single noisy 100ms probe does not flip the
-                    // TUI to LISTENING or fire barge-in.
-                    debug!(target: "stt", "VAD onset (accumulating, SpeechStart deferred)");
+                    // Fire SpeechStart at the acoustic onset so the pipeline
+                    // (barge-in / LISTENING) reacts as early as possible. A
+                    // lone blip is later closed by `VadAction::Abort`, whose
+                    // empty SpeechEnd resets the pipeline.
+                    self.emit_speech_start_if_needed(tx).await;
+                    debug!(target: "stt", "VAD onset — SpeechStart fired");
                 }
                 VadAction::Start(buf) => {
                     self.start_recognition(buf, false, tx).await?;
@@ -798,17 +802,27 @@ impl SttProvider for SpeechRecognizerSttProvider {
                         let mut st = self.state.lock().await;
                         st.speech_start_sent = false;
                     }
-                    let quality = TranscriptionQuality {
-                        text: String::new(),
-                        no_speech_prob: 0.0,
-                        avg_logprob: 0.0,
-                        compression_ratio: 0.0,
-                    };
+                    let quality = TranscriptionQuality::empty();
                     debug!(target: "stt", "SpeechEnd (accum discard, empty)");
                     let _ = tx
                         .send(SpeechEvent::SpeechEnd {
                             segment_seq: self.segment_seq,
                             quality,
+                        })
+                        .await;
+                }
+                VadAction::Abort => {
+                    // A lone blip whose onset already fired SpeechStart: close
+                    // it with an empty end so the pipeline leaves LISTENING.
+                    {
+                        let mut st = self.state.lock().await;
+                        st.speech_start_sent = false;
+                    }
+                    debug!(target: "stt", "SpeechEnd (accum abort, empty)");
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq: self.segment_seq,
+                            quality: TranscriptionQuality::empty(),
                         })
                         .await;
                 }

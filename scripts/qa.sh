@@ -96,8 +96,8 @@ stage_lint() {
 }
 
 stage_test() {
-    banner "Stage: test  (cargo test, default features)"
-    if (cd "$PROJECT_ROOT" && $CARGO test --quiet 2>&1 | tail -n 50); then
+    banner "Stage: test  (cargo test --workspace, default features)"
+    if (cd "$PROJECT_ROOT" && $CARGO test --workspace --quiet 2>&1 | tail -n 50); then
         stage_ok "test"
     else
         stage_fail "test" "unit tests failed"

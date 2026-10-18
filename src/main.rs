@@ -290,8 +290,10 @@ async fn async_main() -> Result<()> {
     let l1_saturation_notified: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // ── Pipeline events (barge-in broadcast + LLM post-finished notify) ──────
-    // Created early: the deep worker engine (issue #236) subscribes to the
-    // barge-in broadcast below, before the pipeline tasks are spawned.
+    // Created here so every pipeline task subscribes to the same broadcast.
+    // The deep-worker engine deliberately does NOT subscribe: a dispatched
+    // delegation is detached and must survive barge-in (only a launch still
+    // pending at barge-in is skipped, in `llm_task`).
     let events = Arc::new(PipelineEvents::new());
 
     // ── Tools ─────────────────────────────────────────────────────────────────
@@ -2626,7 +2628,6 @@ async fn async_main() -> Result<()> {
                             last_cleared_commit: &mut last_cleared_commit,
                             speech_buffer: &mut speech_buffer,
                             speech_buffer_start_offset: &mut speech_buffer_start_offset,
-                            stt_provider: &mut *stt_provider,
                             source_sample_rate,
                             config: &config,
                             events: Arc::clone(&events),
@@ -2641,6 +2642,7 @@ async fn async_main() -> Result<()> {
                             no_speech_gate: no_speech_gate.clone(),
                             transcript_tx: transcript_tx.clone(),
                             identity_analyzer: identity_analyzer.clone(),
+                            filler_controller: Some(Arc::clone(&filler_controller)),
     #[cfg(feature = "tui")]
                             tui_tx: tui_tx.clone(),
                         };

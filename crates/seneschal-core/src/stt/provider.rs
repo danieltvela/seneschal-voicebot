@@ -25,13 +25,6 @@ pub trait SttProvider: Send {
         Ok(())
     }
 
-    /// Abort any in-flight transcription request (barge-in / pipeline cancel).
-    ///
-    /// Local backends are synchronous and accept the no-op default; remote
-    /// backends (issue #17) cancel the pending HTTP request so no bandwidth is
-    /// wasted on a superseded utterance.
-    fn cancel_inflight(&mut self) {}
-
     /// Number of remote transcriptions currently in flight.
     ///
     /// Synchronous/local backends return 0 (their work happens inside

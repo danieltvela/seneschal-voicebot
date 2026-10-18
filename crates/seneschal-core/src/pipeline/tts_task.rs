@@ -55,30 +55,24 @@ pub async fn tts_task(
     let mut last_utterance_id: Option<u64> = None;
 
     loop {
-        // Drain queue first for low latency; block only when empty.
-        let next = match sentences_rx.try_recv() {
-            Ok(frame) => Some(frame),
-            Err(mpsc::error::TryRecvError::Empty) => {
-                tokio::select! {
-                    frame = sentences_rx.recv() => frame,
-                    _ = cancel_rx.recv() => {
-                        handle_barge_in(
-                            &play_cancel,
-                            &pipeline_state_tx,
-                            &mut sentences_rx,
-                            &mut cancel_rx,
-                            &mut first_sentence,
-                            &tui_tx,
-                            &announcement_window,
-                        ).await;
-                        continue;
-                    }
-                }
+        // Barge-in is polled on every iteration — including while sentences are
+        // queued — so a barge-in stops playback and drops the whole remaining
+        // queue immediately, never after the response has drained.
+        let next = tokio::select! {
+            biased;
+            _ = cancel_rx.recv() => {
+                handle_barge_in(
+                    &play_cancel,
+                    &pipeline_state_tx,
+                    &mut sentences_rx,
+                    &mut cancel_rx,
+                    &mut first_sentence,
+                    &tui_tx,
+                    &announcement_window,
+                ).await;
+                continue;
             }
-            Err(mpsc::error::TryRecvError::Disconnected) => {
-                try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
-                break;
-            }
+            frame = sentences_rx.recv() => frame,
         };
 
         match next {
@@ -175,7 +169,11 @@ pub async fn tts_task(
                 }
             }
             Some(_) => continue,
-            None => break,
+            None => {
+                // Channel closed — settle the FSM before exiting.
+                try_set_idle(&pipeline_state_tx, &tui_tx, &announcement_window);
+                break;
+            }
         }
     }
 }
@@ -197,14 +195,28 @@ async fn exec_sentence(
     events: &Arc<PipelineEvents>,
     args: &TtsEngineStreamArgs<'_>,
 ) -> SentenceOutcome {
-    let mut stream = match tts.synthesize_stream(args.sentence).await {
-        Ok(s) => s,
-        Err(e) => return SentenceOutcome::Error(e),
+    // Subscribe *before* synthesis so a barge-in that lands while the model is
+    // synthesizing is never lost (the subscription must exist when the
+    // broadcast is sent). Synchronous backends cannot be preempted mid-synth,
+    // so a cancel that arrives during synthesis is drained right below, before
+    // any audio is played.
+    let mut cancel_rx = events.barge_in_tx.subscribe();
+
+    let synth = tts.synthesize_stream(args.sentence);
+    tokio::pin!(synth);
+    let mut stream = tokio::select! {
+        biased;
+        _ = cancel_rx.recv() => return SentenceOutcome::Cancelled,
+        r = &mut synth => match r {
+            Ok(s) => s,
+            Err(e) => return SentenceOutcome::Error(e),
+        },
     };
 
-    // A dedicated cancel subscription lets us abort inside this helper without
-    // stealing the main loop's receiver.
-    let mut cancel_rx = events.barge_in_tx.subscribe();
+    // A cancel that arrived while a non-streaming backend was synthesizing.
+    if cancel_rx.try_recv().is_ok() {
+        return SentenceOutcome::Cancelled;
+    }
 
     // Remote sink owns playback: accumulate chunks and send one packet.
     let remote_active = remote_tts_tx.lock().await.clone();
@@ -572,5 +584,77 @@ mod state_tests {
                 );
             }
         }
+    }
+
+    /// Regression: barge-in must cancel immediately, even mid-synthesis and
+    /// with sentences still queued. Before the fix the loop drained the queue
+    /// via `try_recv` without ever polling `cancel_rx`, so a whole response
+    /// played before the barge-in was honored. Held synthesis forces the
+    /// cancel to land while the task is inside `exec_sentence`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn barge_in_cancels_during_synthesis_and_drops_queue() {
+        let events = Arc::new(PipelineEvents::new());
+        let (state_tx, mut state_rx) = watch::channel(PipelineState::Thinking { utterance_id: 1 });
+        let (tx, rx) = mpsc::channel::<PipelineFrame>(16);
+        let (mock, captured, gate) = MockTts::gated();
+        let announcement_window = Arc::new(Mutex::new(AnnouncementWindow::new()));
+
+        let handle = tokio::spawn(tts_task(
+            Arc::clone(&events),
+            Arc::new(state_tx),
+            Arc::new(Mutex::new(None)),
+            rx,
+            Arc::new(TtsEngine::Mock(mock)),
+            Arc::new(AudioOutput::null()),
+            22050,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            true,
+            None,
+            Arc::clone(&announcement_window),
+            Arc::new(tokio::sync::Mutex::new(None)),
+        ));
+
+        send(
+            &tx,
+            PipelineFrame::SentenceReady {
+                utterance_id: 1,
+                sentence: "Primera.".into(),
+            },
+        )
+        .await;
+        send(
+            &tx,
+            PipelineFrame::SentenceReady {
+                utterance_id: 1,
+                sentence: "Segunda.".into(),
+            },
+        )
+        .await;
+
+        // Wait until the first sentence entered (held) synthesis.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while captured.lock().unwrap().is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "synthesis never started"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // Barge-in while synthesis is held, then release it.
+        events.barge_in_tx.send(0).ok();
+        gate.store(true, Ordering::SeqCst);
+
+        wait_for_wire(&mut state_rx, "idle").await;
+        // Give the (dropped) second sentence a chance to (wrongly) surface.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            *captured.lock().unwrap(),
+            vec!["Primera.".to_string()],
+            "the queued second sentence must be dropped on barge-in"
+        );
+
+        handle.abort();
     }
 }

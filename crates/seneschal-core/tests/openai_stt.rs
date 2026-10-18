@@ -308,37 +308,6 @@ async fn unreachable_service_does_not_hang_or_emit() {
 }
 
 #[tokio::test]
-async fn cancel_inflight_aborts_pending_request() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/audio/transcriptions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"text": "stale"}))
-                .set_delay(Duration::from_millis(800)),
-        )
-        .mount(&server)
-        .await;
-
-    let (mut p, n) = provider(ONE_UTTERANCE, cfg(&server.uri()));
-    let (tx, mut rx) = mpsc::channel(16);
-    feed(&mut p, &tx, n).await;
-    assert_eq!(starts(&drain(&mut rx)), 1);
-
-    // Barge-in: the pipeline aborts the in-flight transcription.
-    p.cancel_inflight();
-
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
-    let leftover = drain(&mut rx);
-    assert!(
-        !leftover
-            .iter()
-            .any(|e| matches!(e, SpeechEvent::SpeechEnd { .. })),
-        "cancelled request produced events: {leftover:?}"
-    );
-}
-
-#[tokio::test]
 async fn a_delayed_request_completes_when_not_cancelled() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -478,12 +447,11 @@ async fn live_prefix_requests_emit_partials_before_final() {
     );
 }
 
-/// P3 regression (production path): the pipeline calls `cancel_inflight()` from
-/// its `SpeechStart` handler — the barge-in of the segment that just opened.
-/// That call must not drop the live state, or the remote provider never sends
-/// prefix requests (observed in production: zero live POSTs, zero partials).
+/// P3 (production path): `SpeechStart` fires at the acoustic onset and opens
+/// the live state; the pipeline never cancels STT on barge-in, so the segment
+/// the user just started keeps sending prefix requests and emitting partials.
 #[tokio::test]
-async fn cancel_inflight_on_speechstart_keeps_live_transcription() {
+async fn speechstart_keeps_live_transcription() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/audio/transcriptions"))
@@ -506,14 +474,13 @@ async fn cancel_inflight_on_speechstart_keeps_live_transcription() {
         .expect("provider construction");
 
     let (tx, mut rx) = mpsc::channel(64);
-    // Feed up to the SpeechStart, then barge-in exactly like audio_events does.
+    // Feed up to the SpeechStart (fired at the onset probe).
     feed(&mut p, &tx, 2).await;
     assert_eq!(
         starts(&drain(&mut rx)),
         1,
-        "the segment must open before the barge-in"
+        "the segment must open at the onset probe"
     );
-    p.cancel_inflight();
 
     feed(&mut p, &tx, len - 2).await;
 
@@ -529,7 +496,7 @@ async fn cancel_inflight_on_speechstart_keeps_live_transcription() {
     }
     assert!(
         partials >= 1,
-        "live transcription must survive the SpeechStart barge-in (P3)"
+        "live transcription must run during the segment (P3)"
     );
 }
 

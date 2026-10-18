@@ -240,8 +240,17 @@ impl SegmenterConfig {
 /// after a barge-in (contract P2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SegmenterEvent {
-    /// VAD committed to a speech segment (drives barge-in / LISTENING).
+    /// First speech-like probe of an utterance (acoustic onset). Fires
+    /// immediately — before confirmation — so barge-in / LISTENING start at
+    /// the earliest reliable moment (contract P1/P2). The segment id is
+    /// reserved here and reused by the matching `SegmentReady` /
+    /// `SpeechAborted`.
     SpeechStart { segment_seq: u64 },
+    /// The onset never confirmed: a cough/click blip, or the accumulation
+    /// guard tripped. The utterance opened with `SpeechStart` (and already
+    /// fired barge-in) but produced no segment. Consumers must drop it and
+    /// reset — no transcript may reach the LLM.
+    SpeechAborted { segment_seq: u64 },
     /// A finalized utterance ready to be transcribed. `trailing_silence` is
     /// the length (samples) of the silence tail at the end of `audio`; the
     /// spoken part ends at `audio.len() - trailing_silence`.
@@ -291,6 +300,10 @@ pub struct VadSegmenter<D: SpeechDetector> {
     accumulating: bool,
     accum_buf: Vec<f32>,
     accum_samples_total: usize,
+    /// Below-end-threshold samples accumulated since the last above-threshold
+    /// probe while waiting for confirmation. When it reaches the silence
+    /// threshold the unconfirmed onset is aborted (short-utterance fallback).
+    accum_silence_samples: usize,
 
     /// One-shot flag: the silence timeout opened the post-roll grace (the
     /// utterance is probably over). The provider consumes it to fire the
@@ -350,6 +363,7 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             accumulating: false,
             accum_buf: Vec::new(),
             accum_samples_total: 0,
+            accum_silence_samples: 0,
             decision_window: [false; CONFIRM_WINDOW],
             decision_ring_fill: 0,
             closing_trigger: false,
@@ -357,11 +371,11 @@ impl<D: SpeechDetector> VadSegmenter<D> {
         })
     }
 
-    /// Stream-time budget of the start commit: the confirmation window can
-    /// take up to CONFIRM_WINDOW probes (2-of-3 with one gap), in ms. Locked
-    /// by the P1 audit.
+    /// Stream-time budget of start detection: `SpeechStart` fires on the
+    /// first above-threshold probe, so the worst case is one probe window.
+    /// Locked by the P1 audit.
     pub fn commit_budget_ms(&self) -> usize {
-        self.probe_samples * CONFIRM_WINDOW * 1000 / SAMPLE_RATE
+        self.probe_samples * 1000 / SAMPLE_RATE
     }
 
     /// True while a confirmed segment is open.
@@ -479,92 +493,108 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             self.accum_buf.extend_from_slice(chunk);
             self.accum_samples_total += chunk.len();
 
-            // Guard against unbounded accumulation (e.g. very short utterance
-            // that never reaches the confirmation threshold).
+            // Guard against unbounded accumulation (e.g. alternating
+            // speech/noise that never reaches the confirmation threshold).
             if self.accum_samples_total >= self.max_accum_samples {
                 tracing::debug!(
                     target: "sttvad",
-                    "Accumulation timeout after {:.1}s, discarding",
+                    "Accumulation timeout after {:.1}s, aborting onset",
                     self.accum_samples_total as f32 / SAMPLE_RATE as f32
                 );
-                self.accumulating = false;
-                self.decision_ring_fill = 0;
-                self.accum_samples_total = 0;
-                self.accum_buf.clear();
-            }
+                self.abort_accumulation(events);
+            } else {
+                let is_speech = avg_prob >= self.vad_start_threshold;
 
-            let is_speech = avg_prob >= self.vad_start_threshold;
+                if is_speech {
+                    self.accum_silence_samples = 0;
+                    self.push_decision(true);
 
-            if is_speech {
-                self.push_decision(true);
-
-                if self.confirm_reached() {
-                    // CONFIRMED: transition to speech state. The real-audio
-                    // pre-roll (probes that never crossed the start threshold)
-                    // is prepended so the utterance onset is never lost (P4);
-                    // fall back to a zero pad when the ring is empty (speech
-                    // started on the very first probe of the stream).
-                    self.in_speech = true;
-                    self.accumulating = false;
-                    self.current_segment_seq = self.next_segment_seq;
-                    self.next_segment_seq += 1;
-                    self.speech_buf.clear();
-                    let preroll_len = self.pre_roll.len();
-                    if preroll_len == 0 {
-                        let pad = SAMPLE_RATE * PRE_SILENCE_MS / 1000;
-                        self.speech_buf.extend(std::iter::repeat_n(0.0f32, pad));
-                    } else {
-                        self.speech_buf.extend(self.pre_roll.drain(..));
-                    }
-                    self.speech_buf.append(&mut self.accum_buf);
-                    events.push(SegmenterEvent::SpeechStart {
-                        segment_seq: self.current_segment_seq,
-                    });
-                    let gain = self.detector.input_gain();
-                    tracing::debug!(
-                        target: "sttvad",
-                        "Speech confirmed after {} probes ({:.1}s, pre-roll {}ms, input_gain=×{:.0})",
-                        self.vad_confirm_probes,
-                        self.speech_buf.len() as f32 / SAMPLE_RATE as f32,
-                        preroll_len * 1000 / SAMPLE_RATE,
-                        gain
-                    );
-                    if gain > 2.0 {
-                        tracing::warn!(
+                    if self.confirm_reached() {
+                        // CONFIRMED: transition to speech state. `SpeechStart`
+                        // already fired at the onset probe; the real-audio
+                        // pre-roll (probes that never crossed the start
+                        // threshold) is prepended so the utterance onset is
+                        // never lost (P4); fall back to a zero pad when the
+                        // ring is empty (speech started on the very first
+                        // probe of the stream).
+                        self.in_speech = true;
+                        self.accumulating = false;
+                        self.speech_buf.clear();
+                        let preroll_len = self.pre_roll.len();
+                        if preroll_len == 0 {
+                            let pad = SAMPLE_RATE * PRE_SILENCE_MS / 1000;
+                            self.speech_buf.extend(std::iter::repeat_n(0.0f32, pad));
+                        } else {
+                            self.speech_buf.append(&mut self.pre_roll);
+                        }
+                        self.speech_buf.append(&mut self.accum_buf);
+                        let gain = self.detector.input_gain();
+                        tracing::debug!(
                             target: "sttvad",
-                            "Quiet microphone input: VAD probe peak is low, boosting ×{:.0} before the model. \
-                             Speech detection and the silence timeout become unreliable at this capture level; \
-                             raise the microphone gain (or the device's level) if the transcripts suffer.",
+                            "Speech confirmed after {} probes ({:.1}s, pre-roll {}ms, input_gain=×{:.0})",
+                            self.vad_confirm_probes,
+                            self.speech_buf.len() as f32 / SAMPLE_RATE as f32,
+                            preroll_len * 1000 / SAMPLE_RATE,
                             gain
                         );
+                        if gain > 2.0 {
+                            tracing::warn!(
+                                target: "sttvad",
+                                "Quiet microphone input: VAD probe peak is low, boosting ×{:.0} before the model. \
+                                 Speech detection and the silence timeout become unreliable at this capture level; \
+                                 raise the microphone gain (or the device's level) if the transcripts suffer.",
+                                gain
+                            );
+                        }
+                    }
+                } else {
+                    // Silence during accumulation — keep accumulating audio
+                    // (it's part of the continuous stream); the sliding
+                    // decision window tolerates one inter-word gap.
+                    self.push_decision(false);
+                    self.accum_silence_samples += self.probe_silence_samples(chunk.len(), avg_prob);
+                    tracing::debug!(
+                        target: "sttvad",
+                        "Accumulation probe below threshold (avg_prob={:.3})",
+                        avg_prob
+                    );
+                    // Short-utterance fallback: an onset that never confirms
+                    // and then falls quiet is a blip (cough/click). Abort it
+                    // so the pipeline leaves LISTENING and produces no
+                    // transcript.
+                    if self.accum_silence_samples >= self.silence_samples_threshold {
+                        tracing::debug!(
+                            target: "sttvad",
+                            "Unconfirmed onset aborted after {:.0}ms of silence",
+                            self.accum_silence_samples as f32 * 1000.0 / SAMPLE_RATE as f32
+                        );
+                        self.abort_accumulation(events);
                     }
                 }
-            } else {
-                // Silence during accumulation — keep accumulating audio (it's
-                // part of the continuous stream); the sliding decision window
-                // tolerates one inter-word gap.
-                self.push_decision(false);
-                tracing::debug!(
-                    target: "sttvad",
-                    "Accumulation probe below threshold (avg_prob={:.3})",
-                    avg_prob
-                );
             }
         } else {
             // ── Silence: keep the real-audio pre-roll ring up to date, then
             // start accumulating if speech detected. The probe that starts
             // accumulation must NOT enter the ring: it is already the first
-            // entry of accum_buf.
+            // entry of accum_buf. `SpeechStart` fires here, at the acoustic
+            // onset, before confirmation, so barge-in / LISTENING start as
+            // early as possible.
             let is_speech = avg_prob >= self.vad_start_threshold;
 
             if is_speech {
                 self.accumulating = true;
+                self.current_segment_seq = self.next_segment_seq;
+                self.next_segment_seq += 1;
                 self.decision_window = [false; CONFIRM_WINDOW];
                 self.decision_ring_fill = 1;
                 self.decision_window[CONFIRM_WINDOW - 1] = true;
                 self.accum_samples_total = chunk.len();
+                self.accum_silence_samples = 0;
                 self.accum_buf.clear();
                 self.accum_buf.extend_from_slice(chunk);
+                events.push(SegmenterEvent::SpeechStart {
+                    segment_seq: self.current_segment_seq,
+                });
                 tracing::debug!(
                     target: "sttvad",
                     "Start accumulating (probe 1/{}), avg_prob={:.3}, pre-roll {:.0}ms",
@@ -668,6 +698,21 @@ impl<D: SpeechDetector> VadSegmenter<D> {
             trailing_silence: trailing,
             audio: segment,
         });
+    }
+
+    /// Abort an onset that never confirmed: emit the paired `SpeechAborted`
+    /// (the `SpeechStart` already fired at the onset probe, and with it the
+    /// pipeline barge-in) so the consumer drops it and leaves LISTENING, then
+    /// reset the accumulator.
+    fn abort_accumulation(&mut self, events: &mut Vec<SegmenterEvent>) {
+        let seq = self.current_segment_seq;
+        self.accumulating = false;
+        self.decision_ring_fill = 0;
+        self.decision_window = [false; CONFIRM_WINDOW];
+        self.accum_samples_total = 0;
+        self.accum_silence_samples = 0;
+        self.accum_buf.clear();
+        events.push(SegmenterEvent::SpeechAborted { segment_seq: seq });
     }
 }
 
@@ -807,6 +852,13 @@ mod tests {
             .collect()
     }
 
+    fn aborts(events: &[SegmenterEvent]) -> usize {
+        events
+            .iter()
+            .filter(|e| matches!(e, SegmenterEvent::SpeechAborted { .. }))
+            .count()
+    }
+
     #[test]
     fn silence_emits_nothing() {
         let mut seg = build(0, false);
@@ -815,11 +867,14 @@ mod tests {
     }
 
     #[test]
-    fn single_probe_does_not_confirm() {
-        // Default confirm_probes=2: one speech probe then silence must not start.
+    fn single_probe_fires_onset_then_aborts() {
+        // Onset fires SpeechStart immediately; a lone blip followed by a full
+        // silence window aborts it (no segment, paired SpeechAborted).
         let mut seg = build(0, false);
-        let events = run(&mut seg, &[0.9, 0.0, 0.0]);
-        assert_eq!(starts(&events), 0, "got {events:?}");
+        // 3 silent probes = 300 ms silence threshold at 100 ms probes.
+        let events = run(&mut seg, &[0.9, 0.0, 0.0, 0.0]);
+        assert_eq!(starts(&events), 1, "onset must fire at the first probe");
+        assert_eq!(aborts(&events), 1, "unconfirmed onset must abort");
         assert!(segments(&events).is_empty());
     }
 
@@ -914,15 +969,17 @@ mod tests {
     }
 
     #[test]
-    fn accumulation_guard_discards() {
-        // A single speech blip followed by more than the 10 s accumulation
-        // budget never confirms and never emits events.
+    fn accumulation_guard_aborts() {
+        // Alternating below-start / above-end noise (0.5: neither speech nor
+        // silence) never confirms and never builds a silence run, so it hits
+        // the 10 s accumulation guard and aborts the onset.
         let mut probs = vec![0.9f32];
         // 10 s = 100 probes of 100 ms; feed some margin beyond it.
-        probs.extend(std::iter::repeat_n(0.0f32, 105));
+        probs.extend(std::iter::repeat_n(0.5f32, 105));
         let mut seg = build(0, false);
         let events = run(&mut seg, &probs);
-        assert_eq!(starts(&events), 0);
+        assert_eq!(starts(&events), 1, "onset fires at the first probe");
+        assert_eq!(aborts(&events), 1, "the guard must abort the onset");
         assert!(segments(&events).is_empty());
     }
 
@@ -939,22 +996,21 @@ mod tests {
         assert_eq!(segments(&events).len(), 2, "got {events:?}");
     }
 
-    /// P1 (contract): SpeechStart must fire within the commit budget of the
-    /// first above-threshold probe — the confirmation window (2-of-3) takes
-    /// at most CONFIRM_WINDOW probes.
+    /// P1 (contract): `SpeechStart` fires on the first above-threshold probe —
+    /// the detection budget is a single probe window.
     #[test]
     fn speech_start_within_commit_budget() {
         let mut seg = build(0, false);
-        // 5 silent probes, then the onset: speech, gap, speech → confirm on
-        // the third probe after onset (the gap is tolerated).
+        // 5 silent probes, then the onset: SpeechStart fires on the first
+        // speech probe, before confirmation (the gap is tolerated).
         let mut probs = vec![0.0; 5];
         probs.extend_from_slice(&[0.9, 0.3, 0.9, 0.0, 0.0, 0.0]);
         let events = run(&mut seg, &probs);
         assert_eq!(starts(&events), 1, "got {events:?}");
         assert_eq!(
             seg.commit_budget_ms(),
-            3 * seg.probe_samples() * 1000 / SAMPLE_RATE,
-            "budget = confirm window × probe ms"
+            seg.probe_samples() * 1000 / SAMPLE_RATE,
+            "budget = one probe (onset fires immediately)"
         );
     }
 
@@ -1033,13 +1089,14 @@ mod tests {
         assert_eq!(segments(&events).len(), 1, "got {events:?}");
     }
 
-    /// A single isolated burst (cough/click) must fail to confirm even with
-    /// the gap-tolerant window.
+    /// A single isolated burst (cough/click) fires the onset (barge-in) but
+    /// never confirms: it aborts and produces no segment.
     #[test]
-    fn isolated_burst_does_not_confirm() {
+    fn isolated_burst_fires_onset_then_aborts() {
         let mut seg = build(0, false);
         let events = run(&mut seg, &[0.9, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(starts(&events), 0, "got {events:?}");
+        assert_eq!(starts(&events), 1, "got {events:?}");
+        assert_eq!(aborts(&events), 1, "got {events:?}");
         assert!(segments(&events).is_empty());
     }
 

@@ -130,7 +130,9 @@ Mic (CPAL, 100 ms chunks) → resample 16 kHz mono
         the model; confirm 2-of-3 with gap tolerance;
         real-audio pre-roll 300 ms; post-roll grace 200 ms; closed by VAD
         silence only — no time-based cut)
-          → SpeechStart { segment_seq }   → barge-in (cancels LLM/TTS/STT)
+          → SpeechStart { segment_seq }   → barge-in at onset (cancels the LLM
+                                            request + TTS queue/playback; STT/VAD
+                                            keep running)
           → Speech(partial)               → live re-decode every 1 s (P3)
           → SegmentReady { seq, audio, trailing_silence }
               → live decode reuse or final full decode (detached; P4)

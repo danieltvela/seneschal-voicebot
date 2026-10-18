@@ -6,7 +6,7 @@
 #   make qa-full    — fast + audit + coverage
 #   make fmt        — cargo fmt --check
 #   make lint       — cargo clippy --all-targets -- -D warnings
-#   make test       — cargo test (default features)
+#   make test       — cargo test --workspace (default features)
 #   make test-ci    — cargo test --features full
 #   make test-e2e   — cargo test e2e -- --ignored (wiremock e2e)
 #   make test-stt   — ignored STT tests (needs WHISPER_MODEL)

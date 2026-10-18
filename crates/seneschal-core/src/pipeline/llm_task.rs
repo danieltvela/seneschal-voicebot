@@ -258,35 +258,48 @@ pub async fn llm_task(
 
                 // Always send the full tool schema for KV-cache stability (#191).
                 let active_tools: Vec<serde_json::Value> = tool_defs.clone();
-                let (token_rx, stream_handle) = match llm_client
-                    .stream(&messages, &active_tools, request_options)
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(e) => {
-                        error!(target: "llm", "LLM error: {}", e);
-                        if let Some(ref tx) = tui_tx {
-                            tx.send(TuiEvent::Error(format!("LLM error: {e}"))).ok();
+                // Race the HTTP request (time-to-first-byte) against barge-in so
+                // a request the user just sent is cancelled immediately, not
+                // when the first token eventually arrives. Scoped so the future
+                // (which borrows `messages`) is dropped before the tool loop
+                // mutates `messages`.
+                let (token_rx, stream_handle) = {
+                    let stream_fut = llm_client.stream(&messages, &active_tools, request_options);
+                    tokio::pin!(stream_fut);
+                    tokio::select! {
+                        biased;
+                        _ = cancel_rx.recv() => {
+                            cancelled = true;
+                            break 'pipeline;
                         }
-                        let _ = sentences_tx
-                            .send(super::frames::PipelineFrame::SentenceReady {
-                                utterance_id: pipeline_id,
-                                sentence: "Lo siento, no pude conectar con el modelo de lenguaje."
-                                    .to_string(),
-                            })
-                            .await;
-                        let _ = sentences_tx
-                            .send(super::frames::PipelineFrame::LLMResponseDone {
-                                utterance_id: pipeline_id,
-                                full_text: String::new(),
-                                end_of_turn: true,
-                            })
-                            .await;
-                        events.llm_post_finished.notify_one();
-                        if let Some(ref tx) = tui_tx {
-                            tx.send(TuiEvent::AssistantDone).ok();
-                        }
-                        break 'pipeline;
+                        r = &mut stream_fut => match r {
+                            Ok(r) => r,
+                            Err(e) => {
+                                error!(target: "llm", "LLM error: {}", e);
+                                if let Some(ref tx) = tui_tx {
+                                    tx.send(TuiEvent::Error(format!("LLM error: {e}"))).ok();
+                                }
+                                let _ = sentences_tx
+                                    .send(super::frames::PipelineFrame::SentenceReady {
+                                        utterance_id: pipeline_id,
+                                        sentence: "Lo siento, no pude conectar con el modelo de lenguaje."
+                                            .to_string(),
+                                    })
+                                    .await;
+                                let _ = sentences_tx
+                                    .send(super::frames::PipelineFrame::LLMResponseDone {
+                                        utterance_id: pipeline_id,
+                                        full_text: String::new(),
+                                        end_of_turn: true,
+                                    })
+                                    .await;
+                                events.llm_post_finished.notify_one();
+                                if let Some(ref tx) = tui_tx {
+                                    tx.send(TuiEvent::AssistantDone).ok();
+                                }
+                                break 'pipeline;
+                            }
+                        },
                     }
                 };
 
@@ -387,6 +400,15 @@ pub async fn llm_task(
                 match tool_call {
                     Some((name, args)) => {
                         if tools.lock().unwrap().is_background(&name) {
+                            // Barge-in cancels a *pending* background dispatch
+                            // (e.g. a `run_deep_task` launch the user
+                            // interrupted before it was sent). A task the deep
+                            // worker already spawned keeps running: the worker
+                            // engine never subscribes to barge-in.
+                            if cancel_rx.try_recv().is_ok() {
+                                cancelled = true;
+                                break 'pipeline;
+                            }
                             // The narration (llm_text) was already streamed
                             // token-by-token to the sentence splitter above
                             // (StreamToken::Content → LLMToken). Re-sending the
@@ -532,8 +554,24 @@ pub async fn llm_task(
                             .as_ref()
                             .map(|t| t.is_silent())
                             .unwrap_or(false);
+                        // Barge-in abandons a running main-agent tool call. The
+                        // deep worker is the deliberate exception: its work is
+                        // detached and never cancelled by barge-in (only the
+                        // pre-dispatch check in the background branch guards a
+                        // launch that had not happened yet).
                         let result = match tool_for_exec {
-                            Some(tool) => tool.run(&args).await,
+                            Some(tool) => {
+                                let run = tool.run(&args);
+                                tokio::pin!(run);
+                                tokio::select! {
+                                    biased;
+                                    _ = cancel_rx.recv() => {
+                                        cancelled = true;
+                                        break 'pipeline;
+                                    }
+                                    r = &mut run => r,
+                                }
+                            }
                             None => format!("Unknown tool: {name}"),
                         };
                         info!(target: "pipeline", "Tool[{}] `{}` → {}", iter, name, result);

@@ -36,7 +36,7 @@ QA_SKIP=audit,coverage make qa
 |---|---|---|
 | `fmt` | `cargo fmt --check` | code is unformatted |
 | `lint` | `cargo clippy --all-targets --no-deps -- -D warnings` | any clippy warning |
-| `test` | `cargo test` | any default-features test fails |
+| `test` | `cargo test --workspace` | any default-features test fails |
 | `test-ci` | `cargo test --features full` | any feature test fails |
 | `test-e2e` | `cargo test e2e -- --ignored` | wiremock e2e harness fails |
 | `test-stt` | `cargo test -- --ignored stt` | real-Whisper STT fails (skipped if no model) |
@@ -61,9 +61,9 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 - **Single binary**: all stages connected by `tokio::sync` channels
 - **No speculative LLM on local GPUs**: single-GPU contention causes jitter. On multi-GPU hosts the LLM server (out-of-process) is pinned with `CUDA_VISIBLE_DEVICES` and the voice models (VAD/Parakeet/Kokoro) can be spread over the remaining GPUs via `GPU_AUTO` (issue #14)
 - **LLM→TTS streaming**: buffer until sentence boundary, synthesize immediately
-- **Barge-in**: `CancellationToken` cancels active pipeline
+- **Barge-in**: on the acoustic onset, `barge_in_tx` cancels the in-flight LLM request (including one just sent) and the TTS queue + playback; STT/VAD keep running, and a dispatched deep-worker task is never cancelled
 - **Pluggable STT**: Provider trait for Whisper, Parakeet, SFSpeechRecognizer
-- **STT/VAD contract**: immediate barge-in on speech start, live transcription while the user speaks, LLM gated on the final transcript, stale results dropped after barge-in — specified in `doc/stt-contract.md` (P1–P6) and locked by deterministic + audit tests
+- **STT/VAD contract**: barge-in at speech onset, live transcription while the user speaks, LLM gated on the final transcript, stale results dropped after barge-in — specified in `doc/stt-contract.md` (P1–P6) and locked by deterministic + audit tests
 - **Cold Path Memory (S-DREAM)**: L1/L2 consolidation, see `src/dream/`
 
 ---

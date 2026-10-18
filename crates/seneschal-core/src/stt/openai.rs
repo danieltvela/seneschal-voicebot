@@ -262,8 +262,10 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
     /// While the segment is open, live prefix requests are dispatched every
     /// `live.interval_ms` (contract P3). A finalized utterance dispatches one
     /// final request covering the complete audio (contract P4); both kinds run
-    /// detached so the pipeline is never blocked by the HTTP round trip. A
-    /// barge-in aborts pending requests via [`OpenAiSttProvider::cancel_inflight`].
+    /// detached so the pipeline is never blocked by the HTTP round trip.
+    /// Barge-in never cancels STT: a superseded utterance's stale result is
+    /// dropped downstream by its `segment_seq`; its live requests are aborted
+    /// when the next segment opens.
     pub async fn process_audio(
         &mut self,
         audio: &[f32],
@@ -290,6 +292,24 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
                         pending: Vec::new(),
                     });
                     let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
+                }
+                SegmenterEvent::SpeechAborted { segment_seq } => {
+                    // The onset (barge-in already fired) never confirmed: drop
+                    // its live state and close it with an empty end so the
+                    // pipeline resets (NoSpeechGate rejects the empty text).
+                    if let Some(mut live) = self.live.take()
+                        && live.seq == segment_seq
+                    {
+                        for p in live.pending.drain(..) {
+                            p.token.cancel();
+                        }
+                    }
+                    let _ = tx
+                        .send(SpeechEvent::SpeechEnd {
+                            segment_seq,
+                            quality: TranscriptionQuality::empty(),
+                        })
+                        .await;
                 }
                 SegmenterEvent::SegmentReady {
                     segment_seq,
@@ -373,23 +393,6 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
         Ok(())
     }
 
-    /// Cancel the in-flight *final* transcription request (barge-in).
-    ///
-    /// The live prefix state is deliberately kept: the pipeline calls this
-    /// from its `SpeechStart` handler, i.e. immediately after the segmenter
-    /// opened a new segment, so dropping `self.live` here would disable live
-    /// transcription (contract P3) for the utterance the user just started.
-    /// Superseded live requests are cancelled when the next segment opens.
-    pub fn cancel_inflight(&mut self) {
-        if let Some(token) = self.pending.take() {
-            token.cancel();
-            tracing::debug!(
-                target: "stt",
-                "Cancelled in-flight remote transcription (barge-in)"
-            );
-        }
-    }
-
     /// Number of transcriptions currently in flight.
     pub fn inflight_transcriptions(&self) -> usize {
         self.inflight.load(Ordering::SeqCst)
@@ -440,10 +443,6 @@ impl<D: SpeechDetector + Sync + 'static> SttProvider for OpenAiSttProvider<D> {
 
     async fn verify_server(&mut self) -> Result<()> {
         OpenAiSttProvider::verify_server(self).await
-    }
-
-    fn cancel_inflight(&mut self) {
-        OpenAiSttProvider::cancel_inflight(self);
     }
 
     fn inflight_transcriptions(&self) -> usize {

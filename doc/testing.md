@@ -18,13 +18,16 @@ and three test layers that lock it:
 
 1. **L1 — deterministic unit tests** (no models, run in `make qa`): state
    machine + streaming orchestrator behavior in
-   `crates/seneschal-core/src/stt/segmenter.rs` and `streaming.rs` (onset
-   preservation, commit budget, trailing silence, hysteresis, live cadence,
-   single-flight, stale discard).
+   `crates/seneschal-core/src/stt/segmenter.rs` and `streaming.rs` (onset-fired
+   `SpeechStart` + `SpeechAborted`, commit budget, trailing silence, hysteresis,
+   live cadence, single-flight, stale discard). The barge-in delivery is locked
+   in `crates/seneschal-core/src/pipeline/tts_task.rs`
+   (`barge_in_cancels_during_synthesis_and_drops_queue`: a barge-in mid-synthesis
+   drops the queued sentences and returns the FSM to `Idle`).
 2. **L2 — pipeline contract tests** (no models): `src/audio_events.rs` drives
-   the extracted SpeechEvent handler with a mock STT provider (barge-in on
-   SpeechStart, TranscriptReady gating, stale drop, NoSpeechGate, ambient
-   gating).
+   the extracted SpeechEvent handler with mock events (barge-in at onset, and
+   that STT/VAD are *not* touched, `TranscriptReady` gating, stale drop,
+   NoSpeechGate, ambient gating).
 3. **L3 — real-model audits** (`make test-stt`, `#[ignore]`, espeak fixtures
    under `target/stt-fixtures/`): `tests/stt_audit_contract.rs` (onset/tail/
    live), `stt_audit_continuous.rs` (silence-only close on >25 s of unbroken

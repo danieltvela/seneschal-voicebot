@@ -1,11 +1,13 @@
 //! STT audit — contract scenarios from `doc/stt-contract.md`.
 //!
-//! These tests lock the four recurring regressions the project suffered:
+//! These tests lock the recurring regressions the project suffered:
 //!   1. lost utterance onset  → P1 (commit budget) + P4 (first word present)
 //!   2. lost utterance tail   → P5 (no premature split) + P4 (last word present)
 //!   3. missed end of speech  → P5 (segment closes at silence threshold)
 //!   4. slow start detection  → P1 (commit budget)
-//! plus P3 (live partials during speech).
+//!   5. barge-in at the acoustic onset → P2 (SpeechStart fires on the first
+//!      speech probe; STT/VAD are never cancelled; the LLM request, splitter
+//!      and TTS queue + playback stop immediately)
 //!
 //! Run: `make test-stt` (or `cargo test -- --ignored stt --test-threads=1`).
 //! Provider selection via STT_AUDIT_PROVIDER (whisper | openai), issue #17.
@@ -112,15 +114,16 @@ async fn stt_audit_quiet_capture_es() {
         let mut fed = 0usize;
         let mut starts = 0usize;
         let mut closes: Vec<(f32, f32)> = Vec::new();
-        let mut drain = |seg: &mut VadSegmenter<SileroDetector>,
-                         fed: &mut usize,
-                         starts: &mut usize,
-                         closes: &mut Vec<(f32, f32)>,
-                         chunk: &[f32]| {
+        let drain = |seg: &mut VadSegmenter<SileroDetector>,
+                     fed: &mut usize,
+                     starts: &mut usize,
+                     closes: &mut Vec<(f32, f32)>,
+                     chunk: &[f32]| {
             *fed += chunk.len();
             for ev in seg.feed(chunk) {
                 match ev {
                     SegmenterEvent::SpeechStart { .. } => *starts += 1,
+                    SegmenterEvent::SpeechAborted { .. } => {}
                     SegmenterEvent::SegmentReady { audio, .. } => {
                         closes.push((*fed as f32 / SR as f32, audio.len() as f32 / SR as f32))
                     }

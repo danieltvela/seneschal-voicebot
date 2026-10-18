@@ -217,14 +217,15 @@ Ambient ──── user explicitly sets "ambient locked" ──────►
 
 ## Cancellation (Barge-in)
 
-When `SpeechStart` fires (via `SpeechEvent::SpeechStart`), barge-in is triggered:
+When `SpeechStart` fires (at the acoustic onset — the first speech probe, before the segment confirms), barge-in is triggered immediately:
 
-1. **`llm_task`** — detects pipeline state change via FSM, abandons in-progress turn
-2. **`sen_task`** — returns to blocked state
-3. **`tts_task`** — `play_cancel` AtomicBool set; `AudioOutput::play_blocking` polls it and exits early; clears pending sentences
+1. **`llm_task`** — races the in-flight LLM request (including one just sent) and any running foreground tool call against `cancel_rx`; abandons the turn. A **dispatched deep-worker task keeps running** (its work is detached); only a `run_deep_task` launch still pending at barge-in is skipped
+2. **`sen_task`** — drains buffered tokens and resets the `SentenceSplitter`
+3. **`tts_task`** — polls `cancel_rx` on every loop iteration, sets `play_cancel` (the CPAL callback stops writing audio) and drops the whole queued response
 4. **`consolidation_task`** — aborts if consolidation in progress
+5. **STT/VAD** — **not** cancelled: the new utterance keeps accumulating and transcribing (contract P3)
 
-Barge-in delivered via `events.barge_in_tx` (mpsc) and broadcast cancel channel. All pipeline tasks monitor `PipelineState` via the watch channel to react to state transitions.
+Barge-in is delivered via `events.barge_in_tx` (broadcast). The background "processing" filler tone is stopped too. All pipeline tasks monitor `PipelineState` via the watch channel to react to state transitions.
 
 ---
 

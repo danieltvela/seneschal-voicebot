@@ -63,7 +63,7 @@ Microphone -> AudioCapture (CPAL)
 -> AudioOutput (CPAL)
 ```
 
-**Barge-in:** `CancellationToken` cancela todo el pipeline cuando el usuario habla.
+**Barge-in:** en cuanto el usuario empieza a hablar se cancela la petición LLM en curso (también la recién enviada), el `SentenceSplitter` y el TTS (cola + reproducción). El STT/VAD **no** se cancela, y una tarea del deep worker ya lanzada sigue ejecutándose.
 
 **Consolidacion (hot path):** cuando el contexto supera el 80% de `LLM_CONTEXT_TOKENS`, se extraen profile facts + memories, se resume el historial antiguo y se reconstruye el system prompt. Se conservan los ultimos `LLM_SUMMARY_KEEP_TURNS` (6) turnos.
 

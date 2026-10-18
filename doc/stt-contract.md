@@ -41,29 +41,38 @@ offset).*
 
 ## Properties
 
-### P1 — Immediate start detection
-`SpeechStart` fires within the commit budget of the acoustic onset:
-the confirmation takes `vad_confirm_probes` speech decisions inside a sliding
-window of `vad_confirm_probes + 1` probes (one natural inter-word gap is
-tolerated), so the worst case is `(N+1) × VAD_PROBE_MS` plus Silero's own
-reaction lag. Measured on synthetic audio: 0.3–0.8 s (the old strict-consecutive
-rule measured 0.9–2.8 s). *Locked by `speech_start_within_commit_budget` (unit),
-`stt_audit_live_partial_es` (budget 1.0 s) and the tightened continuous audit
-budget (0.6 s).*
+### P1 — Start detection at the acoustic onset
+`SpeechStart` fires on the **first** above-threshold VAD probe of an utterance
+(the acoustic onset), before confirmation: barge-in and LISTENING start as early
+as the detector allows (worst case one probe window plus Silero's own reaction
+lag). Confirmation (`vad_confirm_probes` decisions inside a sliding window of
+`vad_confirm_probes + 1` probes, one natural inter-word gap tolerated) still
+governs the **segment** — live decoding and the close — not the barge-in. An
+onset that never confirms (a cough/click blip) is aborted: `SpeechAborted` →
+an empty `SpeechEnd`, dropped by `NoSpeechGate`, no transcript. *Locked by
+`speech_start_within_commit_budget` (unit: budget = one probe),
+`single_probe_fires_onset_then_aborts` and `isolated_burst_fires_onset_then_aborts`
+(unit).*
 
-### P2 — Barge-in cancels everything, stale results are dropped
-`SpeechStart` fires BARGE_IN on `barge_in_tx` (LLM, SentenceSplitter, TTS and
-consolidation subscribe) and calls `SttProvider::cancel_inflight` (aborts
-remote requests; live decoders discard their superseded results by segment
-seq). A `SpeechEnd` whose `segment_seq` differs from the last committed
-segment is **stale** and is dropped: a transcript from a superseded utterance
-never reaches the LLM under a new utterance id. Consequence: if the user
-chains phrases faster than the final decode, the first phrase is cancelled —
-by design, uniform across providers. *Locked by
-`speechstart_fires_barge_in_and_cancels_stt`,
+### P2 — Barge-in on speech onset; STT/VAD keep running
+When `SpeechStart` fires (the onset), BARGE_IN is broadcast on `barge_in_tx`.
+Subscribers cancel the **LLM request in flight** (including one just sent and one
+already streaming), the **SentenceSplitter**, and **TTS — both the queued
+sentences and the audio currently playing**; the background filler tone is
+stopped too. The **STT/VAD pipeline is never cancelled**: the utterance that
+just started keeps accumulating and its live transcription keeps running. A
+`SpeechEnd` whose `segment_seq` differs from the last committed segment is
+**stale** and is dropped: a transcript from a superseded utterance never reaches
+the LLM. Consequence: if the user chains phrases faster than the final decode,
+the previous phrase is cancelled — by design, uniform across providers.
+
+**Deep-worker carve-out:** once a `run_deep_task` delegation has been dispatched
+it is detached by design and keeps running across the interruption (the worker
+engine never subscribes to `barge_in_tx`); only a launch still pending at
+barge-in is skipped. *Locked by `speechstart_fires_barge_in_and_opens_epoch`,
 `stale_speech_end_is_dropped_after_new_speechstart` (unit, mock provider),
-`stale_flight_result_is_discarded` + `finish_drops_stale_flight_and_decodes_fresh`
-(streaming).*
+`barge_in_cancels_during_synthesis_and_drops_queue` (tts unit), the e2e
+`barge_in_*` scenarios and `e2e_deep_worker_survives_barge_in`.*
 
 ### P3 — Live transcription during speech
 While the segment is open, transcription runs **during** the user's speech:
@@ -72,13 +81,14 @@ partial re-decodes of the buffered speech every `STT_LIVE_INTERVAL_MS`
 emitted as `SpeechEvent::Speech`. The full-buffer-transcribed-only-after-close
 pattern is forbidden for all providers (the remote provider dispatches prefix
 POSTs). `STT_LIVE_ENABLED=0` restores the historical batch-at-close behavior.
-The `SpeechStart` barge-in (the pipeline calls `cancel_inflight` from that
-handler) must abort only work belonging to the **superseded** utterance: the
-segment just opened keeps its live state, or the remote provider would never
-send prefix requests. *Locked by
+Barge-in **never disturbs STT**, so the segment just opened keeps its live
+state and its prefix requests (the remote provider would otherwise never send
+prefix requests for the new utterance). A superseded segment's live requests are
+aborted when the next segment opens, and its `SpeechEnd` is dropped by the seq
+check. *Locked by
 `partial_decodes_follow_interval_and_stay_single_flight` (unit),
 `live_prefix_requests_emit_partials_before_final` and
-`cancel_inflight_on_speechstart_keeps_live_transcription` (wiremock),
+`speechstart_keeps_live_transcription` (wiremock),
 `stt_audit_live_partial_es` (real model: ≥1 partial before SpeechEnd).*
 
 ### P4 — Complete final text, gated launch
@@ -135,7 +145,7 @@ properties. *Locked by the shared unit tests plus the audits running through
 | Key | Default | Effect |
 |---|---|---|
 | `VAD_PROBE_MS` | 200 | Probe window. 100 ms windows make Silero probabilities oscillate (see `vad_probe_calibration`); keep 200 unless measuring. |
-| `VAD_CONFIRM_PROBES` | 2 | Speech decisions required within the sliding N+1 window. |
+| `VAD_CONFIRM_PROBES` | 2 | Speech decisions required within the sliding N+1 window before the segment **confirms** (live decoding + close). `SpeechStart`/barge-in fire on the first speech probe, not here. |
 | `VAD_PREROLL_MS` | 300 | Real-audio pre-roll prepended to confirmed segments. |
 | `VAD_POST_ROLL_MS` | 200 | Grace before closing after the silence timeout. |
 | `VAD_SILENCE_MS` | 300 | Silence that closes the segment. |

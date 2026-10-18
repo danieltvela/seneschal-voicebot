@@ -326,9 +326,10 @@ Recommended ports: `WS_PORT=9090`, `CONTROL_PORT=9001`. Control binds `0.0.0.0`.
 ### Normal turn
 
 ```
-SpeechStart  (from WhisperSTTVAD.process_audio)
+SpeechStart  (from WhisperSTTVAD.process_audio, at the acoustic onset)
   ├─ pre-roll flushed into speech_buffer
-  └─ barge-in: if pipeline running → cancel=true, abort handle
+  └─ barge-in: if pipeline running → broadcast cancel (LLM request + TTS
+     queue/playback + splitter + filler); STT/VAD are never cancelled
 
 SpeechEnd(transcript)
   ├─ spawn llm_task(transcript, ...)
@@ -341,17 +342,18 @@ SpeechEnd(transcript)
 
 ### Barge-in
 
-When `SpeechStart` fires while a pipeline is playing:
+The moment `SpeechStart` fires (the acoustic onset, first speech probe), while a response is active:
 1. `events.barge_in_tx.send(utterance_id)` — broadcast to all pipeline tasks via `tokio::sync::broadcast`
 2. Each task's `cancel_rx.recv()` triggers inside its `tokio::select!` loop
-3. **LLM task**: aborts the HTTP stream handle, drops the token receiver, breaks the tool loop
+3. **LLM task**: cancels a request that is in flight — including one just sent (the HTTP round-trip is raced against `cancel_rx`, not awaited unguarded) — aborts the stream handle, drops the token receiver, breaks the tool loop. A running foreground tool call is abandoned; a **deep-worker task already dispatched keeps running** (only a pending `run_deep_task` launch is skipped).
 4. **SEN task**: drains remaining tokens from `llm_rx`, resets the `SentenceSplitter`, flushes buffered state
-5. **TTS task**: sets `play_cancel.store(true, SeqCst)` so the CPAL callback sees it and stops writing audio, then awaits the `play_handle` until the playback task actually exits before calling `handle_barge_in` to drain queued sentences and reset `play_cancel` back to `false`
+5. **TTS task**: `cancel_rx` is polled on **every** loop iteration (sentences are no longer drained via an unguarded `try_recv`), so it sets `play_cancel.store(true, SeqCst)` so the CPAL callback stops writing audio, drains the whole queued response, and resets `play_cancel` back to `false`. The per-sentence synthesis subscribes to `barge_in_tx` *before* it starts, so a barge-in during synthesis is honored (a cancel already pending when synthesis ends aborts playback).
+6. **Filler**: the background "processing" tone is stopped.
+7. **STT/VAD are never cancelled**: the utterance that just started keeps accumulating and its live transcription keeps running (contract P3).
 
-> Note: `play_cancel` must stay `true` until the CPAL callback has had time to see it. The
-> TTS task now uses a looped `select!` that keeps awaiting the `JoinHandle` after setting
-> `play_cancel`, rather than dropping the handle when `cancel_rx` fires. This prevents a
-> race where the handle was abandoned but the CPAL callback continued producing audio.
+> Note: `play_cancel` must stay `true` until the CPAL callback has had time to see it.
+> `handle_barge_in` sets it, drains the queue, then clears it; the callback stops
+> writing audio on the first buffer it sees the flag in.
 
 ---
 

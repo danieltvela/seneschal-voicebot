@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Features
 - **[#14](https://github.com/danieltvela/seneschal-voicebot/issues/14)**: Multi-GPU support — `cuda` build feature (Linux/NVIDIA), automatic per-model GPU assignment (`GPU_AUTO`) for VAD/Parakeet/Kokoro with `VAD_GPU`/`PARAKEET_GPU`/`TTS_GPU` overrides, GPU section in `--list-devices`, and `SENECHAL_CUDA=1` opt-in in the Linux launcher
 
+### Bug Fixes
+- **Barge-in fired only at the end of the response**: `SpeechStart`/barge-in now fire on the **first speech probe** (acoustic onset) instead of at VAD confirmation, and the cancellation is actually delivered — the TTS task polls `cancel_rx` on every loop iteration (queued sentences are dropped), synthesis subscribes before it starts (a barge-in mid-synthesis aborts playback), and the LLM task races the in-flight HTTP request (including one just sent) and running tool calls against `cancel_rx`. STT/VAD are never cancelled, and a dispatched deep-worker task keeps running (only a pending `run_deep_task` launch is skipped). Docs (`doc/stt-contract.md` P1–P3, `doc/ARCHITECTURE.md`, `doc/MAIN_PROCESS.md`, `doc/PROCESS_ARCHITECTURE.md`, `CONSTITUTION.md`) and tests realigned.
+
+
 ## v0.1.0-alpha.9 (2026-08-29)
 
 ### Features

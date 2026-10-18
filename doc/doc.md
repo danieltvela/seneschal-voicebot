@@ -40,7 +40,7 @@ Microphone → VAD → AudioBuffer → Whisper STT → mlx-lm/oMLX LLM → Sente
 - Whisper.cpp STT (CoreML Neural Engine or Metal GPU, state cached across utterances)
 - Streaming LLM via mlx-lm or oMLX (Apple MLX, implicit KV-cache reuse, sub-second latency)
 - Sentence-by-sentence TTS playback — first sentence plays while next is being generated
-- **Barge-in**: user speech cancels active LLM/TTS pipeline instantly via `CancellationToken`
+- **Barge-in**: user speech, from the acoustic onset, cancels the in-flight LLM request and the TTS queue + playback instantly. STT/VAD keep running; a dispatched deep-worker task keeps running.
 - Persistent SQLite conversation history — restored on startup
 - LLM session rollback on barge-in interruption
 - **Tool use**: XML-based tool calls (`<tool_name>...</tool_name>`) plus multi-tool loop; built-in tools: `current_time`, `take_screenshot`, `read_clipboard`, `set_clipboard`, `open_app`, `run_shell`, `read_file`, `web_search`, `set_conversation_mode`, `mcp_tool` (dynamic MCP server proxy), `run_agent` (subprocess + ACP delegation)

@@ -3,10 +3,11 @@
 //! with mock providers and no audio hardware or models.
 //!
 //! Contract implemented here:
-//! - P2: `SpeechStart` fires BARGE_IN (cancelling LLM, SentenceSplitter, TTS
-//!   and any in-flight STT) and records the segment seq; a `SpeechEnd` with a
-//!   different seq is stale (a barge-in opened a newer utterance) and is
-//!   dropped — its transcript never reaches the LLM.
+//! - P2: `SpeechStart` fires BARGE_IN (cancelling the in-flight LLM request,
+//!   the SentenceSplitter and all TTS queue + playback) and records the
+//!   segment seq; a `SpeechEnd` with a different seq is stale (a barge-in
+//!   opened a newer utterance) and is dropped — its transcript never reaches
+//!   the LLM. STT/VAD are never cancelled by barge-in.
 //! - P4: the LLM launch is gated on the final `SpeechEnd` transcript, after
 //!   the `NoSpeechGate` quality filter and the ambient/wake-word gating.
 
@@ -19,8 +20,9 @@ use tracing::{debug, info, warn};
 use seneschal_common::tools::ConversationMode;
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
 use seneschal_core::audio::buffer::AudioBuffer;
+use seneschal_core::audio::filler::FillerController;
 use seneschal_core::pipeline::{AnnouncementWindow, PipelineEvents, PipelineFrame};
-use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider};
+use seneschal_core::stt::{NoSpeechGate, SpeechEvent};
 use seneschal_extras::analysis::identity::IdentityAnalyzer;
 
 use crate::config::Config;
@@ -37,7 +39,6 @@ pub struct AudioEvents<'a> {
     pub last_cleared_commit: &'a mut u64,
     pub speech_buffer: &'a mut AudioBuffer,
     pub speech_buffer_start_offset: &'a mut usize,
-    pub stt_provider: &'a mut dyn SttProvider,
     pub source_sample_rate: u32,
     pub config: &'a Config,
     pub events: Arc<PipelineEvents>,
@@ -52,6 +53,9 @@ pub struct AudioEvents<'a> {
     pub no_speech_gate: NoSpeechGate,
     pub transcript_tx: mpsc::Sender<PipelineFrame>,
     pub identity_analyzer: Option<Arc<Mutex<IdentityAnalyzer>>>,
+    /// Background "processing" tone; stopped on barge-in (it is speaker output
+    /// and must fall silent the moment the user speaks).
+    pub filler_controller: Option<Arc<FillerController>>,
     #[cfg(feature = "tui")]
     pub tui_tx: tokio::sync::mpsc::UnboundedSender<seneschal_tui::events::TuiEvent>,
 }
@@ -80,9 +84,12 @@ impl<'a> AudioEvents<'a> {
                     .barge_in_tx
                     .send(self.utterance_epoch.load(Ordering::SeqCst))
                     .ok();
-                // Remote STT (issue #17) / live decodes: abort any in-flight
-                // transcription now that the user barged in.
-                self.stt_provider.cancel_inflight();
+                // Barge-in cancels the LLM request, the SentenceSplitter and
+                // TTS (queue + playback) — never the STT/VAD pipeline: the
+                // utterance that just started keeps accumulating here.
+                if let Some(filler) = &self.filler_controller {
+                    filler.stop();
+                }
                 self.announcement_window
                     .lock()
                     .unwrap()
@@ -380,41 +387,10 @@ mod tests {
         }
     }
 
-    /// Mock STT provider (no models): records cancel_inflight calls.
-    struct MockStt {
-        cancels: Arc<AtomicU64>,
-    }
-
-    #[async_trait::async_trait]
-    impl SttProvider for MockStt {
-        fn provider_name(&self) -> &'static str {
-            "mock"
-        }
-        async fn process_audio(
-            &mut self,
-            _audio: &[f32],
-            _tx: &mpsc::Sender<SpeechEvent>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn transcribe_complete(&self, _audio: &[f32]) -> anyhow::Result<TranscriptionQuality> {
-            Ok(TranscriptionQuality {
-                text: String::new(),
-                no_speech_prob: 1.0,
-                avg_logprob: 0.0,
-                compression_ratio: 0.0,
-            })
-        }
-        fn cancel_inflight(&mut self) {
-            self.cancels.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
     struct Fixture {
         ctx_parts: CtxParts,
         transcript_rx: mpsc::Receiver<PipelineFrame>,
         barge_in_rx: tokio::sync::broadcast::Receiver<u64>,
-        cancels: Arc<AtomicU64>,
     }
 
     struct CtxParts {
@@ -423,7 +399,6 @@ mod tests {
         last_cleared_commit: u64,
         speech_buffer: AudioBuffer,
         speech_buffer_start_offset: usize,
-        stt: MockStt,
         events: Arc<PipelineEvents>,
         utterance_epoch: Arc<AtomicU64>,
         turn_commit_counter: Arc<AtomicU64>,
@@ -443,7 +418,6 @@ mod tests {
         let (transcript_tx, transcript_rx) = mpsc::channel(16);
         let events = Arc::new(PipelineEvents::new());
         let barge_in_rx = events.barge_in_tx.subscribe();
-        let cancels = Arc::new(AtomicU64::new(0));
         #[cfg(feature = "tui")]
         let (tui_tx, _tui_rx) =
             tokio::sync::mpsc::unbounded_channel::<seneschal_tui::events::TuiEvent>();
@@ -453,9 +427,6 @@ mod tests {
             last_cleared_commit: 0,
             speech_buffer: AudioBuffer::new(16_000, 60),
             speech_buffer_start_offset: 0,
-            stt: MockStt {
-                cancels: Arc::clone(&cancels),
-            },
             events,
             utterance_epoch: Arc::new(AtomicU64::new(0)),
             turn_commit_counter: Arc::new(AtomicU64::new(0)),
@@ -474,7 +445,6 @@ mod tests {
             ctx_parts: parts,
             transcript_rx,
             barge_in_rx,
-            cancels,
         }
     }
 
@@ -486,7 +456,6 @@ mod tests {
             last_cleared_commit: &mut p.last_cleared_commit,
             speech_buffer: &mut p.speech_buffer,
             speech_buffer_start_offset: &mut p.speech_buffer_start_offset,
-            stt_provider: &mut p.stt,
             source_sample_rate: 16_000,
             config: config(),
             events: Arc::clone(&p.events),
@@ -501,6 +470,7 @@ mod tests {
             no_speech_gate: p.no_speech_gate.clone(),
             transcript_tx: p.transcript_tx.clone(),
             identity_analyzer: None,
+            filler_controller: None,
             #[cfg(feature = "tui")]
             tui_tx: p.tui_tx.clone(),
         }
@@ -521,10 +491,10 @@ mod tests {
         }
     }
 
-    /// P2: SpeechStart fires BARGE_IN, cancels in-flight STT, and opens a new
-    /// utterance epoch.
+    /// P2: SpeechStart fires BARGE_IN, opens a new utterance epoch, and does
+    /// NOT touch the STT pipeline (barge-in never cancels STT/VAD).
     #[tokio::test]
-    async fn speechstart_fires_barge_in_and_cancels_stt() {
+    async fn speechstart_fires_barge_in_and_opens_epoch() {
         let mut f = fixture();
         {
             let mut c = ctx(&mut f);
@@ -535,11 +505,6 @@ mod tests {
             f.barge_in_rx.try_recv().ok(),
             Some(0),
             "barge-in must fire with the interrupted epoch"
-        );
-        assert_eq!(
-            f.cancels.load(Ordering::SeqCst),
-            1,
-            "STT in-flight must be cancelled"
         );
         assert_eq!(f.ctx_parts.utterance_epoch.load(Ordering::SeqCst), 1);
         assert_eq!(f.ctx_parts.active_segment_seq, 7);

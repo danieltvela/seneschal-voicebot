@@ -168,15 +168,21 @@ user is inactive.
 
 ### Barge-in
 
-The barge-in mechanism uses `tokio::sync::broadcast`. When VAD detects
-`SpeechStart`, it sends the new `utterance_id` through `barge_in_tx`. All
-active tasks receive this and:
-- **llm_task**: cancels the LLM HTTP stream.
-- **sen_task**: clears buffered text.
-- **tts_task**: stops active audio playback.
+The barge-in mechanism uses `tokio::sync::broadcast`. `SpeechStart` fires at the
+acoustic onset (first speech probe); it sends the new `utterance_id` through
+`barge_in_tx`. All active tasks receive this and:
+- **llm_task**: cancels the in-flight LLM request (including one just sent) and
+  any running foreground tool call. A **dispatched deep-worker task keeps
+  running** (detached by design); only a pending `run_deep_task` launch is
+  skipped.
+- **sen_task**: clears buffered text and resets the `SentenceSplitter`.
+- **tts_task**: stops active audio playback and drops the queued sentences.
+- **filler**: the background "processing" tone is stopped.
 
-After cancellation, the pipeline returns to `Idle`, enters `Listening` for
-the new utterance, and spawns a fresh pipeline flow.
+STT/VAD are **not** cancelled — the utterance that just started keeps
+accumulating and its live transcription keeps running. After cancellation, the
+pipeline returns to `Idle`, enters `Listening` for the new utterance, and spawns
+a fresh pipeline flow.
 
 ### PipelineEvents
 

@@ -567,7 +567,7 @@ STT_PROVIDER=openai STT_URL=http://localhost:8024 STT_MODEL=qwen3-asr cargo run
 **Languages:** `STT_LANGUAGE=auto` (default) omits the `language` field so the server auto-detects per utterance (ES/EN code-switching); a concrete code is normalized to its primary subtag (`es-ES` → `es`).
 
 **Notes:**
-- Transcription is dispatched asynchronously — the pipeline is never blocked. The in-flight request is aborted on barge-in and bounded by `STT_TIMEOUT_MS`.
+- Transcription is dispatched asynchronously — the pipeline is never blocked and each request is bounded by `STT_TIMEOUT_MS`. Barge-in never cancels STT: a superseded utterance's stale result is dropped by its `segment_seq`, and its live prefix requests are aborted when the next segment opens.
 - The `json` response has no Whisper quality metrics, so `NoSpeechGate` relies on empty-text rejection plus a locally computed `compression_ratio` (same pass-through as Parakeet).
 
 #### SFSpeechRecognizer (requires `--features speech`, macOS only)
