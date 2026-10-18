@@ -4,8 +4,11 @@
 # Diferencias frente a macOS:
 #   - Los features `speech` (SFSpeechRecognizer) y `avspeech` (AVSpeechSynthesizer)
 #     son exclusivos de macOS y NO se compilan aquí.
-#   - STT: Parakeet (ONNX Runtime, CPU)  -> --features parakeet + STT_PROVIDER=parakeet
-#   - TTS: Kokoro (ONNX + espeak-ng embebido en el binario) -> --features kokoro + TTS_PROVIDER=kokoro
+#   - STT: provider `openai` contra un servicio remoto OpenAI-compatible. Se
+#     prefiere nemotron-asr (NeMo-Speech.cpp, Nemotron 3.5 ASR, :8026; issue #21)
+#     y se cae a seneschal-asr (vLLM Qwen3-ASR, :8024) si el primero no responde.
+#   - TTS: provider `openai` contra magpie-tts (NeMo-Speech.cpp, Magpie, :8025;
+#     issue #20); si no responde, Kokoro local (ONNX + espeak-ng embebido).
 #
 # Requisitos de build en Debian/Ubuntu (una sola vez):
 #   sudo apt-get install -y pkg-config libssl-dev libasound2-dev libclang-dev cmake build-essential
@@ -58,43 +61,65 @@ if ((${#missing[@]} > 0)); then
     exit 1
 fi
 
-# ── Overrides específicos de Linux (el .env apunta a dispositivos/voices de macOS) ──
-# STT: Parakeet TDT vía ONNX. El modelo ya está en models/parakeet-tdt-0.6b-v3-onnx.
+# ── Voz (STT + TTS) — DOS servicios NeMo independientes ──────────────────────
+#   STT: nemotron-asr (:8026) -> NVIDIA Nemotron 3.5 ASR vía NeMo-Speech.cpp
+#   TTS: magpie-tts    (:8025) -> NVIDIA Magpie TTS vía NeMo-Speech.cpp
+# Si alguno no responde: STT cae a Qwen3-ASR (:8024); TTS a Kokoro local (ONNX).
+# En Linux no existe AVSpeechSynthesizer: si el .env hereda TTS_PROVIDER=avspeech
+# el binario abortaría al arrancar, así que siempre lo sobreescribimos aquí.
+#
+# Alternativa 100% local (Parakeet TDT vía ONNX Runtime, CPU): descomenta estas
+# dos líneas para no depender de ningún servicio remoto de STT.
 # export STT_PROVIDER=parakeet
 # export PARAKEET_MODEL_DIR="${PARAKEET_MODEL_DIR:-models/parakeet-tdt-0.6b-v3-onnx}"
 
-# STT:
+# ── STT: Nemotron 3.5 ASR (nemotron-asr, :8026) con fallback a Qwen3-ASR ─────
+# Issue #21: reutilizamos el provider `openai` (issue #17) —sin provider ni
+# feature nuevos— contra el endpoint OpenAI-compatible de NeMo-Speech.cpp.
+# Preferimos nemotron-asr (:8026, id de modelo "nemotron-3.5"); si no responde
+# caemos al vLLM seneschal-asr (:8024, Qwen3-ASR), que era el backend anterior.
+STT_OPENAI_URL="${STT_OPENAI_URL:-http://localhost:8026}"
+STT_FALLBACK_URL="${STT_FALLBACK_URL:-http://localhost:8024}"
 export STT_PROVIDER=openai
-export STT_URL=http://localhost:8024
-export STT_MODEL=qwen3-asr
-export STT_TIMEOUT_MS=10000
+if command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "${STT_OPENAI_URL}/v1/models" >/dev/null 2>&1; then
+    # POST {STT_URL}/v1/audio/transcriptions. STT_MODEL debe coincidir con el id
+    # que anuncia GET /v1/models ("nemotron-3.5"). STT_LANGUAGE=auto omite el
+    # campo y deja que NeMo haga langid (code-switching ES/EN); un código
+    # concreto (es, es-ES...) también se acepta (verificado contra :8026).
+    export STT_URL="$STT_OPENAI_URL"
+    export STT_MODEL=nemotron-3.5
+    export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-15000}"
+    echo "STT: Nemotron 3.5 ASR en ${STT_URL} (${STT_MODEL})"
+elif command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "${STT_FALLBACK_URL}/v1/models" >/dev/null 2>&1; then
+    export STT_URL="$STT_FALLBACK_URL"
+    export STT_MODEL=qwen3-asr
+    export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-10000}"
+    echo "STT: nemotron-asr no responde en ${STT_OPENAI_URL}; usando ${STT_URL} (${STT_MODEL})" >&2
+else
+    # Ni Nemotron ni Qwen: arrancamos igualmente con el fallback para que el
+    # error aparezca como fallo de red por petición, no como crash de config.
+    export STT_URL="${STT_URL:-$STT_FALLBACK_URL}"
+    export STT_MODEL="${STT_MODEL:-qwen3-asr}"
+    export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-10000}"
+    echo "STT: ningún servicio OpenAI-compatible responde (${STT_OPENAI_URL} ni ${STT_FALLBACK_URL}); revisa nemotron-asr/seneschal-asr" >&2
+fi
 
-
-# TTS (issue #20): contenedor NeMo-Speech.cpp sirviendo MagpieTTS Multilingual
-# + NanoCodec, consumido por el proveedor OpenAI-compatible (TTS_PROVIDER=openai).
-# Si el contenedor responde en :8025 lo usamos; si no, caemos a Kokoro (ONNX
-# local), que ya viene en FEATURES. En Linux no existe AVSpeechSynthesizer, así
-# que si el .env hereda TTS_PROVIDER=avspeech el binario abortaría al arrancar.
+# ── TTS: Magpie (servicio TTS independiente) ─────────────────────────────────
 OPENAI_TTS_URL="${OPENAI_TTS_URL:-http://localhost:8025}"
 if command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "${OPENAI_TTS_URL}/v1/models" >/dev/null 2>&1; then
     export TTS_PROVIDER=openai
     export OPENAI_TTS_URL
-    # Voces anunciadas por GET /v1/models: John, Sofia, Aria, Jason, Leo.
-    # There is currently an open bug in nemo: voices doesn't correspond with the ones listed. Sofia is Jason
+    # OJO bug abierto en nemo: los nombres de voz no corresponden con las voces
+    # reales (p.ej. "Sofia" suena como el hablante Jason). Ver issue.
     export OPENAI_TTS_VOICE="${OPENAI_TTS_VOICE:-Sofia}"
     # MagpieTTS exige un language_code real: "auto" -> "Auto" devuelve 400.
-    # Códigos soportados: en-US, es-ES, de-DE, fr-FR, it-IT, vi-VN, hi-IN,
-    # ar-AE, ar-SA, ar-MSA, ko-KR, pt-BR. El prompt del sistema responde en
-    # español, así que por defecto es-ES (sin code-switching dentro de frase);
-    # exporta OPENAI_TTS_LANGUAGE=en-US (o cámbialo aquí) para voz en inglés.
     export OPENAI_TTS_LANGUAGE="${OPENAI_TTS_LANGUAGE:-es-ES}"
-    # NanoCodec emite 22050 Hz. Sin esto el audio suena ~9% rápido, porque el
-    # proveedor asumía los 24000 Hz de Qwen3-TTS.
+    # NanoCodec emite 22050 Hz; sin esto el audio suena ~9% rápido.
     export OPENAI_TTS_SAMPLE_RATE="${OPENAI_TTS_SAMPLE_RATE:-22050}"
     # NeMo-Speech.cpp hace su propio warmup; no hace falta el de ~90 s del NIM.
     export OPENAI_TTS_WARMUP="${OPENAI_TTS_WARMUP:-0}"
     export OPENAI_TTS_TIMEOUT_MS="${OPENAI_TTS_TIMEOUT_MS:-30000}"
-    echo "TTS: NeMo-Speech.cpp (MagpieTTS) en ${OPENAI_TTS_URL} (voice=${OPENAI_TTS_VOICE} lang=${OPENAI_TTS_LANGUAGE} rate=${OPENAI_TTS_SAMPLE_RATE})"
+    echo "TTS: Magpie en ${OPENAI_TTS_URL} (voice=${OPENAI_TTS_VOICE} lang=${OPENAI_TTS_LANGUAGE} rate=${OPENAI_TTS_SAMPLE_RATE})"
 else
     echo "TTS: NeMo-Speech.cpp no responde en ${OPENAI_TTS_URL}; usando Kokoro" >&2
     export TTS_PROVIDER=kokoro
