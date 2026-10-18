@@ -14,10 +14,12 @@ The file defines **two vendor profiles**:
 | Profile  | Model family | LLM | STT | TTS |
 |----------|--------------|-----|-----|-----|
 | `qwen`   | Qwen         | Qwen3.8-Flash-Next FP4 (TP=1) | Qwen3-ASR 1.7B (`qwen-asr`) | Qwen3-TTS 1.7B Base (`qwen-tts`) |
-| `nvidia` | NVIDIA       | Nemotron 3.5 Super VL 120B-A12B NVFP4 (TP=2 or TP=1) | Nemotron 3.5 ASR Streaming 0.6B (`nemotron-asr`) | Magpie TTS Multilingual 357M (`magpie-tts`) |
+| `nvidia` | NVIDIA       | Nemotron 3.5 Super VL 120B-A12B NVFP4 (TP=1) | Nemotron 3.5 ASR Streaming 0.6B (`nemotron-asr`) | Magpie TTS Multilingual 357M (`magpie-tts`) |
 
-Start one profile at a time. Both profiles publish an LLM on host port `8005`
-and a TTS on host port `8025`, so they cannot run simultaneously.
+Start one profile at a time. Both profiles are complete stacks: the LLM runs on
+the primary GPU and the STT/TTS services share the secondary GPU. Their LLM
+ports differ (`8005` for qwen, `8007` for nvidia), but both publish TTS on
+`8025`, so they cannot run simultaneously.
 
 > The qwen LLM is an NVIDIA FP4 quantization of a Qwen model. It is grouped
 > under `qwen` because the model family is Qwen. NVIDIA-quantized checkpoints
@@ -82,11 +84,10 @@ Model directories (absolute paths on the Docker host):
 
 | Variable | Used by |
 |---|---|
-| `QWEN38_MODEL_DIR` | `qwen38-flash-next-fp4-local`, `...-tp2` |
+| `QWEN38_MODEL_DIR` | `qwen38-flash-next-fp4-local` |
 | `QWEN_ASR_MODEL_DIR` | `qwen-asr` |
 | `QWEN_TTS_MODEL_DIR` | `qwen-tts` |
-| `NEMOTRON_VL_MODEL_DIR` | `nemotron-super-vl-120b-nvfp4`, `...-tp1` |
-| `NEMOTRON_VL_DRAFT_DIR` | DFlash drafter for `nemotron-super-vl-120b-nvfp4` |
+| `NEMOTRON_VL_MODEL_DIR` | `nemotron-super-vl-120b-nvfp4-tp1` |
 | `NEMOTRON_ASR_MODEL_DIR` | `nemotron-asr` |
 | `MAGPIE_TTS_MODEL_DIR` | `magpie-tts` |
 
@@ -110,8 +111,8 @@ Other settings:
 | Variable | Default | Purpose |
 |---|---|---|
 | `HF_TOKEN` | empty | Hugging Face token for gated/private repos. Optional when checkpoints are already on disk. |
-| `GPU_PRIMARY` | `0` | Primary GPU: Qwen LLM, `nemotron-asr`, and the first rank of the NVIDIA TP=2 LLM. |
-| `GPU_SECONDARY` | `1` | Secondary GPU: `qwen-asr`, `qwen-tts`, `magpie-tts`, the second rank of the NVIDIA TP=2 LLM, and `nemotron-super-vl-120b-nvfp4-tp1`. |
+| `GPU_PRIMARY` | `0` | Primary GPU: the LLM (`qwen38-flash-next-fp4-local` or `nemotron-super-vl-120b-nvfp4-tp1`). |
+| `GPU_SECONDARY` | `1` | Secondary GPU: the STT/TTS services (`qwen-asr`, `qwen-tts`, `nemotron-asr`, `magpie-tts`). |
 | `MAGPIE_TTS_IMAGE` | `magpie-tts:latest` | Local image or registry copy used by `magpie-tts` and `nemotron-asr`. |
 
 The helper scripts read the same model variables. Load `.env` into the shell
@@ -128,9 +129,9 @@ set +a
 
 - Linux host with Docker Engine and Docker Compose v2.
 - NVIDIA driver + `nvidia-container-toolkit` (`runtime: nvidia`).
-- Two NVIDIA GPUs are assumed by the TP=2 services (the recipes were tuned on
-  2x RTX PRO 6000 Blackwell 96 GB). TP=1 services use a single GPU. Override
-  `GPU_PRIMARY` / `GPU_SECONDARY` if your indices differ.
+- Two NVIDIA GPUs: the LLM runs on `GPU_PRIMARY` and the voice services share
+  `GPU_SECONDARY` (the recipes were tuned on 2x RTX PRO 6000 Blackwell 96 GB).
+  Override `GPU_PRIMARY` / `GPU_SECONDARY` if your indices differ.
 - Model weights pre-downloaded on the host. The containers mount them
   read-only and do **not** download at runtime.
 - Optional: a Hugging Face token in `HF_TOKEN` for gated repositories.
@@ -145,9 +146,6 @@ HF_HUB_DISABLE_XET=1 hf download nvidia/Qwen3.8-Flash-Next-FP4-Local \
 
 HF_HUB_DISABLE_XET=1 hf download nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 \
   --local-dir "$NEMOTRON_VL_MODEL_DIR"
-
-HF_HUB_DISABLE_XET=1 hf download nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr \
-  --local-dir "$NEMOTRON_VL_DRAFT_DIR"
 ```
 
 The `hf` CLI uses `HF_TOKEN` from the environment when it is set.
@@ -190,9 +188,8 @@ Script overrides:
 | `qwen38-flash-next-fp4-local` | `qwen` | LLM (TP=1) | 8005 | `GPU_PRIMARY` | ~0.96 of that GPU |
 | `qwen-asr` | `qwen` | STT | 8024 | `GPU_SECONDARY` | 0.15 |
 | `qwen-tts` | `qwen` | TTS | 8025 | `GPU_SECONDARY` | 0.09 + 0.06 |
-| `nemotron-super-vl-120b-nvfp4` | `nvidia` | LLM (TP=2) | 8005 | both | 0.65 of both |
-| `nemotron-super-vl-120b-nvfp4-tp1` | `nvidia` | LLM (TP=1) | 8007 | `GPU_SECONDARY` | 0.96 |
-| `nemotron-asr` | `nvidia` | STT | 8026 | `GPU_PRIMARY` | small |
+| `nemotron-super-vl-120b-nvfp4-tp1` | `nvidia` | LLM (TP=1) | 8007 | `GPU_PRIMARY` | 0.96 |
+| `nemotron-asr` | `nvidia` | STT | 8026 | `GPU_SECONDARY` | small |
 | `magpie-tts` | `nvidia` | TTS | 8025 | `GPU_SECONDARY` | small |
 
 ### What can run together
@@ -201,18 +198,16 @@ Script overrides:
   ~0.96 of `GPU_PRIMARY`; `qwen-asr` (0.15) and `qwen-tts` (0.09 + 0.06) share
   `GPU_SECONDARY`. Start the whole profile with one command:
   `docker compose --profile qwen up -d`.
-- **nvidia:** `nemotron-super-vl-120b-nvfp4` reserves 0.65 of each GPU, leaving
-  roughly 35% free per GPU. The full NVIDIA stack can run together:
-  TP=2 LLM + `nemotron-asr` + `magpie-tts`.
-  The TP=1 variant (`8007`, 0.96 of `GPU_SECONDARY`) is an alternative to the
-  TP=2 LLM, not an addition.
+- **nvidia:** the complete stack is designed to run together. The LLM reserves
+  ~0.96 of `GPU_PRIMARY`; `nemotron-asr` and `magpie-tts` share
+  `GPU_SECONDARY`. Start the whole profile with one command:
+  `docker compose --profile nvidia up -d`.
 
-The qwen profile can be started as a whole. For the nvidia profile, name the
-service because the two LLM variants are mutually exclusive:
+Both profiles are complete stacks and can be started at once:
 
 ```bash
 docker compose --profile qwen   up -d
-docker compose --profile nvidia up -d <service>
+docker compose --profile nvidia up -d
 ```
 
 ## Quick start: Qwen profile
@@ -268,14 +263,11 @@ curl -s -X POST http://localhost:8025/v1/audio/speech \
 ```bash
 cd docker
 
-# LLM, both GPUs (TP=2). First start can take a long time (JIT + ~70 GiB load).
-docker compose --profile nvidia up -d nemotron-super-vl-120b-nvfp4
-
-# STT + TTS can run alongside it.
-docker compose --profile nvidia up -d nemotron-asr magpie-tts
+# LLM on GPU_PRIMARY; ASR + TTS on GPU_SECONDARY.
+docker compose --profile nvidia up -d
 
 docker compose ps
-curl -s http://localhost:8005/health
+curl -s http://localhost:8007/health
 curl -s http://localhost:8026/ready
 curl -s http://localhost:8025/ready
 ```
@@ -283,18 +275,6 @@ curl -s http://localhost:8025/ready
 Chat request (thinking is enabled by default, allow generous `max_tokens`):
 
 ```bash
-curl -s http://localhost:8005/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"nemotron-3.5-super-vl","max_tokens":2048,
-       "messages":[{"role":"user","content":"hello"}]}' \
-  | jq -r .choices[0].message.content
-```
-
-Single-GPU alternative (port 8007; do not run with the TP=2 LLM):
-
-```bash
-docker compose --profile nvidia up -d nemotron-super-vl-120b-nvfp4-tp1
-
 curl -s http://localhost:8007/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"nemotron-3.5-super-vl-tp1","max_tokens":2048,
@@ -349,11 +329,8 @@ OPENAI_TTS_SAMPLE_RATE=24000
 
 ```dotenv
 # LLM
-LLM_URL=http://127.0.0.1:8005
-LLM_MODEL=nemotron-3.5-super-vl
-# For the TP=1 variant:
-# LLM_URL=http://127.0.0.1:8007
-# LLM_MODEL=nemotron-3.5-super-vl-tp1
+LLM_URL=http://127.0.0.1:8007
+LLM_MODEL=nemotron-3.5-super-vl-tp1
 
 # STT (Nemotron 3.5 ASR)
 STT_PROVIDER=openai
@@ -399,9 +376,10 @@ docker compose logs <llm-service> 2>&1 \
 ## Migrating from the previous stack
 
 Container names mostly match the old stack. `qwen-asr` and `qwen-tts` replace
-the old `seneschal-asr` and `seneschal-tts`, and
-`qwen38-flash-next-fp4-local-tp2` was removed because it does not fit alongside
-the voice services. The old stack and this stack cannot run at the same time.
+the old `seneschal-asr` and `seneschal-tts`. The TP=2 variants
+`qwen38-flash-next-fp4-local-tp2` and `nemotron-super-vl-120b-nvfp4` were
+removed: the LLM now uses a single GPU and the voice services use the other.
+The old stack and this stack cannot run at the same time.
 Stop the old services before starting these. Set `OLD_STACK_DIR` to the
 directory that contains the previous compose file:
 
@@ -423,9 +401,9 @@ from the old `docker-compose.yml`. This repository does not modify that file.
 
 ## Notes and caveats
 
-- **Exclusive services:** both profiles use host ports `8005` (LLM) and `8025`
-  (TTS). `qwen-tts` and `magpie-tts` are mutually exclusive even within a
-  single vendor run because they share `8025`.
+- **Exclusive services:** the LLM ports differ (`8005` for qwen, `8007` for
+  nvidia), but both profiles publish TTS on `8025`. `qwen-tts` and `magpie-tts`
+  are mutually exclusive, so run one profile at a time.
 - **`qwen-tts` served name:** the vLLM-Omni `qwen3_tts` pipeline does not
   accept a global `--served-model-name`, so the served model is `/model`.
 - **`qwen-tts` voices:** the Base checkpoint has no presets. Register a voice
