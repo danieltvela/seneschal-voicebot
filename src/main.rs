@@ -263,7 +263,7 @@ async fn async_main() -> Result<()> {
             }
             _ => {
                 eprintln!(
-                    "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via an OpenAI-compatible API, needs --features openai-tts)",
+                    "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (via an OpenAI-compatible API, needs --features openai-tts)",
                     config.tts_provider
                 );
                 std::process::exit(1);
@@ -1190,7 +1190,7 @@ async fn async_main() -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (Qwen3-TTS via an OpenAI-compatible API, needs --features openai-tts)",
+                "Unknown TTS_PROVIDER '{}'. Supported values: avspeech (macOS AVSpeechSynthesizer, needs --features avspeech), kokoro (local ONNX, needs --features kokoro), openai (via an OpenAI-compatible API, needs --features openai-tts)",
                 config.tts_provider
             );
         }

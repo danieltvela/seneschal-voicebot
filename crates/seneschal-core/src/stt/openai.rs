@@ -127,8 +127,6 @@ pub struct OpenAiSttProvider<D: SpeechDetector = SileroDetector> {
 
 /// Live-prefix request in flight for the open segment.
 struct PendingLive {
-    /// Segment samples covered by the request's audio.
-    covered_len: usize,
     token: CancellationToken,
 }
 
@@ -358,7 +356,6 @@ impl<D: SpeechDetector + 'static> OpenAiSttProvider<D> {
                 live.covered_upto = buf.len();
                 let token = CancellationToken::new();
                 live.pending.push(PendingLive {
-                    covered_len: buf.len(),
                     token: token.clone(),
                 });
                 self.inflight.fetch_add(1, Ordering::SeqCst);

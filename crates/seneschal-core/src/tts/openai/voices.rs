@@ -145,7 +145,7 @@ async fn fetch_models_voices(
 pub async fn print_voices(client: &reqwest::Client, base_url: &str) -> OpenAiTtsResult<()> {
     let resp = fetch_voices(client, base_url).await?;
 
-    println!("Available voices for TTS provider: openai (Qwen3-TTS via an OpenAI-compatible API)");
+    println!("Available voices for TTS provider: openai (via an OpenAI-compatible API)");
     println!("Service: {base_url}");
     println!();
     println!(
