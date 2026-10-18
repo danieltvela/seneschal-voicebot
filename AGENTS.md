@@ -75,6 +75,7 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 | Topic | File |
 |-------|------|
 | STT/VAD pipeline contract (P1–P6) | [`doc/stt-contract.md`](doc/stt-contract.md) |
+| End-of-speech (EOT) detection research | [`doc/end-of-turn-detection.md`](doc/end-of-turn-detection.md) |
 | Module boundaries & legacy modules | [`doc/modules.md`](doc/modules.md) |
 | Environment variables | [`doc/env-vars.md`](doc/env-vars.md) |
 | Build features & dependencies | [`doc/build-features.md`](doc/build-features.md) |
