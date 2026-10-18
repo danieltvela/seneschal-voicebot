@@ -57,15 +57,16 @@ Read from `.env` (dotenvy loads automatically):
 | `LLM_CONTEXT_TOKENS` | `8192` | Context window size |
 | `LLM_CONSOLIDATION_THRESHOLD_PCT` | `80` | % threshold for consolidation |
 | `LLM_SUMMARY_KEEP_TURNS` | `6` | Recent turns to keep after consolidation |
-| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform), `avspeech` (macOS AVSpeechSynthesizer) or `openai` (Qwen3-TTS via an OpenAI-compatible service, requires `--features openai-tts`) |
+| `TTS_PROVIDER` | `kokoro` | TTS backend: `kokoro` (default, ONNX, cross-platform), `avspeech` (macOS AVSpeechSynthesizer) or `openai` (any OpenAI-compatible `POST /v1/audio/speech` service — vLLM-Omni/Qwen3-TTS or NeMo-Speech.cpp/MagpieTTS; requires `--features openai-tts`) |
 | `AVSPEECH_VOICE` | `""` | macOS AVSpeech voice name. Empty string = auto-select first available system voice. At runtime, `avspeech.rs` picks the first voice on the system when this is empty or whitespace-only. |
 | `AVSPEECH_RATE` | `0.55` | Speech rate (0.0–1.0) |
 | `OPENAI_TTS_URL` | `http://localhost:8025` | Base URL of the OpenAI-compatible speech service (`TTS_PROVIDER=openai`) |
-| `OPENAI_TTS_VOICE` | `vivian` | Preset Qwen3-TTS voice; list with `--list-voices` |
-| `OPENAI_TTS_LANGUAGE` | `auto` | Language hint; `auto` is sent as `"Auto"` so the model adapts per utterance (ES/EN code-switching) |
-| `OPENAI_TTS_INSTRUCTIONS` | _(empty)_ | Optional natural-language style/emotion instruction applied to every request |
-| `OPENAI_TTS_SPEED` | `0.0` | Speech speed; `0` omits the field (service default) |
-| `OPENAI_TTS_WARMUP` | `false` | Warm up the service at startup (the first request after container start takes ~90 s) |
+| `OPENAI_TTS_VOICE` | `vivian` | Voice name; list with `--list-voices` (Qwen3-TTS presets, or a MagpieTTS speaker such as `John`/`Sofia`). `default` selects the service's configured speaker |
+| `OPENAI_TTS_LANGUAGE` | `auto` | Language hint; `auto` is sent as `"Auto"` so the model adapts per utterance (ES/EN code-switching). **MagpieTTS does not accept `Auto`** — set a real code (e.g. `en-US`, `es-ES`) or the request returns 400 |
+| `OPENAI_TTS_INSTRUCTIONS` | _(empty)_ | Optional natural-language style/emotion instruction applied to every request (not supported by MagpieTTS; ignored) |
+| `OPENAI_TTS_SPEED` | `0.0` | Speech speed; `0` omits the field (service default). MagpieTTS accepts only `1.0`, so leave at the default |
+| `OPENAI_TTS_SAMPLE_RATE` | `24000` | PCM output rate (Hz) requested from the service and reported to the pipeline. Set `22050` for MagpieTTS/NanoCodec (NeMo-Speech.cpp); `0` omits the field and assumes the 24000 default |
+| `OPENAI_TTS_WARMUP` | `false` | Warm up the service at startup (the first request after a vLLM-Omni container start takes ~90 s; not needed for NeMo-Speech.cpp, which warms itself) |
 | `OPENAI_TTS_TIMEOUT_MS` | `120000` | Per-request HTTP timeout; must cover the ~90 s warmup |
 
 > **Qwen3-TTS checkpoint limitation (issue #16):** the service currently runs
@@ -73,6 +74,15 @@ Read from `.env` (dotenvy loads automatically):
 > Voice cloning (`task_type=Base`) and VoiceDesign require separate checkpoints
 > and are not supported by this integration yet — see
 > [`doc/tts-openai.md`](tts-openai.md).
+
+> **NVIDIA NeMo-Speech.cpp / MagpieTTS (issue #20):** the same `openai` provider
+> drives a `nemo-speech serve` container. Differences to configure:
+> `OPENAI_TTS_SAMPLE_RATE=22050` (NanoCodec rate — otherwise audio plays ~9%
+> fast), `OPENAI_TTS_LANGUAGE` as a real code (`en-US`) since `Auto` is rejected,
+> and a real speaker name from `GET /v1/models` (`John`, `Sofia`, `Aria`,
+> `Jason`, `Leo`) or `default`. Voice discovery falls back to `GET /v1/models`
+> when `/v1/audio/voices` is absent; responses are buffered (no true streaming),
+> and `instructions`/`speed` are ignored.
 | `TAVILY_API_KEY` | — | Tavily Search API key. Preferred `quick_search` backend when set (wins over Brave/SearXNG) |
 | `TAVILY_MAX_TOKENS` | `512` | Tokens for Tavily's AI-generated answer (0 = raw results only) |
 | `EXA_API_KEY` | — | Exa API key. Used by `quick_search` only when `TAVILY_API_KEY` is not set |

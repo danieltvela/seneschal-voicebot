@@ -399,6 +399,12 @@ pub struct Config {
     /// `speed` only when > 0.
     #[serde(default)]
     pub openai_tts_speed: f32,
+    /// PCM sample rate in Hz (OPENAI_TTS_SAMPLE_RATE, default 24000). Sent as
+    /// `sample_rate` and reported to the pipeline. Set 22050 for NVIDIA
+    /// MagpieTTS/NanoCodec served by NeMo-Speech.cpp (issue #20); 0 lets the
+    /// service choose and assumes the 24000 default.
+    #[serde(default = "default_openai_tts_sample_rate")]
+    pub openai_tts_sample_rate: u32,
     /// Warm up the service at startup with a throwaway request
     /// (OPENAI_TTS_WARMUP, default false). The first request after container
     /// start takes ~90 s; warming up avoids that latency on the first turn.
@@ -712,6 +718,12 @@ fn default_openai_tts_timeout_ms() -> u64 {
     120_000
 }
 
+/// PCM rate of the Qwen3-TTS deployment (issue #16). MagpieTTS/NanoCodec emits
+/// 22050 Hz and must override this (issue #20).
+fn default_openai_tts_sample_rate() -> u32 {
+    24_000
+}
+
 /// Split a raw WAKE_WORD value into its individual wake words (issue #228).
 ///
 /// Entries are separated by commas, trimmed, and empty entries are dropped.
@@ -1015,6 +1027,9 @@ impl Config {
         merge_env_string(&mut self.openai_tts_instructions, "OPENAI_TTS_INSTRUCTIONS");
         if let Ok(v) = env::var("OPENAI_TTS_SPEED") {
             self.openai_tts_speed = v.parse().context("Invalid OPENAI_TTS_SPEED")?;
+        }
+        if let Ok(v) = env::var("OPENAI_TTS_SAMPLE_RATE") {
+            self.openai_tts_sample_rate = v.parse().context("Invalid OPENAI_TTS_SAMPLE_RATE")?;
         }
         if let Ok(v) = env::var("OPENAI_TTS_WARMUP") {
             self.openai_tts_warmup = v == "1" || v.to_lowercase() == "true";

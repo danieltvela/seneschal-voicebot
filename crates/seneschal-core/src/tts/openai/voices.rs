@@ -5,6 +5,11 @@
 //! checkpoint accepts. We keep a small label table for the Qwen3-TTS
 //! CustomVoice presets so `--list-voices` is readable, and fall back to
 //! discovered-but-unlabelled entries when the service reports more voices.
+//!
+//! Not every OpenAI-compatible server has `/v1/audio/voices`: NVIDIA
+//! NeMo-Speech.cpp (MagpieTTS, issue #20) advertises its `speech` model's
+//! `voices`/`languages` through `GET /v1/models` instead. When the legacy route
+//! is absent we fall back to that inventory.
 
 use serde::Deserialize;
 
@@ -49,8 +54,43 @@ pub struct UploadedVoice {
     pub ref_text: Option<String>,
 }
 
+/// Response shape of `GET /v1/models` (only the fields we need). OpenAI lists
+/// models under `data`; each entry may carry the speech model's `voices` and
+/// `languages` (NeMo-Speech.cpp, issue #20).
+#[derive(Debug, Deserialize)]
+struct ModelsResponse {
+    #[serde(default)]
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelEntry {
+    #[serde(default)]
+    capability: String,
+    #[serde(default)]
+    voices: Vec<String>,
+}
+
 /// Fetch the list of voices the service currently offers.
+///
+/// Tries the vLLM-Omni-style `GET /v1/audio/voices` first; when that route is
+/// missing (e.g. NeMo-Speech.cpp) it reads the `speech` model's `voices` from
+/// `GET /v1/models`.
 pub async fn fetch_voices(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> OpenAiTtsResult<VoicesResponse> {
+    match fetch_audio_voices(client, base_url).await {
+        Ok(resp) => Ok(resp),
+        Err(primary_err) => match fetch_models_voices(client, base_url).await {
+            Ok(resp) if !resp.voices.is_empty() => Ok(resp),
+            _ => Err(primary_err),
+        },
+    }
+}
+
+/// `GET /v1/audio/voices` (vLLM-Omni / Qwen3-TTS).
+async fn fetch_audio_voices(
     client: &reqwest::Client,
     base_url: &str,
 ) -> OpenAiTtsResult<VoicesResponse> {
@@ -69,6 +109,38 @@ pub async fn fetch_voices(
         .map_err(|e| OpenAiTtsError::Decode(format!("invalid /v1/audio/voices response: {e}")))
 }
 
+/// `GET /v1/models`, taking the voices of the `speech` capability
+/// (NeMo-Speech.cpp).
+async fn fetch_models_voices(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> OpenAiTtsResult<VoicesResponse> {
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let resp = client.get(&url).send().await.map_err(map_reqwest)?;
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let message = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no body>".to_string());
+        return Err(OpenAiTtsError::Service { status, message });
+    }
+    let models = resp
+        .json::<ModelsResponse>()
+        .await
+        .map_err(|e| OpenAiTtsError::Decode(format!("invalid /v1/models response: {e}")))?;
+    let voices = models
+        .data
+        .into_iter()
+        .find(|m| m.capability == "speech")
+        .map(|m| m.voices)
+        .unwrap_or_default();
+    Ok(VoicesResponse {
+        voices,
+        uploaded_voices: Vec::new(),
+    })
+}
+
 /// Print a human-readable voice table to stdout (`--list-voices`).
 pub async fn print_voices(client: &reqwest::Client, base_url: &str) -> OpenAiTtsResult<()> {
     let resp = fetch_voices(client, base_url).await?;
@@ -82,7 +154,7 @@ pub async fn print_voices(client: &reqwest::Client, base_url: &str) -> OpenAiTts
     );
     println!("{}", "-".repeat(45));
     for name in &resp.voices {
-        let (label, langs) = preset_meta(name).unwrap_or(("(uploaded)", "—"));
+        let (label, langs) = preset_meta(name).unwrap_or(("(service)", "—"));
         println!("{:<14} {:<18} {:<10}", name, label, langs);
     }
     println!("\nTotal: {} voices", resp.voices.len());
@@ -105,6 +177,13 @@ pub async fn print_voices(client: &reqwest::Client, base_url: &str) -> OpenAiTts
     Ok(())
 }
 
+/// OpenAI voice aliases some servers accept as a shortcut to their configured
+/// default speaker (NeMo-Speech.cpp). They are not real voices but must not be
+/// reported as unknown.
+const STANDARD_ALIASES: &[&str] = &[
+    "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse",
+];
+
 /// Validate that `voice` is in the service's accepted list. Returns the list of
 /// supported voices when it is not, so the caller can print alternatives.
 pub async fn validate_voice(
@@ -112,8 +191,15 @@ pub async fn validate_voice(
     base_url: &str,
     voice: &str,
 ) -> OpenAiTtsResult<()> {
+    if voice.eq_ignore_ascii_case("default")
+        || STANDARD_ALIASES
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(voice))
+    {
+        return Ok(());
+    }
     let resp = fetch_voices(client, base_url).await?;
-    if resp.voices.iter().any(|v| v == voice)
+    if resp.voices.iter().any(|v| v.eq_ignore_ascii_case(voice))
         || resp.uploaded_voices.iter().any(|v| v.name == voice)
     {
         return Ok(());

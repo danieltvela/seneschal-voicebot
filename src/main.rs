@@ -90,6 +90,7 @@ fn openai_tts_config(config: &Config) -> OpenAiTtsConfig {
         language: config.openai_tts_language.clone(),
         instructions: config.openai_tts_instructions.clone(),
         speed: config.openai_tts_speed,
+        sample_rate: config.openai_tts_sample_rate,
         timeout_ms: config.openai_tts_timeout_ms,
     }
 }

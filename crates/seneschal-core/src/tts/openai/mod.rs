@@ -1,14 +1,21 @@
 //! OpenAI-compatible TTS provider (issue #16).
 //!
-//! Consumes an OpenAI-compatible speech API (`POST /v1/audio/speech`,
-//! `GET /v1/audio/voices`). The current local deployment is a vLLM-Omni
-//! container, but the provider targets the API shape, not that runtime. Audio
-//! is streamed to the caller as raw 16-bit mono PCM chunks so playback can
-//! start before the sentence finishes synthesising.
+//! Consumes an OpenAI-compatible speech API (`POST /v1/audio/speech`). The
+//! provider targets the API shape, not a specific runtime, so it serves both
+//! the original vLLM-Omni container and NVIDIA NeMo-Speech.cpp (MagpieTTS +
+//! NanoCodec, issue #20). Audio is streamed to the caller as raw 16-bit mono
+//! PCM chunks so playback can start before the sentence finishes synthesising.
 //!
-//! Verified against `vllm/vllm-omni:qwen-image21` serving
-//! `Qwen3-TTS-12Hz-1.7B-CustomVoice` on port 8025: ~24 kHz output, first
-//! non-silent sample ~0.4 s, ~5× real-time throughput.
+//! Verified against:
+//! - `vllm/vllm-omni:qwen-image21` serving `Qwen3-TTS-12Hz-1.7B-CustomVoice`:
+//!   ~24 kHz output, first non-silent sample ~0.4 s, ~5× real-time throughput.
+//! - `NeMo-Speech.cpp` serving MagpieTTS Multilingual + NanoCodec: 22050 Hz
+//!   output, whole-utterance buffered responses (`stream`/`stream_format` are
+//!   accepted but ignored), voices/languages listed by `GET /v1/models`.
+//!
+//! Because the runtimes disagree on PCM rate and voice discovery, the sample
+//! rate is configurable (`OPENAI_TTS_SAMPLE_RATE`) and voice discovery falls
+//! back to `GET /v1/models` when `/v1/audio/voices` is absent.
 
 pub mod error;
 pub mod pcm;
@@ -22,7 +29,9 @@ pub use voices::{UploadedVoice, VoicesResponse};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-/// Sample rate of the PCM returned by Qwen3-TTS in `response_format=pcm`.
+/// Default sample rate of the PCM returned in `response_format=pcm` by the
+/// Qwen3-TTS deployment. Overridden per deployment via
+/// `OPENAI_TTS_SAMPLE_RATE` (MagpieTTS/NanoCodec emits 22050 Hz).
 pub const OPENAI_TTS_SAMPLE_RATE: u32 = 24_000;
 
 /// Bounded depth (in chunks) of the synthesis → playback channel. Provides
@@ -43,6 +52,10 @@ pub struct OpenAiTtsConfig {
     pub instructions: String,
     /// Speech speed (> 0 is forwarded; 0 omits the field).
     pub speed: f32,
+    /// PCM sample rate (Hz) requested from the service and reported to the
+    /// pipeline. `0` omits the field and falls back to
+    /// [`OPENAI_TTS_SAMPLE_RATE`]. Set 22050 for MagpieTTS (issue #20).
+    pub sample_rate: u32,
     /// Per-request timeout (must cover the ~90 s container warmup).
     pub timeout_ms: u64,
 }
@@ -54,6 +67,16 @@ impl OpenAiTtsConfig {
             "Auto".to_string()
         } else {
             self.language.clone()
+        }
+    }
+
+    /// PCM rate reported to the pipeline and requested from the service. `0`
+    /// falls back to [`OPENAI_TTS_SAMPLE_RATE`].
+    fn effective_sample_rate(&self) -> u32 {
+        if self.sample_rate == 0 {
+            OPENAI_TTS_SAMPLE_RATE
+        } else {
+            self.sample_rate
         }
     }
 }
@@ -71,6 +94,8 @@ struct SpeechRequest<'a> {
     instructions: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sample_rate: Option<u32>,
 }
 
 /// Streaming synthesis handle handed to the pipeline.
@@ -158,7 +183,7 @@ impl OpenAiTts {
 
     /// Sample rate of the produced audio.
     pub fn sample_rate(&self) -> u32 {
-        OPENAI_TTS_SAMPLE_RATE
+        self.cfg.effective_sample_rate()
     }
 
     /// Start streaming synthesis of `text`.
@@ -185,6 +210,13 @@ impl OpenAiTts {
             },
             speed: if self.cfg.speed > 0.0 {
                 Some(self.cfg.speed)
+            } else {
+                None
+            },
+            // Only requested when explicitly configured: the original Qwen3-TTS
+            // deployment ignores the field and always emits 24 kHz.
+            sample_rate: if self.cfg.sample_rate > 0 {
+                Some(self.cfg.sample_rate)
             } else {
                 None
             },
@@ -224,7 +256,7 @@ impl OpenAiTts {
 
         Ok(OpenAiTtsStream {
             rx,
-            sample_rate: OPENAI_TTS_SAMPLE_RATE,
+            sample_rate: self.cfg.effective_sample_rate(),
         })
     }
 

@@ -194,12 +194,13 @@ kokoro_language = "en-us"
 kokoro_speed = 1.3
 
 # OpenAI-compatible TTS (issue #16) — usado cuando tts_provider = "openai"
-# (hoy servido por vLLM-Omni / Qwen3-TTS en :8025)
+# (vLLM-Omni / Qwen3-TTS o NeMo-Speech.cpp / MagpieTTS en :8025; issue #20)
 openai_tts_url = "http://localhost:8025"
 openai_tts_voice = "vivian"
-openai_tts_language = "auto"      # -> se envia "Auto" (adaptativo ES/EN)
+openai_tts_language = "auto"      # -> se envia "Auto" (adaptativo ES/EN; MagpieTTS NO lo acepta)
 openai_tts_instructions = ""
 openai_tts_speed = 0.0            # 0 = no enviar speed
+openai_tts_sample_rate = 24000    # 22050 con MagpieTTS/NanoCodec (NeMo-Speech.cpp)
 openai_tts_warmup = false
 openai_tts_timeout_ms = 120000    # cubre el warmup de ~90 s
 

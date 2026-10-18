@@ -17,6 +17,7 @@ fn cfg(url: &str) -> OpenAiTtsConfig {
         language: "auto".to_string(),
         instructions: String::new(),
         speed: 0.0,
+        sample_rate: 24_000,
         timeout_ms: 10_000,
     }
 }
@@ -29,11 +30,21 @@ fn live_cfg(url: &str) -> OpenAiTtsConfig {
     OpenAiTtsConfig {
         base_url: url.to_string(),
         voice: std::env::var("OPENAI_TTS_TEST_VOICE").unwrap_or_else(|_| "vivian".to_string()),
-        language: "auto".to_string(),
+        language: std::env::var("OPENAI_TTS_TEST_LANGUAGE").unwrap_or_else(|_| "auto".to_string()),
         instructions: String::new(),
         speed: 0.0,
+        sample_rate: live_sample_rate(),
         timeout_ms: 180_000,
     }
+}
+
+/// PCM rate of the live service under test (default 24000; MagpieTTS via
+/// NeMo-Speech.cpp is 22050 — set `OPENAI_TTS_TEST_SAMPLE_RATE=22050`).
+fn live_sample_rate() -> u32 {
+    std::env::var("OPENAI_TTS_TEST_SAMPLE_RATE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24_000)
 }
 
 /// Build raw i16-LE PCM bytes.
@@ -97,9 +108,9 @@ async fn sends_expected_request_shape() {
     assert_eq!(json["response_format"], "pcm");
     assert_eq!(json["stream"], true);
     assert_eq!(json["stream_format"], "audio");
-    // `auto` is sent as the literal `Auto`, and no fixed sample rate.
+    // `auto` is sent as the literal `Auto`; the configured PCM rate is requested.
     assert_eq!(json["language"], "Auto");
-    assert!(json.get("sample_rate").is_none());
+    assert_eq!(json["sample_rate"], 24_000);
     assert!(json.get("speed").is_none());
     assert_eq!(json["instructions"], "habla con entusiasmo");
 }
@@ -138,6 +149,78 @@ async fn lists_voices() {
 
     let tts = OpenAiTts::new(cfg(&server.uri())).unwrap();
     tts.list_voices().await.unwrap();
+}
+
+/// NeMo-Speech.cpp has no `/v1/audio/voices`; voices come from `GET /v1/models`
+/// (issue #20).
+#[tokio::test]
+async fn discovers_voices_from_models_when_audio_voices_absent() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/audio/voices"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "magpietts", "capability": "speech", "voices": ["John", "Sofia"]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let tts = OpenAiTts::new(cfg(&server.uri())).unwrap();
+    tts.list_voices().await.unwrap();
+
+    let mut c = cfg(&server.uri());
+    c.voice = "John".to_string();
+    assert!(
+        OpenAiTts::new(c.clone())
+            .unwrap()
+            .verify_voice()
+            .await
+            .is_ok()
+    );
+    // OpenAI aliases / `default` map to the server's configured speaker.
+    c.voice = "alloy".to_string();
+    assert!(
+        OpenAiTts::new(c.clone())
+            .unwrap()
+            .verify_voice()
+            .await
+            .is_ok()
+    );
+    c.voice = "missing".to_string();
+    assert!(OpenAiTts::new(c).unwrap().verify_voice().await.is_err());
+}
+
+/// The configured sample rate is reported to the pipeline (issue #20).
+#[tokio::test]
+async fn reports_configured_sample_rate() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/speech"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(pcm(&[0; 8]))
+                .append_header("content-type", "audio/pcm"),
+        )
+        .mount(&server)
+        .await;
+
+    let mut c = cfg(&server.uri());
+    c.sample_rate = 22_050;
+    let tts = OpenAiTts::new(c).unwrap();
+    assert_eq!(tts.sample_rate(), 22_050);
+    let stream = tts.synthesize_stream("Hola.").await.unwrap();
+    assert_eq!(stream.sample_rate, 22_050);
+
+    let requests = server.received_requests().await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(json["sample_rate"], 22_050);
 }
 
 #[tokio::test]
@@ -197,7 +280,7 @@ async fn empty_text_is_rejected() {
 // `vivian`); a Base checkpoint deployment requires a registered voice.
 // `make test-openai` wraps this and skips when the service is unreachable.
 
-/// Live check: first audio chunk arrives quickly and carries 24 kHz PCM.
+/// Live check: first audio chunk arrives quickly and carries the configured PCM.
 #[tokio::test]
 #[ignore = "requires a running OpenAI-compatible TTS service (OPENAI_TTS_TEST_URL)"]
 async fn openai_live_first_chunk_latency_and_format() {
@@ -210,7 +293,7 @@ async fn openai_live_first_chunk_latency_and_format() {
         .synthesize_stream("Hola, esta es una prueba de integración del proveedor de voz.")
         .await
         .expect("service should accept the request");
-    assert_eq!(stream.sample_rate, 24_000);
+    assert_eq!(stream.sample_rate, live_sample_rate());
 
     let mut first_chunk_ms = None;
     let mut total = 0usize;
