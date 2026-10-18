@@ -69,6 +69,12 @@
        d="M 34,16.923077 H 94 V 119.07692 L 64,101.04977 34,119.07692 Z"
        id="path1"
        style="fill:#ffffff;fill-opacity:1;stroke-width:1.22567" />
+    <!-- Inner border: same outline as the standard, inset 4 units -->
+    <path
+       d="M 38,20.92 H 90 V 112.01 L 64,96.38 38,112.01 Z"
+       id="inner-border"
+       style="fill:none;stroke:#000000;stroke-width:1.5;stroke-linejoin:miter;stroke-opacity:1"
+       inkscape:label="inner border" />
   </g>
   <path
      sodipodi:type="star"

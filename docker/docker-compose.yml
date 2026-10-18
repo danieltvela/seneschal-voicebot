@@ -1,0 +1,547 @@
+# ==========================================================================
+# Seneschal - local model services (LLM / STT / TTS)
+# ==========================================================================
+# Moved from the previous host-level docker-compose.yml.
+#
+# Two vendor profiles:
+#
+#   qwen    Qwen models published by Qwen (the Qwen3.8 FP4 checkpoint is
+#           NVIDIA's quantization of a Qwen model, so it lives here).
+#   nvidia  Models published by NVIDIA: Nemotron VL (LLM), Nemotron ASR
+#           (STT) and Magpie TTS (TTS).
+#
+# Start ONE vendor at a time. The qwen profile is a complete stack (LLM on the
+# primary GPU, STT/TTS on the secondary GPU), so it can be started at once:
+#
+#   docker compose --profile qwen up -d
+#
+# The nvidia profile has mutually exclusive LLM variants; start its services
+# by name (see README.md for the VRAM/port matrix):
+#
+#   docker compose --profile nvidia up -d <service>
+#
+# All host paths, the Hugging Face token and the GPU indices are read from
+# environment variables. Copy .env.example to .env and fill it in before
+# starting anything (see README.md, "Configuration").
+#
+# Image-generation services from the source file (Qwen-Image, Noct-Q) and
+# NVIDIA-quantized checkpoints of non-Qwen/non-NVIDIA model families (GLM,
+# Gemma) were intentionally left out.
+# ==========================================================================
+name: seneschal-models
+
+services:
+  # ==========================================================================
+  # PROFILE "qwen"
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # Qwen3.8-Flash-Next-FP4-Local (NVIDIA checkpoint) - LLM, one GPU, :8005
+  # --------------------------------------------------------------------------
+  # 125B total / 6B active, plus a 51B n-gram embedding table (PLE) and 4B MTP.
+  # The image is mandatory: the NVFP4 scales use the lossless CSF format that
+  # upstream vLLM does not read yet. The runtime resolves profile + hardware
+  # and builds the full `vllm serve` command (`lil-serve --print-config`).
+  #
+  # Host RAM: the PLE table lives in host RAM (~27 GiB). Check `free -g`
+  # before starting. If RAM is tight, set VLLM_PLE_TABLE_MEMORY=disk and
+  # B12X_DISK_BACKEND=io_uring.
+  #
+  # Start: docker compose --profile qwen up -d qwen38-flash-next-fp4-local
+  # Stop:  docker compose stop qwen38-flash-next-fp4-local
+  # Test:  curl -s http://localhost:8005/v1/chat/completions \
+  #          -H 'Content-Type: application/json' \
+  #          -d '{"model":"qwen38-flash-next","max_tokens":64,
+  #               "messages":[{"role":"user","content":"hello"}]}' \
+  #          | jq -r .choices[0].message.content
+  #
+  # Env levers: GPU_MEMORY_UTILIZATION, MAX_MODEL_LEN, MAX_NUM_SEQS,
+  # MAX_NUM_BATCHED_TOKENS, SPECULATOR=off, KV_CACHE_DTYPE, SERVED_MODEL_NAME.
+  qwen38-flash-next-fp4-local:
+    image: ghcr.io/local-inference-lab/vllm:release-10152026
+    container_name: qwen38-flash-next-fp4-local
+    profiles: ["qwen"]
+    # on-failure, not unless-stopped: the runtime exits 1 on engine failure,
+    # so a configuration error does not reload 96 GiB in a loop.
+    restart: on-failure
+    stop_grace_period: 60s
+    init: true
+    runtime: nvidia
+    ipc: host
+    shm_size: "32G"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
+      - MODEL=/model
+      - HOST=0.0.0.0
+      - PORT=8000
+      - TP=1
+      - DCP=1
+      - SPECULATOR=mtp
+      - SERVED_MODEL_NAME=qwen38-flash-next
+    volumes:
+      - ${QWEN38_MODEL_DIR:?QWEN38_MODEL_DIR is required}:/model:ro
+      - ${HF_CACHE_DIR:?HF_CACHE_DIR is required}:/root/.cache/huggingface
+      # /cache is the runtime JIT root (vLLM, Triton, CuTe DSL, b12x).
+      - ${LIL_CACHE_DIR:?LIL_CACHE_DIR is required}:/cache
+    ports:
+      - "8005:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_PRIMARY:-0}"]       # LLM on the primary GPU
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 2400s             # first start: JIT + 96 GiB load
+    entrypoint:
+      - /usr/local/bin/lil-serve
+    command:
+      - --profile
+      - qwen38-flash-next
+      - --hardware
+      - rtx-pro-6000-pcie
+
+  # --------------------------------------------------------------------------
+  # Qwen3-ASR-1.7B BF16 - STT, secondary GPU, :8024
+  # --------------------------------------------------------------------------
+  # OpenAI-compatible: POST /v1/audio/transcriptions, model "qwen3-asr".
+  # Shares the secondary GPU with qwen-tts: 0.15 VRAM. --enforce-eager avoids
+  # the extra CUDA-graph pool (vLLM aborts if free_memory < total * utilization).
+  # 32K context keeps the KV cache at ~3.5 GiB.
+  #
+  # Start: docker compose --profile qwen up -d qwen-asr
+  # Test:  curl -s http://localhost:8024/v1/audio/transcriptions \
+  #          -F file=@/tmp/sample.wav -F model=qwen3-asr | jq -r .text
+  qwen-asr:
+    image: vllm/vllm-openai:v0.30.0
+    container_name: qwen-asr
+    profiles: ["qwen"]
+    runtime: nvidia
+    restart: unless-stopped
+    ipc: host
+    shm_size: "16G"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${QWEN_ASR_MODEL_DIR:?QWEN_ASR_MODEL_DIR is required}:/model:ro
+      - ${HF_CACHE_DIR:?HF_CACHE_DIR is required}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIR:?VLLM_CACHE_DIR is required}:/root/.cache/vllm
+    ports:
+      - "8024:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_SECONDARY:-1}"]  # STT shares the non-LLM GPU
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
+    command: >
+      /model
+      --served-model-name qwen3-asr
+      --host 0.0.0.0
+      --port 8000
+      --trust-remote-code
+      --max-model-len 32768
+      --gpu-memory-utilization 0.15
+      --enforce-eager
+
+  # --------------------------------------------------------------------------
+  # Qwen3-TTS-12Hz-1.7B-Base (vLLM-Omni) - TTS, secondary GPU, :8025
+  # --------------------------------------------------------------------------
+  # Base checkpoint (cloned voices, no presets, no instructions). Register a
+  # voice before synthesizing; `consent` is required:
+  #   curl -s -X POST http://localhost:8025/v1/audio/voices \
+  #     -F name=speaker_test -F consent=local-test-fixture \
+  #     -F audio_sample=@sample.wav -F ref_text='transcript of sample.wav'
+  # Uploaded voices persist in vllm_omni_speakers; voices can also be
+  # precomputed offline into vllm_omni_precomputed_voices (mounted read-only).
+  # The deploy config sets 0.30 VRAM per stage; --stage-overrides lowers it to
+  # 0.09 (talker) + 0.06 (code2wav), which is stable on a shared GPU.
+  # NOTE: --served-model-name is not global in the qwen3_tts pipeline, so the
+  # served name is /model.
+  # API: POST /v1/audio/speech, GET/POST/DELETE /v1/audio/voices.
+  #
+  # Port 8025 is shared with magpie-tts (nvidia profile): the two are mutually
+  # exclusive. They are in different profiles, so do not force both.
+  #
+  # Start: docker compose --profile qwen up -d qwen-tts
+  # Test:  curl -s -X POST http://localhost:8025/v1/audio/speech \
+  #          -H 'Content-Type: application/json' \
+  #          -d '{"input":"hello, I am Seneschal","voice":"speaker_test","language":"English"}' \
+  #          --output /tmp/tts.wav
+  #        (first request ~90 s warmup; then <1 s)
+  qwen-tts:
+    image: vllm/vllm-omni:qwen-image21
+    container_name: qwen-tts
+    profiles: ["qwen"]
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    shm_size: "16G"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${QWEN_TTS_MODEL_DIR:?QWEN_TTS_MODEL_DIR is required}:/model:ro
+      - ${HF_CACHE_DIR:?HF_CACHE_DIR is required}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIR:?VLLM_CACHE_DIR is required}:/root/.cache/vllm
+      # Uploaded (B2) and precomputed (B3) cloned voices.
+      - ${VLLM_OMNI_SPEAKERS_DIR:?VLLM_OMNI_SPEAKERS_DIR is required}:/root/.cache/vllm-omni/speakers
+      - ${VLLM_OMNI_VOICES_DIR:?VLLM_OMNI_VOICES_DIR is required}:/voices_precomputed:ro
+      - ./vllm-omni/qwen3_tts.base.yaml:/deploy/qwen3_tts.base.yaml:ro
+    ports:
+      - "8025:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_SECONDARY:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 900s
+    entrypoint:
+      - bash
+      - -c
+      - |
+        exec vllm serve "$0" "$@"
+    command:
+      - /model
+      - --omni
+      - --deploy-config
+      - /deploy/qwen3_tts.base.yaml
+      - --stage-overrides
+      - '{"0":{"gpu_memory_utilization":0.09},"1":{"gpu_memory_utilization":0.06}}'
+      - --trust-remote-code
+      - --enforce-eager
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+
+  # ==========================================================================
+  # PROFILE "nvidia"
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # Nemotron 3.5 Super VL 120B-A12B-NVFP4 - LLM, both GPUs (TP=2), :8005
+  # --------------------------------------------------------------------------
+  # 120B total / 12B active, hybrid Mamba-2 + MoE + attention with a C-RADIO
+  # vision encoder. 69.9 GiB of weights, 1M context. Measured TP=2 at util
+  # 0.94: ~34.9 GiB weights/GPU, KV pool of 10.1M tokens (48.4 GiB/GPU).
+  # util 0.65 covers 4 full 1M sessions (~61.8 GiB/GPU) and leaves ~35% of
+  # each GPU free for the voice services.
+  #
+  # TP=2 needs --disable-custom-all-reduce on these RTX PRO 6000 cards.
+  # Image is pinned to the day-0 nightly commit.
+  #
+  # Preload (containers mount disk, they do not download at runtime):
+  #   HF_HUB_DISABLE_XET=1 hf download \
+  #     nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 \
+  #     --local-dir "$NEMOTRON_VL_MODEL_DIR"
+  #   HF_HUB_DISABLE_XET=1 hf download \
+  #     nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr \
+  #     --local-dir "$NEMOTRON_VL_DRAFT_DIR"
+  #
+  # Start: docker compose --profile nvidia up -d nemotron-super-vl-120b-nvfp4
+  # Stop:  docker compose stop nemotron-super-vl-120b-nvfp4
+  # Test:  curl -s http://localhost:8005/v1/chat/completions \
+  #          -H 'Content-Type: application/json' \
+  #          -d '{"model":"nemotron-3.5-super-vl","max_tokens":2048,
+  #               "messages":[{"role":"user","content":"hello"}]}' \
+  #          | jq -r .choices[0].message.content
+  #        (thinking is ON by default: allow generous max_tokens)
+  nemotron-super-vl-120b-nvfp4:
+    image: vllm/vllm-openai:nightly-3f1bcfd82bb2e93fcd364fc7a5491718453a77e2
+    container_name: nemotron-super-vl-120b-nvfp4
+    profiles: ["nvidia"]
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    shm_size: "32G"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${NEMOTRON_VL_MODEL_DIR:?NEMOTRON_VL_MODEL_DIR is required}:/model:ro
+      - ${NEMOTRON_VL_DRAFT_DIR:?NEMOTRON_VL_DRAFT_DIR is required}:/draft:ro
+      - ${HF_CACHE_DIR:?HF_CACHE_DIR is required}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIR:?VLLM_CACHE_DIR is required}:/root/.cache/vllm
+      - ${TRITON_CACHE_DIR:?TRITON_CACHE_DIR is required}:/root/.triton
+      - ${FLASHINFER_CACHE_DIR:?FLASHINFER_CACHE_DIR is required}:/root/.cache/flashinfer
+    ports:
+      - "8005:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_PRIMARY:-0}", "${GPU_SECONDARY:-1}"]  # both GPUs for TP=2
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 2400s
+    command: >
+      /model
+      --served-model-name nemotron-3.5-super-vl
+      --host 0.0.0.0
+      --port 8000
+      --trust-remote-code
+      --tensor-parallel-size 2
+      --disable-custom-all-reduce
+      --max-num-seqs 4
+      --max-model-len 1048576
+      --gpu-memory-utilization 0.65
+      --max-num-batched-tokens 8192
+      --mamba-backend flashinfer
+      --mamba-ssm-cache-dtype float16
+      --enable-mamba-cache-stochastic-rounding
+      --mamba-cache-philox-rounds 5
+      --enable-mamba-shared-prefix-checkpoint
+      --block-size 64
+      --prefix-match-unit 64
+      --video-pruning-rate 0.5
+      --media-io-kwargs '{"video":{"fps":2,"num_frames":256}}'
+      --enable-auto-tool-choice
+      --tool-call-parser qwen3_coder
+      --reasoning-parser nemotron_v3
+      --speculative-config '{"method":"dflash","model":"/draft","num_speculative_tokens":7}'
+
+  # --------------------------------------------------------------------------
+  # Same Nemotron checkpoint on ONE GPU (GPU 1), port 8007
+  # --------------------------------------------------------------------------
+  # TP=1 with native MTP (3 draft tokens, no /draft mount) and
+  # --mamba-cache-mode align. Leaves GPU 0 free for another service.
+  # Measured 2026-10-16: 70.0 GiB weights, 3,272,451-token FP8 KV pool,
+  # 4 concurrent sessions up to 768K, GPU 1 at ~98% VRAM.
+  #
+  # Mutually exclusive with the TP=2 variant (both reserve GPU 1).
+  #
+  # Start: docker compose --profile nvidia up -d nemotron-super-vl-120b-nvfp4-tp1
+  # Test:  curl -s http://localhost:8007/v1/chat/completions \
+  #          -H 'Content-Type: application/json' \
+  #          -d '{"model":"nemotron-3.5-super-vl-tp1","max_tokens":2048,
+  #               "messages":[{"role":"user","content":"hello"}]}' \
+  #          | jq -r .choices[0].message.content
+  nemotron-super-vl-120b-nvfp4-tp1:
+    image: vllm/vllm-openai:nightly-3f1bcfd82bb2e93fcd364fc7a5491718453a77e2
+    container_name: nemotron-super-vl-120b-nvfp4-tp1
+    profiles: ["nvidia"]
+    restart: unless-stopped
+    runtime: nvidia
+    ipc: host
+    shm_size: "32G"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${NEMOTRON_VL_MODEL_DIR:?NEMOTRON_VL_MODEL_DIR is required}:/model:ro
+      - ${HF_CACHE_DIR:?HF_CACHE_DIR is required}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIR:?VLLM_CACHE_DIR is required}:/root/.cache/vllm
+      - ${TRITON_CACHE_DIR:?TRITON_CACHE_DIR is required}:/root/.triton
+      - ${FLASHINFER_CACHE_DIR:?FLASHINFER_CACHE_DIR is required}:/root/.cache/flashinfer
+    ports:
+      - "8007:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_SECONDARY:-1}"]  # only GPU 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 2400s
+    command: >
+      /model
+      --served-model-name nemotron-3.5-super-vl-tp1
+      --host 0.0.0.0
+      --port 8000
+      --trust-remote-code
+      --tensor-parallel-size 1
+      --max-num-seqs 4
+      --max-model-len 786432
+      --gpu-memory-utilization 0.96
+      --max-num-batched-tokens 8192
+      --mamba-backend flashinfer
+      --mamba-ssm-cache-dtype float16
+      --enable-mamba-cache-stochastic-rounding
+      --mamba-cache-philox-rounds 5
+      --mamba-cache-mode align
+      --enable-mamba-shared-prefix-checkpoint
+      --block-size 64
+      --prefix-match-unit 64
+      --video-pruning-rate 0.5
+      --media-io-kwargs '{"video":{"fps":2,"num_frames":256}}'
+      --enable-auto-tool-choice
+      --tool-call-parser qwen3_coder
+      --reasoning-parser nemotron_v3
+      --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+
+  # --------------------------------------------------------------------------
+  # NVIDIA Nemotron 3.5 ASR Streaming 0.6B - STT, GPU 0, :8026
+  # --------------------------------------------------------------------------
+  # Multilingual greedy RNNT ASR served by NeMo-Speech.cpp (OSS, Apache-2.0).
+  # Reuses the magpie-tts image (ASR is compiled in by default).
+  # API: POST /v1/audio/transcriptions (OpenAI subset), GET /v1/models,
+  #      GET /ready, GET /health, playground at /.
+  # Weights are mounted read-only at /models/asr, prepared by
+  # nemotron-asr/download-weights.sh.
+  #
+  # Start: docker compose --profile nvidia up -d nemotron-asr
+  # Test:  curl -s http://localhost:8026/ready | jq .
+  #        curl -s -X POST http://localhost:8026/v1/audio/transcriptions \
+  #          -F file=@sample.wav -F model=nemotron-3.5 | jq -r .text
+  nemotron-asr:
+    image: ${MAGPIE_TTS_IMAGE:-magpie-tts:latest}
+    container_name: nemotron-asr
+    profiles: ["nvidia"]
+    runtime: nvidia
+    restart: unless-stopped
+    environment:
+      - NEMO_SPEECH_MODEL_DIR=/models
+    volumes:
+      - ${NEMOTRON_ASR_MODEL_DIR:?NEMOTRON_ASR_MODEL_DIR is required}:/models/asr:ro
+      - ./nemotron-asr/asr.yaml:/etc/nemo-speech/asr.yaml:ro
+    ports:
+      - "8026:8080"      # ASR only (TTS lives in magpie-tts on :8025)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_PRIMARY:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "/opt/nemo-speech/bin/nemo-speech", "health", "--url", "http://127.0.0.1:8080/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 600s
+    command: ["serve", "--config", "/etc/nemo-speech/asr.yaml"]
+
+  # --------------------------------------------------------------------------
+  # Magpie TTS Multilingual 357M - TTS, GPU 1, :8025
+  # --------------------------------------------------------------------------
+  # Served by NeMo-Speech.cpp (OSS, Apache-2.0). No NGC: build the image
+  # locally with magpie-tts/build-image.sh and fetch weights with
+  # magpie-tts/download-weights.sh.
+  # API: POST /v1/audio/speech (OpenAI subset), /v1/models, GET /health,
+  #      GET /ready, and a web playground at /.
+  # The served model is "magpietts"; sample rate is 22050 Hz.
+  # Port 8025 is shared with qwen-tts (qwen profile) => mutually exclusive.
+  #
+  # Start: docker compose --profile nvidia up -d magpie-tts
+  # Test:  curl -s http://localhost:8025/ready
+  #        curl -s -X POST http://localhost:8025/v1/audio/speech \
+  #          -H 'Content-Type: application/json' \
+  #          -d '{"input":"hello, I am Magpie","voice":"John","language":"en-US"}' \
+  #          --output /tmp/magpie.wav
+  magpie-tts:
+    image: ${MAGPIE_TTS_IMAGE:-magpie-tts:latest}
+    container_name: magpie-tts
+    profiles: ["nvidia"]
+    runtime: nvidia
+    restart: unless-stopped
+    environment:
+      - NEMO_SPEECH_MODEL_DIR=/models
+    volumes:
+      # Downloaded weights (Magpie F16 GGUF, NanoCodec GGUF, tokenizer).
+      - ${MAGPIE_TTS_MODEL_DIR:?MAGPIE_TTS_MODEL_DIR is required}:/models:ro
+      - ./magpie-tts/tts.yaml:/etc/nemo-speech/tts.yaml:ro
+    ports:
+      - "8025:8080"      # OpenAI-compatible HTTP (shared with qwen-tts)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_SECONDARY:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "/opt/nemo-speech/bin/nemo-speech", "health", "--url", "http://127.0.0.1:8080/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 60
+      start_period: 600s
+    command: ["serve", "--config", "/etc/nemo-speech/tts.yaml"]

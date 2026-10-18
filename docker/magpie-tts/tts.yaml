@@ -1,0 +1,16 @@
+# nemo-speech TTS config (Magpie TTS Multilingual 357M).
+#
+# Rutas estables creadas por magpie-tts/download-weights.sh (enlaces relativos
+# al directorio de modelos, montado en /models).
+tts:
+  magpie-model: /models/magpie.gguf
+  codec-model: /models/codec.gguf
+  tokenizer-model-dir: /models/tokenizer
+
+  language-code: es-ES      # en-US, es-ES, de-DE, fr-FR, it-IT, vi-VN, hi-IN, ar-*, ko-KR, pt-BR
+  speaker: 0                # 0..4 -> John, Sofia, Aria, Jason, Leo
+  warmup-enabled: true
+
+http:
+  host: 0.0.0.0
+  port: 8080

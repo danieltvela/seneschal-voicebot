@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="512" height="512" role="img">
+  <title>Seneschal icon — the white banner of the Steward of Gondor</title>
+  <desc>A plain silver standard on a hanging bar with swallowtail lower edge and a stitched inner border. Three stars: STT (left), LLM (top), TTS (right).</desc>
+  <rect width="128" height="128" fill="#000000"/>
+  <!-- Banner scaled to ~78% and centred for safe margins -->
+  <g transform="translate(64 64) scale(0.78) translate(-64 -64.38)">
+    <rect x="30" y="9.69" width="68" height="4" rx="2" fill="#C8C2B6"/>
+    <path d="M 34,16.92 H 94 V 119.08 L 64,101.05 34,119.08 Z" fill="#C8C2B6"/>
+    <!-- Stitched inner border, inset 5 units -->
+    <path d="M 39,21.92 H 89 V 110.24 L 64,95.21 39,110.24 Z" fill="none" stroke="#4A463F" stroke-width="1.6" stroke-dasharray="3.2 2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Stars: LLM (top, large), STT (left), TTS (right) -->
+    <g fill="#0B0B0C" stroke="#0B0B0C" stroke-width="1" stroke-linejoin="round">
+      <path d="M 64.00,34.00 L 67.70,43.90 L 78.27,44.36 L 69.99,50.95 L 72.82,61.14 L 64.00,55.30 L 55.18,61.14 L 58.01,50.95 L 49.73,44.36 L 60.30,43.90 Z"/>
+      <path d="M 52.00,70.50 L 54.35,76.77 L 61.04,77.06 L 55.79,81.23 L 57.58,87.69 L 52.00,83.99 L 46.42,87.69 L 48.21,81.23 L 42.96,77.06 L 49.65,76.77 Z"/>
+      <path d="M 76.00,70.50 L 78.35,76.77 L 85.04,77.06 L 79.79,81.23 L 81.58,87.69 L 76.00,83.99 L 70.42,87.69 L 72.21,81.23 L 66.96,77.06 L 73.65,76.77 Z"/>
+    </g>
+  </g>
+</svg>

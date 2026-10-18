@@ -1,0 +1,37 @@
+# nemo-speech ASR-only server — Plan A: servicio de STT INDEPENDIENTE.
+#
+# Sirve únicamente NVIDIA Nemotron 3.5 ASR Streaming 0.6B (greedy RNNT,
+# multilingüe). El TTS (Magpie) vive en su propio servicio magpie-tts (:8025).
+#
+# Se carga con:
+#   nemo-speech serve --config /etc/nemo-speech/asr.yaml
+#
+# Montaje esperado (ver docker-compose.yml, servicio `nemotron-asr`):
+#   /models/asr/asr.gguf  (pesos ASR, ro)  ->  nemotron-asr/download-weights.sh
+#
+# Precedencia de ajustes: defaults < este YAML < NEMO_SPEECH_* < --flags.
+http:
+  host: 0.0.0.0
+  port: 8080
+  threads: 4
+  max-upload-mb: 512
+
+asr:
+  enabled: true
+  backend:
+    gpu: 0                 # índice DENTRO del contenedor (host GPU 0, devices ["0"])
+  model:
+    path: /models/asr/asr.gguf
+    name: nemotron-3.5     # id que anuncia GET /v1/models (= STT_MODEL en Seneschal)
+  # VAD y endpointing del servidor DESACTIVADOS a propósito: Seneschal ya hace
+  # VAD (Silero) + segmentación de utterance en local (stt-contract P1-P6).
+  vad:
+    model_path:            # vacío = sin VAD en servidor
+  endpointing:
+    enable: false
+  decoder:
+    kind: greedy
+
+# TTS deshabilitado en este servicio: lo sirve magpie-tts (:8025).
+tts:
+  enabled: false
