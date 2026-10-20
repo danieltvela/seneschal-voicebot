@@ -1,3 +1,4 @@
+pub mod local;
 pub mod no_speech_gate;
 pub mod provider;
 pub mod segmenter;

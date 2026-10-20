@@ -6,10 +6,11 @@ use tokio::sync::mpsc;
 use whisper_cpp_plus::enhanced::fallback::calculate_compression_ratio;
 
 use super::SpeechEvent;
+use super::local::LocalSttProvider;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
-use super::segmenter::{SAMPLE_RATE, SegmenterEvent, SileroDetector, VadSegmenter};
-use super::streaming::{LiveDecoder, LiveStreamer};
+use super::segmenter::{SAMPLE_RATE, SileroDetector, VadSegmenter};
+use super::streaming::LiveDecoder;
 use super::whisper::{WhisperSTTVADConfig, load_vad, segmenter_config};
 
 /// Load the Parakeet TDT model, placing the ONNX Runtime session on `gpu`
@@ -52,12 +53,10 @@ fn load_parakeet_model(model_dir: &str, gpu: Option<i32>) -> parakeet_rs::Result
 }
 
 pub struct ParakeetSttProvider {
-    model: Arc<Mutex<ParakeetTDT>>,
-    segmenter: VadSegmenter<SileroDetector>,
-    streamer: LiveStreamer,
+    pipeline: LocalSttProvider<ParakeetDecoder>,
 }
 
-/// Blocking Parakeet decoder over one snapshot of the open segment (live).
+#[derive(Clone)]
 struct ParakeetDecoder {
     model: Arc<Mutex<ParakeetTDT>>,
 }
@@ -77,7 +76,13 @@ impl ParakeetSttProvider {
 
         let vad = load_vad(&base.vad_model, base.vad_gpu)?;
         let segmenter = VadSegmenter::new(SileroDetector::new(vad), segmenter_config(&base))?;
-        let streamer = LiveStreamer::new(base.live.clone());
+        let pipeline = LocalSttProvider::new(
+            segmenter,
+            ParakeetDecoder {
+                model: Arc::new(Mutex::new(model)),
+            },
+            base.live.clone(),
+        );
 
         tracing::info!(
             target: "sttvad",
@@ -101,81 +106,7 @@ impl ParakeetSttProvider {
                 .unwrap_or_else(|| "cpu".into()),
         );
 
-        Ok(Self {
-            model: Arc::new(Mutex::new(model)),
-            segmenter,
-            streamer,
-        })
-    }
-
-    /// Feed a chunk of 16 kHz mono f32 audio. Live partial decodes run while
-    /// the segment is open (contract P3); the close completes via a detached
-    /// task (contract P4) — decoding never blocks the VAD feed.
-    pub async fn process_audio(
-        &mut self,
-        audio: &[f32],
-        tx: &mpsc::Sender<SpeechEvent>,
-    ) -> Result<()> {
-        self.streamer.poll(tx).await;
-
-        for event in self.segmenter.feed(audio) {
-            match event {
-                SegmenterEvent::SpeechStart { segment_seq } => {
-                    self.streamer.on_segment_start(segment_seq);
-                    let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
-                }
-                SegmenterEvent::SpeechAborted { segment_seq } => {
-                    // Aborted onset: close it with an empty end so the pipeline
-                    // resets (NoSpeechGate rejects the empty text).
-                    let _ = tx
-                        .send(SpeechEvent::SpeechEnd {
-                            segment_seq,
-                            quality: TranscriptionQuality::empty(),
-                        })
-                        .await;
-                }
-                SegmenterEvent::SegmentReady {
-                    segment_seq,
-                    audio: segment,
-                    trailing_silence,
-                } => {
-                    tracing::debug!(
-                        target: "sttvad",
-                        "Finalizing segment {segment_seq}: {:.2}s",
-                        segment.len() as f32 / SAMPLE_RATE as f32
-                    );
-
-                    let speech_end_offset = segment.len().saturating_sub(trailing_silence);
-                    let decoder = ParakeetDecoder {
-                        model: Arc::clone(&self.model),
-                    };
-                    self.streamer.finish_detached(
-                        segment_seq,
-                        segment,
-                        speech_end_offset,
-                        decoder,
-                        tx.clone(),
-                    );
-                }
-            }
-        }
-
-        let seq = self.segmenter.current_segment_seq();
-        self.streamer.maybe_spawn(
-            seq,
-            self.segmenter.in_speech(),
-            self.segmenter.take_closing_trigger(),
-            self.segmenter.speech_buf(),
-            ParakeetDecoder {
-                model: Arc::clone(&self.model),
-            },
-        );
-
-        Ok(())
-    }
-
-    pub fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
-        transcribe(&self.model, audio)
+        Ok(Self { pipeline })
     }
 }
 
@@ -186,15 +117,15 @@ impl SttProvider for ParakeetSttProvider {
     }
 
     async fn process_audio(&mut self, audio: &[f32], tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
-        ParakeetSttProvider::process_audio(self, audio, tx).await
+        self.pipeline.process_audio(audio, tx).await
     }
 
     fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
-        ParakeetSttProvider::transcribe_complete(self, audio)
+        self.pipeline.transcribe_complete(audio)
     }
 
     fn inflight_transcriptions(&self) -> usize {
-        self.streamer.inflight()
+        self.pipeline.inflight_transcriptions()
     }
 }
 

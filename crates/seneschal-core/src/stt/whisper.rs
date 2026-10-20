@@ -8,13 +8,13 @@ use whisper_cpp_plus::{
 };
 
 use super::SpeechEvent;
+use super::local::LocalSttProvider;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
 use super::segmenter::{
-    DEFAULT_PREROLL_MS, DEFAULT_PROBE_MS, SAMPLE_RATE, SegmenterConfig, SegmenterEvent,
-    SileroDetector, VadSegmenter,
+    DEFAULT_PREROLL_MS, DEFAULT_PROBE_MS, SegmenterConfig, SileroDetector, VadSegmenter,
 };
-use super::streaming::{LiveDecoder, LiveStreamConfig, LiveStreamer};
+use super::streaming::{LiveDecoder, LiveStreamConfig};
 
 #[derive(Clone)]
 pub struct WhisperSTTVADConfig {
@@ -90,6 +90,7 @@ pub(crate) fn segmenter_config(base: &WhisperSTTVADConfig) -> SegmenterConfig {
 }
 
 /// Blocking Whisper decoder over one snapshot of the open segment (live).
+#[derive(Clone)]
 struct WhisperDecoder {
     ctx: Arc<WhisperContext>,
     language: String,
@@ -116,10 +117,7 @@ pub fn load_vad(model_path: &str, gpu: Option<i32>) -> Result<WhisperVadProcesso
 }
 
 pub struct WhisperSttProvider {
-    ctx: Arc<WhisperContext>,
-    language: String,
-    segmenter: VadSegmenter<SileroDetector>,
-    streamer: LiveStreamer,
+    pipeline: LocalSttProvider<WhisperDecoder>,
 }
 
 impl WhisperSttProvider {
@@ -130,7 +128,14 @@ impl WhisperSttProvider {
 
         let vad = load_vad(&config.vad_model, config.vad_gpu)?;
         let segmenter = VadSegmenter::new(SileroDetector::new(vad), segmenter_config(&config))?;
-        let streamer = LiveStreamer::new(config.live.clone());
+        let pipeline = LocalSttProvider::new(
+            segmenter,
+            WhisperDecoder {
+                ctx,
+                language: config.language.clone(),
+            },
+            config.live.clone(),
+        );
 
         tracing::info!(
             target: "sttvad",
@@ -149,91 +154,7 @@ impl WhisperSttProvider {
             config.vad_gpu.map(|i| i.to_string()).unwrap_or_else(|| "cpu".into()),
         );
 
-        Ok(Self {
-            ctx,
-            language: config.language,
-            segmenter,
-            streamer,
-        })
-    }
-
-    /// Feed a chunk of 16 kHz mono f32 audio. Emits events as the VAD/state
-    /// machine advances. Live partial decodes run while the segment is open
-    /// (contract P3) and the close completes via a detached task (contract
-    /// P4) — decoding never blocks the VAD feed.
-    pub async fn process_audio(
-        &mut self,
-        audio: &[f32],
-        tx: &mpsc::Sender<SpeechEvent>,
-    ) -> Result<()> {
-        self.streamer.poll(tx).await;
-
-        for event in self.segmenter.feed(audio) {
-            match event {
-                SegmenterEvent::SpeechStart { segment_seq } => {
-                    self.streamer.on_segment_start(segment_seq);
-                    let _ = tx.send(SpeechEvent::SpeechStart { segment_seq }).await;
-                }
-                SegmenterEvent::SpeechAborted { segment_seq } => {
-                    // The onset (barge-in already fired) never confirmed: emit
-                    // an empty end so the pipeline drops it and leaves
-                    // LISTENING. NoSpeechGate rejects the empty transcription.
-                    let _ = tx
-                        .send(SpeechEvent::SpeechEnd {
-                            segment_seq,
-                            quality: TranscriptionQuality::empty(),
-                        })
-                        .await;
-                }
-                SegmenterEvent::SegmentReady {
-                    segment_seq,
-                    audio,
-                    trailing_silence,
-                } => {
-                    tracing::debug!(
-                        target: "sttvad",
-                        "Finalizing segment {segment_seq}: {:.2}s",
-                        audio.len() as f32 / SAMPLE_RATE as f32
-                    );
-
-                    let speech_end_offset = audio.len().saturating_sub(trailing_silence);
-                    let decoder = WhisperDecoder {
-                        ctx: Arc::clone(&self.ctx),
-                        language: self.language.clone(),
-                    };
-                    self.streamer.finish_detached(
-                        segment_seq,
-                        audio,
-                        speech_end_offset,
-                        decoder,
-                        tx.clone(),
-                    );
-                }
-            }
-        }
-
-        // Live cadence while the segment stays open (decodes run detached on
-        // the blocking pool). The one-shot closing trigger fires the
-        // last-chance decode when the post-roll grace opens.
-        let seq = self.segmenter.current_segment_seq();
-        self.streamer.maybe_spawn(
-            seq,
-            self.segmenter.in_speech(),
-            self.segmenter.take_closing_trigger(),
-            self.segmenter.speech_buf(),
-            WhisperDecoder {
-                ctx: Arc::clone(&self.ctx),
-                language: self.language.clone(),
-            },
-        );
-
-        Ok(())
-    }
-
-    /// Blocking one-shot transcription (used as a fallback / sanity check).
-    #[allow(dead_code)]
-    pub fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
-        transcribe(&self.ctx, &self.language, audio)
+        Ok(Self { pipeline })
     }
 }
 
@@ -244,15 +165,15 @@ impl SttProvider for WhisperSttProvider {
     }
 
     async fn process_audio(&mut self, audio: &[f32], tx: &mpsc::Sender<SpeechEvent>) -> Result<()> {
-        WhisperSttProvider::process_audio(self, audio, tx).await
+        self.pipeline.process_audio(audio, tx).await
     }
 
     fn transcribe_complete(&self, audio: &[f32]) -> Result<TranscriptionQuality> {
-        WhisperSttProvider::transcribe_complete(self, audio)
+        self.pipeline.transcribe_complete(audio)
     }
 
     fn inflight_transcriptions(&self) -> usize {
-        self.streamer.inflight()
+        self.pipeline.inflight_transcriptions()
     }
 }
 
