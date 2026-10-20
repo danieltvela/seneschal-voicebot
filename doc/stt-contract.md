@@ -25,7 +25,7 @@ satisfy the same contract properties (locked by the audits). Unifying it onto
 ## Input level
 
 The VAD input is normalized per probe: a probe whose peak is below 0.1 is
-scaled up to a 0.5 peak (capped at ×50). Silero's probabilities collapse on very
+scaled up to a 0.5 peak (capped at ×500). Silero's probabilities collapse on very
 quiet captures — measured on this model, the same speech scores 0.6–0.9 at peak
 ≥ 0.1, 0.2–0.8 at peak 0.03 and 0.05–0.36 at peak 0.01 — so a quiet microphone
 (USB speakerphones deliver 20–40 dB below full scale, and their ALSA capture

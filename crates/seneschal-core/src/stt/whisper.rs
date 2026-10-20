@@ -11,7 +11,8 @@ use super::SpeechEvent;
 use super::no_speech_gate::TranscriptionQuality;
 use super::provider::SttProvider;
 use super::segmenter::{
-    SAMPLE_RATE, SegmenterConfig, SegmenterEvent, SileroDetector, VadSegmenter,
+    DEFAULT_PREROLL_MS, DEFAULT_PROBE_MS, SAMPLE_RATE, SegmenterConfig, SegmenterEvent,
+    SileroDetector, VadSegmenter,
 };
 use super::streaming::{LiveDecoder, LiveStreamConfig, LiveStreamer};
 
@@ -26,10 +27,12 @@ pub struct WhisperSTTVADConfig {
     pub vad_start_threshold: f32,
     /// Speech probability threshold to stay in speech (speech -> silence when below).
     pub vad_end_threshold: f32,
-    /// Minimum consecutive speech probes required before committing to STT.
-    /// A single 200ms probe above threshold is no longer enough — this many
-    /// consecutive probes must all be above threshold. Default: 2 (400ms).
-    /// Set to 1 to disable (current behavior).
+    /// Minimum speech decisions required within the sliding confirmation
+    /// window (`CONFIRM_WINDOW` probes) before the VAD *confirms* the
+    /// segment — live decoding and the close wait for this, while
+    /// `SpeechStart`/barge-in fire earlier, on the first speech probe.
+    /// One natural inter-word gap is tolerated inside the window; an
+    /// isolated burst (cough/click) fails to confirm. Default: 2.
     pub vad_confirm_probes: usize,
     /// VAD probe window in ms (contract P1).
     pub probe_ms: usize,
@@ -46,17 +49,21 @@ pub struct WhisperSTTVADConfig {
 }
 
 impl Default for WhisperSTTVADConfig {
+    /// Mirrors the production defaults (`Config`: VAD_SILENCE_MS/PROBE_MS/
+    /// PREROLL_MS/POST_ROLL_MS and the contract, `doc/stt-contract.md`).
+    /// The old values here (100 ms probe, 500 ms silence) predated the
+    /// calibration and silently diverged from production.
     fn default() -> Self {
         Self {
             whisper_model: "models/ggml-large-v3-turbo.bin".to_string(),
             vad_model: "models/ggml-silero-vad.bin".to_string(),
             language: "es".to_string(),
-            silence_ms: 500,
+            silence_ms: 300,
             vad_start_threshold: 0.65,
             vad_end_threshold: 0.45,
             vad_confirm_probes: 2,
-            probe_ms: 100,
-            preroll_ms: 300,
+            probe_ms: DEFAULT_PROBE_MS,
+            preroll_ms: DEFAULT_PREROLL_MS,
             post_roll_ms: 200,
             live: LiveStreamConfig::default(),
             vad_gpu: None,
@@ -70,16 +77,16 @@ impl Default for WhisperSTTVADConfig {
 /// trimming is disabled — the pre-roll carries the onset and trimming would
 /// eat it.
 pub(crate) fn segmenter_config(base: &WhisperSTTVADConfig) -> SegmenterConfig {
-    SegmenterConfig {
-        silence_ms: base.silence_ms,
-        vad_start_threshold: base.vad_start_threshold,
-        vad_end_threshold: base.vad_end_threshold,
-        vad_confirm_probes: base.vad_confirm_probes,
-        post_roll_ms: base.post_roll_ms,
-        trim_leading_silence: false,
-        probe_ms: base.probe_ms,
-        preroll_ms: base.preroll_ms,
-    }
+    let mut config = SegmenterConfig::uniform(
+        base.silence_ms,
+        base.vad_start_threshold,
+        base.vad_end_threshold,
+        base.vad_confirm_probes,
+    );
+    config.post_roll_ms = base.post_roll_ms;
+    config.probe_ms = base.probe_ms;
+    config.preroll_ms = base.preroll_ms;
+    config
 }
 
 /// Blocking Whisper decoder over one snapshot of the open segment (live).
@@ -359,5 +366,38 @@ mod tests {
         assert_eq!(resolve_whisper_language("es"), "es");
         assert_eq!(resolve_whisper_language("en"), "en");
         assert_eq!(resolve_whisper_language("es-ES"), "es-ES");
+    }
+
+    /// `Default` must mirror production: the same silence/probe/pre-roll/
+    /// post-roll defaults that `Config` resolves when the env vars are unset
+    /// (and the contract's tuning table). A drift here made the e2e config
+    /// silently differ from production for years (100 ms probe vs 200).
+    #[test]
+    fn default_matches_production_defaults() {
+        let d = WhisperSTTVADConfig::default();
+        assert_eq!(d.silence_ms, 300);
+        assert_eq!(d.probe_ms, DEFAULT_PROBE_MS);
+        assert_eq!(d.preroll_ms, DEFAULT_PREROLL_MS);
+        assert_eq!(d.post_roll_ms, 200);
+        assert_eq!(d.vad_confirm_probes, 2);
+        assert_eq!(d.vad_start_threshold, 0.65);
+        assert_eq!(d.vad_end_threshold, 0.45);
+    }
+
+    /// `segmenter_config` must agree with the uniform defaults (P6): the
+    /// shared machine receives the same probe / pre-roll / post-roll values
+    /// the config advertises.
+    #[test]
+    fn segmenter_config_is_uniform() {
+        let base = WhisperSTTVADConfig::default();
+        let cfg = segmenter_config(&base);
+        assert_eq!(cfg.probe_ms, DEFAULT_PROBE_MS);
+        assert_eq!(cfg.preroll_ms, DEFAULT_PREROLL_MS);
+        assert_eq!(cfg.post_roll_ms, base.post_roll_ms);
+        assert_eq!(cfg.silence_ms, base.silence_ms);
+        assert_eq!(cfg.vad_start_threshold, base.vad_start_threshold);
+        assert_eq!(cfg.vad_end_threshold, base.vad_end_threshold);
+        assert_eq!(cfg.vad_confirm_probes, base.vad_confirm_probes);
+        assert!(!cfg.trim_leading_silence, "trimming would eat the pre-roll");
     }
 }

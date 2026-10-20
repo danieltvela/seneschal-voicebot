@@ -436,7 +436,6 @@ Most configuration is done via environment variables (or `.env` file):
 | `PARAKEET_MODEL_DIR` | - | Path to Parakeet ONNX model directory (required when `STT_PROVIDER=parakeet`) |
 | **STT (Whisper)** | | |
 | `WHISPER_MODEL` | *required* | Path to Whisper `.bin` model |
-| `WHISPER_THREADS` | `0` (auto) | CPU threads for Whisper decoding |
 | `WHISPER_COREML` | `0` | Use CoreML encoder (Neural Engine) |
 | `WHISPER_SILENCE` | `0` | Suppress verbose whisper.cpp logs (Metal/GPU init messages). Set to `1` to silence. |
 | **LLM** | | |

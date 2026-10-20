@@ -190,9 +190,6 @@ pub struct Config {
     pub whisper_model: String,
     /// Path to Parakeet model directory (required when STT_PROVIDER=parakeet).
     pub parakeet_model_dir: Option<String>,
-    /// Number of CPU threads for Whisper decoding (0 = auto).
-    /// Set to physical core count for best throughput.
-    pub whisper_threads: u32,
     /// Remote STT base URL (STT_PROVIDER=openai, issue #17). The provider POSTs
     /// to `{stt_url}/v1/audio/transcriptions` (OpenAI-compatible).
     #[serde(default = "default_stt_url")]
@@ -223,17 +220,6 @@ pub struct Config {
     /// Force the Kokoro ONNX TTS device (TTS_GPU).
     #[serde(default)]
     pub tts_gpu: Option<String>,
-    /// A1 Conservative Early Reuse: enable checking for ready speculative results
-    /// before waiting for the final complete decode. Default: false (disabled).
-    pub stt_early_reuse_enabled: bool,
-    /// A1 Conservative Early Reuse: minimum tokens to consider an early result valid.
-    /// Results shorter than this are ignored and we wait for the final decode.
-    /// Default: 6 tokens.
-    pub stt_early_min_tokens: usize,
-    /// A1 Conservative Early Reuse: require terminal punctuation (. ! ?) on early
-    /// results. If true, incomplete sentences are not reused even if they meet
-    /// the token threshold. Default: true.
-    pub stt_early_require_punctuation: bool,
     /// NoSpeechGate: no_speech_prob threshold (default 0.6).
     /// Above this + low logprob → reject. (STT_NO_SPEECH_THRESHOLD)
     pub stt_no_speech_threshold: f32,
@@ -906,9 +892,6 @@ impl Config {
         if let Ok(v) = env::var("PARAKEET_MODEL_DIR") {
             self.parakeet_model_dir = Some(v);
         }
-        if let Ok(v) = env::var("WHISPER_THREADS") {
-            self.whisper_threads = v.parse().context("Invalid WHISPER_THREADS")?;
-        }
         // Remote STT (issue #17)
         if let Ok(v) = env::var("STT_URL") {
             self.stt_url = v;
@@ -935,16 +918,6 @@ impl Config {
         }
         if let Ok(v) = env::var("TTS_GPU") {
             self.tts_gpu = Some(v);
-        }
-        if let Ok(v) = env::var("STT_EARLY_REUSE_ENABLED") {
-            self.stt_early_reuse_enabled = v.parse().context("Invalid STT_EARLY_REUSE_ENABLED")?;
-        }
-        if let Ok(v) = env::var("STT_EARLY_MIN_TOKENS") {
-            self.stt_early_min_tokens = v.parse().context("Invalid STT_EARLY_MIN_TOKENS")?;
-        }
-        if let Ok(v) = env::var("STT_EARLY_REQUIRE_PUNCTUATION") {
-            self.stt_early_require_punctuation =
-                v.parse().context("Invalid STT_EARLY_REQUIRE_PUNCTUATION")?;
         }
         if let Ok(v) = env::var("STT_NO_SPEECH_THRESHOLD") {
             self.stt_no_speech_threshold = v.parse().context("Invalid STT_NO_SPEECH_THRESHOLD")?;

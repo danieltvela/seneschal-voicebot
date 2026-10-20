@@ -96,8 +96,10 @@ pub fn skip_if_no_models() {
 
 /// Default provider config mirroring production (seneschal.pro.toml + .env):
 /// silence 300 ms, start 0.65 / end 0.45, confirm_probes 2, plus the uniform
-/// segmentation contract (100 ms probes, 300 ms pre-roll, 200 ms post-roll)
-/// and live transcription enabled at a fast interval for the audits.
+/// segmentation contract (300 ms pre-roll, 200 ms post-roll) and live
+/// transcription enabled at a fast interval for the audits. The probe window
+/// stays at the audit-only 100 ms (production default is 200 ms): the audit
+/// timing budgets were measured at this resolution.
 pub fn default_config(language: &str) -> WhisperSTTVADConfig {
     let (wm, vm) = model_paths();
     WhisperSTTVADConfig {

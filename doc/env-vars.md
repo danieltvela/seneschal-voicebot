@@ -19,7 +19,6 @@ Read from `.env` (dotenvy loads automatically):
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
 | `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), `parakeet` (requires `--features parakeet`), or `openai` (local VAD + remote batch transcription via an OpenAI-compatible `/v1/audio/transcriptions` service, requires `--features openai-stt`). |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
-| `WHISPER_THREADS` | `0` | CPU threads (0 = auto) |
 | `VAD_SILENCE_MS` | `300` | ms of continuous silence before SpeechEnd. Counted as below-`VAD_END_THRESHOLD` audio at the VAD's window resolution, so a pause shorter than this value never closes the turn (Silero's own reaction adds ~100–200 ms). Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. For dictation with thinking pauses, 1500–2500 ms keeps a long monologue in one turn. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |
 | `VAD_END_THRESHOLD` | `0.45` | Speech probability floor to keep a segment open. |

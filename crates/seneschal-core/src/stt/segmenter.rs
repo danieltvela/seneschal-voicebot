@@ -206,7 +206,7 @@ pub struct SegmenterConfig {
     pub post_roll_ms: usize,
     /// Trim leading silence from the finalized segment before transcription.
     pub trim_leading_silence: bool,
-    /// VAD probe window in ms (default 100).
+    /// VAD probe window in ms (default: [`DEFAULT_PROBE_MS`], 200).
     pub probe_ms: usize,
     /// Real-audio pre-roll prepended to confirmed segments, in ms (default 300).
     pub preroll_ms: usize,

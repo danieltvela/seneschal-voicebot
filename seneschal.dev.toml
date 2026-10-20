@@ -51,10 +51,6 @@ stt_provider = "whisper"
 # Independent of `language` above.
 stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"
-whisper_threads = 0
-stt_early_reuse_enabled = false
-stt_early_min_tokens = 6
-stt_early_require_punctuation = true
 
 # NoSpeechGate — post-STT quality filter
 stt_no_speech_threshold = 0.6
