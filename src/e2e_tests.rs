@@ -974,7 +974,7 @@ async fn pipeline_returns_to_idle_after_turn() {
 #[tokio::test]
 #[ignore = "requires Whisper + VAD models"]
 async fn stt_transcribes_wav_file() {
-    use seneschal_core::stt::{WhisperSTTVADConfig, WhisperSttProvider};
+    use seneschal_core::stt::{SttProvider, WhisperSTTVADConfig, WhisperSttProvider};
 
     let model_path = std::env::var("WHISPER_MODEL")
         .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string());
@@ -1023,7 +1023,7 @@ async fn stt_transcribes_wav_file() {
 #[tokio::test]
 #[ignore = "requires Whisper + VAD models"]
 async fn full_pipeline_wav_to_db() {
-    use seneschal_core::stt::{WhisperSTTVADConfig, WhisperSttProvider};
+    use seneschal_core::stt::{SttProvider, WhisperSTTVADConfig, WhisperSttProvider};
 
     let model_path = std::env::var("WHISPER_MODEL")
         .unwrap_or_else(|_| "models/ggml-large-v3-turbo.bin".to_string());
