@@ -178,7 +178,9 @@ pub struct Config {
     pub language: String,
 
     // ── STT ──────────────────────────────────────────────────────────────────
-    /// STT backend provider: "speech" (default on macOS), "whisper", or "parakeet".
+    /// Legacy backend selector. The executable always uses the Nemotron
+    /// realtime provider (`crates/asr`); this remains for legacy providers
+    /// and their tests/audits.
     pub stt_provider: String,
     /// Language hint for STT. "auto" (default) enables auto-detection (whisper
     /// large-v3-turbo) so code-switched phrases (ES with EN terms) transcribe
@@ -190,8 +192,8 @@ pub struct Config {
     pub whisper_model: String,
     /// Path to Parakeet model directory (required when STT_PROVIDER=parakeet).
     pub parakeet_model_dir: Option<String>,
-    /// Remote STT base URL (STT_PROVIDER=openai, issue #17). The provider POSTs
-    /// to `{stt_url}/v1/audio/transcriptions` (OpenAI-compatible).
+    /// Remote STT base URL (runtime Nemotron provider). The provider connects
+    /// to `{stt_url}/v1/audio/transcriptions/realtime`.
     #[serde(default = "default_stt_url")]
     pub stt_url: String,
     /// Bearer token sent as `Authorization: Bearer <key>`. Empty = no auth.
@@ -662,21 +664,21 @@ fn default_stt_live_window_ms() -> u64 {
     15_000
 }
 
-/// Reference remote STT deployment (issue #17): `seneschal-asr` (Qwen3-ASR)
-/// served by vLLM at `http://localhost:8024`.
+/// Reference runtime STT deployment: `nemotron-asr` (Nemotron 3.5) served by
+/// NeMo-Speech.cpp at `http://localhost:8026`.
 fn default_stt_url() -> String {
-    "http://localhost:8024".to_string()
+    "http://localhost:8026".to_string()
 }
 
-/// Model id served by the reference remote STT deployment (issue #17).
+/// Model id served by the reference runtime STT deployment.
 fn default_stt_model() -> String {
-    "qwen3-asr".to_string()
+    "nemotron-3.5".to_string()
 }
 
-/// Bounded per-utterance round trip; a 20 s segment takes <1 s on the reference
-/// service, so 10 s leaves ample headroom under shared-GPU contention.
+/// Bounded startup/one-shot HTTP timeout; the realtime WebSocket reconnects
+/// with its own backoff.
 fn default_stt_timeout_ms() -> u64 {
-    10_000
+    15_000
 }
 
 /// Default thinking wire shape: name-based auto-detection.
@@ -1361,14 +1363,11 @@ impl Config {
 
         if !matches!(
             self.stt_provider.as_str(),
-            "whisper" | "parakeet" | "speech" | "openai"
+            "whisper" | "parakeet" | "speech" | "openai" | "nemotron"
         ) {
             anyhow::bail!(
-                "Invalid STT_PROVIDER '{}'. Supported values: \
-                 whisper (default, whisper.cpp + Silero VAD, no extra feature), \
-                 parakeet (needs --features parakeet + PARAKEET_MODEL_DIR), \
-                 speech (macOS SFSpeechRecognizer, needs --features speech), \
-                 openai (OpenAI-compatible remote STT, needs --features openai-stt). \
+                "Invalid STT_PROVIDER '{}'. Legacy values: whisper, parakeet, speech, openai; \
+                 'nemotron' documents the runtime provider (the executable ignores this key). \
                  Note: for TTS backends use TTS_PROVIDER (avspeech, kokoro, openai).",
                 self.stt_provider
             );

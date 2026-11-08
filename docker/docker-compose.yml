@@ -384,6 +384,9 @@ services:
     restart: unless-stopped
     environment:
       - NEMO_SPEECH_MODEL_DIR=/models
+      # Chunk del modelo RNNT: 1 = 160 ms (default). Equivalencias en
+      # nemotron-asr/asr.yaml: 0=80, 1=160, 3=320, 6=560, 13=1120 ms.
+      - NEMO_SPEECH_ASR_STREAMING_RNNT_RIGHT_CONTEXT=${NEMOTRON_ASR_RNNT_RIGHT_CONTEXT:-1}
     volumes:
       - ${NEMOTRON_ASR_MODEL_DIR:?NEMOTRON_ASR_MODEL_DIR is required}:/models/asr:ro
       - ./nemotron-asr/asr.yaml:/etc/nemo-speech/asr.yaml:ro

@@ -165,14 +165,12 @@ Seneschal is built from the ground up for voice interaction:
 
 ### Core Voice Pipeline
 
-- Real-time voice capture (CPAL) with VAD (Silero) and pre-roll buffer
-- **Pluggable STT** — select Whisper (default), Parakeet, or macOS SFSpeechRecognizer via environment variable
-  - **Whisper** via `whisper-cpp-plus` (Metal GPU on macOS, CoreML Neural Engine available, 99 languages)
-  - **Parakeet** via ONNX Runtime (25 languages, offline, `--features parakeet`)
-  - **SFSpeechRecognizer** via `speech` crate (macOS on-device ANE, ~40 languages, `--features speech`)
+- Real-time voice capture (CPAL)
+- **Nemotron 3.5 ASR** (`crates/asr`) over NeMo-Speech.cpp realtime WebSocket, with server-side VAD endpointing, native punctuation/capitalization and streaming partials
+  - Legacy Whisper, Parakeet and macOS SFSpeechRecognizer providers remain in `seneschal-core` for tests and audits
 - Streaming LLM via mlx-lm or oMLX (Apple MLX, KV-cache reuse, sub-second latency)
 - Sentence-by-sentence TTS playback (AVSpeechSynthesizer or Kokoro ONNX) - speaks while generating next sentence
-- **Multi-GPU hosts (issue #14)** — CUDA build (`--features cuda`) spreads VAD, Parakeet and Kokoro across the available GPUs (`GPU_AUTO`, per-model overrides)
+- **Multi-GPU hosts (issue #14)** — CUDA build (`--features cuda`) spreads legacy local ONNX models across the available GPUs (`GPU_AUTO`, per-model overrides); the Nemotron ASR and Magpie TTS services run in their own containers
 - Barge-in - user speech cancels active pipeline instantly
 - Persistent SQLite conversation history with session restoration
 
@@ -306,15 +304,16 @@ brew install node
 
 ### Models Required
 
-The installer (`install.sh`) automatically downloads the required models (Whisper STT, Silero VAD, and Kokoro TTS on Linux). You do not need to download them manually unless building from source.
+The installer (`install.sh`) automatically downloads the legacy local models (Whisper STT, Silero VAD, and Kokoro TTS on Linux). The runtime STT does not need them: Nemotron ASR and its server-side VAD are served by the Docker `nemotron-asr` service.
 
 **What the installer downloads:**
 
 | Model | Purpose | Source |
 |-------|---------|--------|
-| Whisper STT | Speech-to-text | HuggingFace (ggml-small.bin) |
-| Silero VAD | Voice activity detection | sherpa-onnx (ggml-silero-vad.bin) |
+| Whisper STT | Legacy speech-to-text | HuggingFace (ggml-small.bin) |
+| Silero VAD | Legacy voice activity detection | sherpa-onnx (ggml-silero-vad.bin) |
 | Kokoro TTS | Text-to-speech (Linux) | Kokoro GitHub release |
+| Nemotron ASR + Silero GGUF | Runtime STT + server-side endpointing | `docker/nemotron-asr/download-weights.sh` |
 
 #### Advanced: Manual Model Setup
 
@@ -340,9 +339,9 @@ wget https://hgpu.space/file/hjz3n4QwZbU/Qwen2.5-7B-Instruct-Q4_K_M.gguf -O ./mo
 # No manual download needed for mlx-lm
 ```
 
-**VAD Model (Silero):**
+**VAD Model (Silero, legacy local providers):**
 
-The Silero VAD model is used by both Whisper and Parakeet providers for voice activity detection:
+The Silero VAD model is used by the legacy Whisper and Parakeet providers for local voice activity detection. The runtime Nemotron provider uses a separate Silero GGUF prepared by `docker/nemotron-asr/download-weights.sh`:
 
 ```bash
 # Download Silero VAD model
@@ -432,7 +431,7 @@ Most configuration is done via environment variables (or `.env` file):
 | `VAD_SILENCE_MS` | `300` | Silence threshold (ms) before processing speech |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model file |
 | **STT Provider** | | |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), `parakeet` (requires `--features parakeet`), or `openai` (remote OpenAI-compatible service, requires `--features openai-stt`) |
+| `STT_PROVIDER` | `nemotron` | Documental en el runtime: `crates/asr` siempre usa Nemotron. Los proveedores legacy (`whisper`, `parakeet`, `speech`, `openai`) siguen en `seneschal-core`. |
 | `PARAKEET_MODEL_DIR` | - | Path to Parakeet ONNX model directory (required when `STT_PROVIDER=parakeet`) |
 | **STT (Whisper)** | | |
 | `WHISPER_MODEL` | *required* | Path to Whisper `.bin` model |
@@ -515,11 +514,31 @@ See [.env.example](.env.example) for complete environment variable reference.
 
 ---
 
-### STT Provider Selection
+### STT Provider
 
-Seneschal supports four STT backends, selectable at runtime via `STT_PROVIDER`:
+The runtime uses **Nemotron 3.5 ASR** (`crates/asr`) against a
+NeMo-Speech.cpp `nemotron-asr` service. It sends PCM16 over
+`STT_URL/v1/audio/transcriptions/realtime` and uses the service's VAD-driven
+endpointing. Nemotron performs punctuation and capitalization natively.
 
-#### Whisper (default)
+```bash
+STT_URL=http://localhost:8026 STT_MODEL=nemotron-3.5 cargo run
+```
+
+**Notes:**
+- Partials and endpointing finals arrive on one persistent WebSocket; every
+  `.completed` launches the existing `SpeechEnd` → LLM → TTS flow.
+- `VAD_SILENCE_MS` is forwarded as `endpointing_ms`.
+- The server-side chunk is configured with
+  `NEMO_SPEECH_ASR_STREAMING_RNNT_RIGHT_CONTEXT` in Compose (`1` = 160 ms by
+  default; `0`, `3`, `6`, `13` = 80, 320, 560, 1120 ms).
+- Barge-in starts on the first non-empty partial. The ASR realtime endpoint
+  does not expose the acoustic VAD onset.
+- Whisper, Parakeet, SFSpeechRecognizer and the OpenAI-compatible remote
+  provider remain legacy implementations in `seneschal-core`; `STT_PROVIDER`
+  is no longer used to switch the runtime.
+
+#### Legacy Whisper
 
 No extra build flags needed. Uses `whisper-cpp-plus` with Metal GPU on macOS.
 
@@ -531,7 +550,7 @@ STT_PROVIDER=whisper cargo run
 
 **Languages:** 99 languages. Set `SENECHAL_LANGUAGE=es` or `SENECHAL_LANGUAGE=en`.
 
-#### Parakeet (requires `--features parakeet`)
+#### Legacy Parakeet (requires `--features parakeet`)
 
 Uses NVIDIA's ParakeetTDT model via ONNX Runtime. Fully offline. Supports 25 languages including Spanish.
 
@@ -552,7 +571,7 @@ STT_PROVIDER=parakeet PARAKEET_MODEL_DIR=./models/parakeet-tdt-0.6b-v2 cargo run
 - Parakeet is batch-based: audio is buffered during speech, then transcribed on silence
 - ONNX Runtime adds ~200 MB to the binary size — feature-gated to keep default builds lean
 
-#### OpenAI-compatible remote (requires `--features openai-stt`)
+#### Legacy OpenAI-compatible remote (requires `--features openai-stt`)
 
 VAD and utterance segmentation stay **local** (shared Silero segmenter); only each finalized utterance is POSTed to an OpenAI-compatible `POST /v1/audio/transcriptions` endpoint. The reference deployment is `seneschal-asr` (vLLM serving Qwen3-ASR) at `http://localhost:8024`; any compatible server works (vLLM ASR, whisper.cpp server, Speaches, ...).
 
@@ -569,7 +588,7 @@ STT_PROVIDER=openai STT_URL=http://localhost:8024 STT_MODEL=qwen3-asr cargo run
 - Transcription is dispatched asynchronously — the pipeline is never blocked and each request is bounded by `STT_TIMEOUT_MS`. Barge-in never cancels STT: a superseded utterance's stale result is dropped by its `segment_seq`, and its live prefix requests are aborted when the next segment opens.
 - The `json` response has no Whisper quality metrics, so `NoSpeechGate` relies on empty-text rejection plus a locally computed `compression_ratio` (same pass-through as Parakeet).
 
-#### SFSpeechRecognizer (requires `--features speech`, macOS only)
+#### Legacy SFSpeechRecognizer (requires `--features speech`, macOS only)
 
 Uses Apple's on-device SFSpeechRecognizer via the `speech` crate. Leverages the ANE (Apple Neural Engine) for ultra-low latency (180-400ms end-of-utterance). No external models required.
 

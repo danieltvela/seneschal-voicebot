@@ -5,7 +5,8 @@
 | Directory | Purpose | Estado | Doc |
 |-----------|---------|--------|-----|
 | `src/audio/` | Audio pipeline: capture, VAD, resampling, playback, filler, speaker | 🟢 SALVAR | [audio-internals.md](audio-internals.md) |
-| `src/stt/` | Provider trait + shared VAD segmenter (pre-roll, gap-tolerant confirm, post-roll) + live streaming re-decode (`streaming.rs`) + Whisper + Parakeet + SFSpeechRecognizer + OpenAI-compatible remote (issue #17). 16kHz f32 mono. Contract: [stt-contract.md](stt-contract.md). | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| `src/stt/` | Legacy provider trait + shared VAD segmenter (pre-roll, gap-tolerant confirm, post-roll) + Whisper + Parakeet + SFSpeechRecognizer + OpenAI-compatible remote (issue #17). 16kHz f32 mono. The runtime STT is now `crates/asr` (Nemotron realtime). Contract: [stt-contract.md](stt-contract.md). | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| `crates/asr/` | Runtime STT provider: Nemotron 3.5 over NeMo-Speech.cpp realtime WebSocket. Server-side VAD endpointing, native PnC, partial/final traces. Reuses the legacy `SpeechEvent` contract. | 🟢 SALVAR | [stt-contract.md](stt-contract.md) |
 | `src/llm/` | HTTP client to `/v1/chat/completions`, session management | 🟢 SALVAR | [llm-provider.md](llm-provider.md) |
 | `src/tts/` | `avspeech.rs` (macOS AVSpeech), `sentence.rs` (boundary splitting), `kokoro.rs` (ONNX), `openai/` (OpenAI-compatible TTS; Qwen3-TTS via vLLM-Omni, issue #16) | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md), [tts-openai.md](tts-openai.md) |
 | `src/pipeline/` | Pipeline orchestration with FSM | 🟢 SALVAR | [MAIN_PROCESS.md](MAIN_PROCESS.md), [PROCESS_ARCHITECTURE.md](PROCESS_ARCHITECTURE.md) |

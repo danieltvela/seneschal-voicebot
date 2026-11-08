@@ -47,18 +47,18 @@ stt_live_window_ms = 15000
 # NOTE: SENECHAL_LANGUAGE in .env (and the launcher) overrides this.
 language = "es"
 
-# ── STT ───────────────────────────────────────────────────────────────────────
-stt_provider = "whisper"
-# STT language (issue #217): auto = auto-detect for ES/EN code-switching.
-# Independent of `language` above.
+# ── STT: Nemotron ASR (NeMo-Speech.cpp realtime WebSocket) ────────────────────
+# El runtime usa siempre el provider Nemotron del crate `asr`; este campo es
+# documental. whisper_* y stt_live_* solo alimentan los crates/auditorías legacy.
+stt_provider = "nemotron"
+# Idioma del prompt ASR: "auto" activa langid/code-switching ES/EN.
 stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"
-# Remote STT (issue #17) — usado cuando stt_provider = "openai".
-# VAD + segmentación siguen siendo locales; sólo la locución finalizada se
-# envía a POST {stt_url}/v1/audio/transcriptions (API compatible OpenAI).
-stt_url = "http://localhost:8024"
-stt_model = "qwen3-asr"
-stt_timeout_ms = 10000          # round trip acotado por locución
+# Servicio NeMo-Speech.cpp (nemotron-asr). STT_MODEL debe coincidir con el id
+# de GET /v1/models. VAD_SILENCE_MS se envía como endpointing_ms por sesión.
+stt_url = "http://localhost:8026"
+stt_model = "nemotron-3.5"
+stt_timeout_ms = 15000          # timeout HTTP del verify / one-shot REST
 # stt_api_key = ""              # bearer token opcional
 
 # ── GPU assignment (issue #14: multi-GPU hosts) ───────────────────────────────

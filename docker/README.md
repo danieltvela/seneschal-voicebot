@@ -114,6 +114,7 @@ Other settings:
 | `GPU_PRIMARY` | `0` | Primary GPU: the LLM (`qwen38-flash-next-fp4-local` or `nemotron-super-vl-120b-nvfp4-tp1`). |
 | `GPU_SECONDARY` | `1` | Secondary GPU: the STT/TTS services (`qwen-asr`, `qwen-tts`, `nemotron-asr`, `magpie-tts`). |
 | `MAGPIE_TTS_IMAGE` | `magpie-tts:latest` | Local image or registry copy used by `magpie-tts` and `nemotron-asr`. |
+| `NEMOTRON_ASR_RNNT_RIGHT_CONTEXT` | `1` | Nemotron RNNT streaming chunk: `1`=160 ms; `0`, `3`, `6`, `13` map to 80, 320, 560, 1120 ms. |
 
 The helper scripts read the same model variables. Load `.env` into the shell
 before running them:
@@ -162,13 +163,15 @@ set -a
 . ./.env
 set +a
 
-# Build magpie-tts:latest and magpie-tts-builder:latest.
+# Build magpie-tts:latest, magpie-tts-builder:latest and
+# magpie-tts-converter:latest (the latter converts the provider VAD).
 ./magpie-tts/build-image.sh
 
 # Download Magpie TTS weights into $MAGPIE_TTS_MODEL_DIR.
 ./magpie-tts/download-weights.sh
 
-# Download Nemotron 3.5 ASR weights into $NEMOTRON_ASR_MODEL_DIR.
+# Download Nemotron 3.5 ASR weights and convert the provider's Silero VAD
+# into the same model directory.
 ./nemotron-asr/download-weights.sh
 ```
 
@@ -176,10 +179,26 @@ Script overrides:
 
 - `BUILD_DIR` (default `${XDG_CACHE_HOME:-$HOME/.cache}/nemo-speech-cpp`),
   `IMAGE`, `REGISTRY`, `CUDA_ARCH` for the image build.
+- `BUILDER_IMAGE` (binary/weight builder) and `CONVERTER_IMAGE` (Python model
+  converter) for the additional images created by `build-image.sh`;
+  `PYTHON_IMAGE` (default `python:3.12-slim`) is the converter base.
 - `MAGPIE_TTS_MODEL_DIR` / `NEMOTRON_ASR_MODEL_DIR` for the weight downloads
   (`MODELS_DIR` is also accepted for backwards compatibility).
 - `MAGPIE_TTS_IMAGE` (Compose) to use a registry copy, e.g.
   `MAGPIE_TTS_IMAGE=localhost:5000/magpie-tts:latest`.
+- `NEMOTRON_ASR_RNNT_RIGHT_CONTEXT` to change the Nemotron streaming chunk:
+  `1` is the 160 ms default; `0`, `3`, `6` and `13` map to 80, 320, 560 and
+  1120 ms respectively.
+
+`asr.yaml` enables the provider VAD and VAD-driven endpointing, so
+`nemotron-asr` loads `/models/asr/silero-v6.2.0.gguf` at startup and refuses to
+run without it. If the container restart-loops with
+`configuration validation failed: VAD model file does not exist:
+/models/asr/silero-v6.2.0.gguf`, the VAD GGUF is missing from
+`$NEMOTRON_ASR_MODEL_DIR`: build the converter image
+(`./magpie-tts/build-image.sh`), run `./nemotron-asr/download-weights.sh`
+(which converts Silero VAD 6.2.0 into that directory) and then
+`docker compose --profile nvidia up -d nemotron-asr`.
 
 ## Resource map
 
@@ -310,10 +329,10 @@ the `openai-stt` feature; remote TTS requires `openai-tts`
 LLM_URL=http://127.0.0.1:8005
 LLM_MODEL=qwen38-flash-next
 
-# STT (Qwen3-ASR)
-STT_PROVIDER=openai
-STT_URL=http://localhost:8024
-STT_MODEL=qwen3-asr
+# STT (Nemotron 3.5 realtime WebSocket; the legacy openai STT provider is no
+# longer selected by the runtime, so start nemotron-asr from the nvidia profile)
+STT_URL=http://localhost:8026
+STT_MODEL=nemotron-3.5
 
 # TTS (Qwen3-TTS Base)
 # Base has no presets: register a voice first (see the Qwen quick start) and
@@ -332,8 +351,7 @@ OPENAI_TTS_SAMPLE_RATE=24000
 LLM_URL=http://127.0.0.1:8007
 LLM_MODEL=nemotron-3.5-super-vl-tp1
 
-# STT (Nemotron 3.5 ASR)
-STT_PROVIDER=openai
+# STT (Nemotron 3.5 realtime WebSocket)
 STT_URL=http://localhost:8026
 STT_MODEL=nemotron-3.5
 
@@ -344,6 +362,10 @@ OPENAI_TTS_VOICE=John
 OPENAI_TTS_LANGUAGE=en-US    # Magpie rejects "auto"/"Auto"
 OPENAI_TTS_SAMPLE_RATE=22050 # NanoCodec rate
 ```
+
+`STT_PROVIDER` remains accepted as legacy configuration but the runtime now
+always uses the Nemotron realtime provider. `VAD_SILENCE_MS` is forwarded as
+the server-side endpointing threshold.
 
 ## Operations
 

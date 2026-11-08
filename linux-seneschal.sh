@@ -64,44 +64,29 @@ fi
 # ── Voz (STT + TTS) — DOS servicios NeMo independientes ──────────────────────
 #   STT: nemotron-asr (:8026) -> NVIDIA Nemotron 3.5 ASR vía NeMo-Speech.cpp
 #   TTS: magpie-tts    (:8025) -> NVIDIA Magpie TTS vía NeMo-Speech.cpp
-# Si alguno no responde: STT cae a Qwen3-ASR (:8024); TTS a Kokoro local (ONNX).
+# El STT usa el WebSocket realtime del proveedor: VAD-driven endpointing y
+# parciales/finales ocurren en el servicio. Si no responde, el proveedor
+# reconecta; no hay fallback a Qwen3-ASR (no implementa este protocolo).
 # En Linux no existe AVSpeechSynthesizer: si el .env hereda TTS_PROVIDER=avspeech
 # el binario abortaría al arrancar, así que siempre lo sobreescribimos aquí.
 #
-# Alternativa 100% local (Parakeet TDT vía ONNX Runtime, CPU): descomenta estas
-# dos líneas para no depender de ningún servicio remoto de STT.
-# export STT_PROVIDER=parakeet
-# export PARAKEET_MODEL_DIR="${PARAKEET_MODEL_DIR:-models/parakeet-tdt-0.6b-v3-onnx}"
+# STT_PROVIDER es configuración legacy: el ejecutable ya no la usa para
+# seleccionar Whisper/Parakeet/OpenAI.
 
-# ── STT: Nemotron 3.5 ASR (nemotron-asr, :8026) con fallback a Qwen3-ASR ─────
-# Issue #21: reutilizamos el provider `openai` (issue #17) —sin provider ni
-# feature nuevos— contra el endpoint OpenAI-compatible de NeMo-Speech.cpp.
-# Preferimos nemotron-asr (:8026, id de modelo "nemotron-3.5"); si no responde
-# caemos al vLLM seneschal-asr (:8024, Qwen3-ASR), que era el backend anterior.
-STT_OPENAI_URL="${STT_OPENAI_URL:-http://localhost:8026}"
-STT_FALLBACK_URL="${STT_FALLBACK_URL:-http://localhost:8024}"
-export STT_PROVIDER=openai
-if command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "${STT_OPENAI_URL}/v1/models" >/dev/null 2>&1; then
-    # POST {STT_URL}/v1/audio/transcriptions. STT_MODEL debe coincidir con el id
-    # que anuncia GET /v1/models ("nemotron-3.5"). STT_LANGUAGE=auto omite el
-    # campo y deja que NeMo haga langid (code-switching ES/EN); un código
-    # concreto (es, es-ES...) también se acepta (verificado contra :8026).
-    export STT_URL="$STT_OPENAI_URL"
-    export STT_MODEL=nemotron-3.5
-    export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-15000}"
+# ── STT: Nemotron 3.5 ASR (nemotron-asr, :8026) ──────────────────────────────
+STT_SERVICE_URL="${STT_URL:-http://localhost:8026}"
+export STT_URL="$STT_SERVICE_URL"
+export STT_MODEL="${STT_MODEL:-nemotron-3.5}"
+export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-15000}"
+if command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "${STT_SERVICE_URL}/ready" >/dev/null 2>&1; then
     echo "STT: Nemotron 3.5 ASR en ${STT_URL} (${STT_MODEL})"
-elif command -v curl >/dev/null 2>&1 && curl -fsS -m 2 "${STT_FALLBACK_URL}/v1/models" >/dev/null 2>&1; then
-    export STT_URL="$STT_FALLBACK_URL"
-    export STT_MODEL=qwen3-asr
-    export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-10000}"
-    echo "STT: nemotron-asr no responde en ${STT_OPENAI_URL}; usando ${STT_URL} (${STT_MODEL})" >&2
 else
-    # Ni Nemotron ni Qwen: arrancamos igualmente con el fallback para que el
-    # error aparezca como fallo de red por petición, no como crash de config.
-    export STT_URL="${STT_URL:-$STT_FALLBACK_URL}"
-    export STT_MODEL="${STT_MODEL:-qwen3-asr}"
-    export STT_TIMEOUT_MS="${STT_TIMEOUT_MS:-10000}"
-    echo "STT: ningún servicio OpenAI-compatible responde (${STT_OPENAI_URL} ni ${STT_FALLBACK_URL}); revisa nemotron-asr/seneschal-asr" >&2
+    # Arrancamos igualmente: el proveedor reconecta y el fallo se ve como
+    # error de red por sesión, no como crash de configuración.
+    echo "STT: nemotron-asr no responde en ${STT_SERVICE_URL}; se reintentará en el runtime" >&2
+    echo "STT: revisa 'docker compose --profile nvidia logs nemotron-asr' (si aborta" >&2
+    echo "     con 'VAD model file does not exist', falta el GGUF del Silero VAD:" >&2
+    echo "     ejecuta docker/nemotron-asr/download-weights.sh)" >&2
 fi
 
 # ── TTS: Magpie (servicio TTS independiente) ─────────────────────────────────

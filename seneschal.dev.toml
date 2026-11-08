@@ -45,12 +45,14 @@ stt_live_window_ms = 15000
 # NOTE: SENECHAL_LANGUAGE in .env (and the launcher) overrides this.
 language = "es"
 
-# ── STT ───────────────────────────────────────────────────────────────────────
-stt_provider = "whisper"
-# STT language (issue #217): auto = auto-detect for ES/EN code-switching.
-# Independent of `language` above.
+# ── STT: Nemotron ASR (NeMo-Speech.cpp realtime WebSocket) ────────────────────
+# El runtime usa el provider Nemotron del crate `asr`; este campo es documental.
+stt_provider = "nemotron"
 stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"
+stt_url = "http://localhost:8026"
+stt_model = "nemotron-3.5"
+stt_timeout_ms = 15000
 
 # NoSpeechGate — post-STT quality filter
 stt_no_speech_threshold = 0.6

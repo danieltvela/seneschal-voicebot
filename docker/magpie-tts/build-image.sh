@@ -11,10 +11,13 @@
 #   PUSH=1 magpie-tts/build-image.sh       # ademas publica en el registro local
 #
 # Variables:
-#   REF        rama/tag de NeMo-Speech.cpp (def. main)
-#   BUILD_DIR  directorio donde clonar el proyecto (def. ${XDG_CACHE_HOME:-$HOME/.cache}/nemo-speech-cpp)
-#   IMAGE      nombre:tag de la imagen      (def. magpie-tts:latest)
-#   REGISTRY   registro local si PUSH=1     (def. localhost:5000)
+#   REF             rama/tag de NeMo-Speech.cpp (def. main)
+#   BUILD_DIR       directorio donde clonar el proyecto (def. ${XDG_CACHE_HOME:-$HOME/.cache}/nemo-speech-cpp)
+#   IMAGE           nombre:tag de la imagen runtime (def. magpie-tts:latest)
+#   BUILDER_IMAGE   imagen builder para binarios/pesos (def. magpie-tts-builder:latest)
+#   CONVERTER_IMAGE imagen con dependencias de conversion de modelos
+#   PYTHON_IMAGE    base de la imagen converter     (def. python:3.12-slim)
+#   REGISTRY        registro local si PUSH=1     (def. localhost:5000)
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/NVIDIA/NeMo-Speech.cpp.git}"
@@ -22,6 +25,8 @@ REF="${REF:-main}"
 BUILD_DIR="${BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nemo-speech-cpp}"
 IMAGE="${IMAGE:-magpie-tts:latest}"
 BUILDER_IMAGE="${BUILDER_IMAGE:-magpie-tts-builder:latest}"
+CONVERTER_IMAGE="${CONVERTER_IMAGE:-magpie-tts-converter:latest}"
+PYTHON_IMAGE="${PYTHON_IMAGE:-python:3.12-slim}"
 CUDA_VERSION="${CUDA_VERSION:-13.0.3}"
 UBUNTU_VERSION="${UBUNTU_VERSION:-24.04}"
 CUDA_ARCH="${CUDA_ARCH:-120}"       # RTX PRO 6000 Blackwell => sm_120 (SASS nativo)
@@ -65,6 +70,22 @@ docker build -f "$BUILD_DIR/docker/Dockerfile" --target runtime \
 echo ">> Construyendo imagen builder ${BUILDER_IMAGE} (para descargar pesos)"
 docker build -f "$BUILD_DIR/docker/Dockerfile" --target builder \
   "${BUILD_ARGS[@]}" -t "$BUILDER_IMAGE" "$BUILD_DIR"
+
+# Imagen converter: los converters son Python puro (convert_model.py +
+# conversion/), no necesitan el binario C++. Se construyen sobre una base
+# Python slim para no depender del builder: un builder antiguo (sin
+# convert_model.py en /work) ya no bloquea la conversion del VAD.
+echo ">> Construyendo imagen converter ${CONVERTER_IMAGE} (para el VAD GGUF)"
+cat > "$BUILD_DIR/docker/converter.Dockerfile" <<EOF
+FROM ${PYTHON_IMAGE}
+WORKDIR /work
+COPY requirements.txt /work/requirements.txt
+RUN python3 -m pip install --no-cache-dir -r /work/requirements.txt
+COPY convert_model.py /work/convert_model.py
+COPY conversion /work/conversion
+EOF
+docker build -f "$BUILD_DIR/docker/converter.Dockerfile" \
+  -t "$CONVERTER_IMAGE" "$BUILD_DIR"
 
 if [ "${PUSH:-0}" = "1" ]; then
   echo ">> Publicando en ${REGISTRY}/$(basename "${IMAGE%%:*}")"

@@ -7,7 +7,8 @@
 #   nemo-speech serve --config /etc/nemo-speech/asr.yaml
 #
 # Montaje esperado (ver docker-compose.yml, servicio `nemotron-asr`):
-#   /models/asr/asr.gguf  (pesos ASR, ro)  ->  nemotron-asr/download-weights.sh
+#   /models/asr/asr.gguf                (pesos ASR, ro) -> download-weights.sh
+#   /models/asr/silero-v6.2.0.gguf      (VAD del proveedor, ro)
 #
 # Precedencia de ajustes: defaults < este YAML < NEMO_SPEECH_* < --flags.
 http:
@@ -23,15 +24,30 @@ asr:
   model:
     path: /models/asr/asr.gguf
     name: nemotron-3.5     # id que anuncia GET /v1/models (= STT_MODEL en Seneschal)
-  # VAD y endpointing del servidor DESACTIVADOS a propósito: Seneschal ya hace
-  # VAD (Silero) + segmentación de utterance en local (stt-contract P1-P6).
+  streaming:
+    # Chunk del modelo cache-aware RNNT. rnnt_right_context=1 => 160 ms.
+    # NO usar streaming.chunk_size aquí: es la ventana CTC, no RNNT.
+    # Equivalencias: 0=80ms, 1=160ms, 3=320ms, 6=560ms, 13=1120ms.
+    rnnt_right_context: 1
+  # VAD del proveedor y endpointing activados: el cierre de turno ocurre en el
+  # servidor, no en el segmentador local de Seneschal.
   vad:
-    model_path:            # vacío = sin VAD en servidor
+    model_path: /models/asr/silero-v6.2.0.gguf
+    masker:
+      mask_enable: false   # el VAD solo gobierna el endpointing
+      onset: 0.65          # equivalentes a los umbrales previos de Seneschal
+      offset: 0.45
   endpointing:
-    enable: false
+    enable: true
+    vad_based: true
+    # `session.update` envía VAD_SILENCE_MS por sesión; este es el fallback.
+    stop_history_eou_ms: 300
   decoder:
     kind: greedy
 
+# Puntuación y capitalización: nativas en Nemotron 3.5. El cliente realtime
+# envía `automatic_punctuation: true`; no se necesita un modelo PnC externo.
+#
 # TTS deshabilitado en este servicio: lo sirve magpie-tts (:8025).
 tts:
   enabled: false

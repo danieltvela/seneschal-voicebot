@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/asr",
     "crates/seneschal-common",
     "crates/seneschal-core",
     "crates/seneschal-mcp",
@@ -27,6 +28,7 @@ documentation = "https://github.com/danieltvela/seneschal-voicebot"
 
 [dependencies]
 # Always-present workspace crates (core voice pipeline)
+asr = { path = "crates/asr" }
 seneschal-common = { path = "crates/seneschal-common" }
 seneschal-core = { path = "crates/seneschal-core" }
 seneschal-worker = { path = "crates/seneschal-worker" }

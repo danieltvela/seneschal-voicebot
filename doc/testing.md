@@ -13,8 +13,12 @@ cargo test <test_name> -- --nocapture
 
 ## STT/VAD contract tests (regression guard)
 
-The STT/VAD subsystem has a written contract (`doc/stt-contract.md`, P1–P6)
-and three test layers that lock it:
+The STT/VAD subsystem has a written contract (`doc/stt-contract.md`) and three
+test layers that lock it. The runtime Nemotron transport has deterministic
+tests under `crates/asr` (PCM16 encoding, protocol mapping, multi-turn
+endpointing, reconnect backoff and a fake realtime WebSocket server); the
+optional live-service audit is `cargo test -p asr --test service -- --ignored`
+with `ASR_INTEGRATION_WAV`.
 
 1. **L1 — deterministic unit tests** (no models, run in `make qa`): state
    machine + streaming orchestrator behavior in

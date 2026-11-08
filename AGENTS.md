@@ -50,7 +50,8 @@ QA_SKIP=audit,coverage make qa
 Mono-user voice AI chatbot in Rust. Streaming STT→LLM→TTS pipeline, single process, tokio channels.
 
 ```
-Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero VAD)
+Microphone → AudioCapture (CPAL) → Nemotron ASR WebSocket (`crates/asr`,
+server-side VAD endpointing)
 → LLM client (OpenAI-compatible /v1/chat/completions, streaming SSE)
 → SentenceSplitter (buffer until punctuation boundary)
 → TTS (macOS AVSpeechSynthesizer or Kokoro ONNX)
@@ -59,11 +60,11 @@ Microphone → AudioCapture (CPAL) → WhisperSTTVAD (whisper-cpp-plus + Silero 
 
 **Key decisions:**
 - **Single binary**: all stages connected by `tokio::sync` channels
-- **No speculative LLM on local GPUs**: single-GPU contention causes jitter. On multi-GPU hosts the LLM server (out-of-process) is pinned with `CUDA_VISIBLE_DEVICES` and the voice models (VAD/Parakeet/Kokoro) can be spread over the remaining GPUs via `GPU_AUTO` (issue #14)
+- **No speculative LLM on local GPUs**: single-GPU contention causes jitter. On multi-GPU hosts the LLM server (out-of-process) is pinned with `CUDA_VISIBLE_DEVICES`; the Nemotron ASR/Magpie TTS services run in their own containers on the secondary GPU
 - **LLM→TTS streaming**: buffer until sentence boundary, synthesize immediately
-- **Barge-in**: on the acoustic onset, `barge_in_tx` cancels the in-flight LLM request (including one just sent) and the TTS queue + playback; STT/VAD keep running, and a dispatched deep-worker task is never cancelled
-- **Pluggable STT**: Provider trait for Whisper, Parakeet, SFSpeechRecognizer
-- **STT/VAD contract**: barge-in at speech onset, live transcription while the user speaks, LLM gated on the final transcript, stale results dropped after barge-in — specified in `doc/stt-contract.md` (P1–P6) and locked by deterministic + audit tests
+- **Barge-in**: at the first Nemotron ASR partial, `barge_in_tx` cancels the in-flight LLM request (including one just sent) and the TTS queue + playback; STT/VAD keep running, and a dispatched deep-worker task is never cancelled
+- **STT**: the runtime provider is `crates/asr` (Nemotron 3.5 over NeMo-Speech.cpp realtime WebSocket). Whisper/Parakeet/SFSpeechRecognizer remain as legacy providers in `seneschal-core`
+- **STT/VAD contract**: endpointing is server-side; live partials are logged while the user speaks, the LLM is gated on the final transcript, and stale results are dropped after barge-in — specified in `doc/stt-contract.md` and locked by deterministic + audit tests
 - **Cold Path Memory (S-DREAM)**: L1/L2 consolidation, see `src/dream/`
 
 ---

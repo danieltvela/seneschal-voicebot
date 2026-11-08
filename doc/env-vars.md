@@ -17,9 +17,9 @@ Read from `.env` (dotenvy loads automatically):
 | `AUDIO_OUTPUT_DEVICE` | _(default)_ | Speaker device name (same matching rules as `AUDIO_INPUT_DEVICE`). |
 | `LIST_AUDIO_DEVICES` | `false` | When `1`, print available input **and** output devices and exit (also `--list-devices`). |
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `whisper` | STT backend: `whisper` (default, whisper-cpp-plus + Silero VAD), `speech` (macOS SFSpeechRecognizer, requires `--features speech`), `parakeet` (requires `--features parakeet`), or `openai` (local VAD + remote batch transcription via an OpenAI-compatible `/v1/audio/transcriptions` service, requires `--features openai-stt`). |
+| `STT_PROVIDER` | `nemotron` | Documental en el runtime: `crates/asr` siempre usa Nemotron 3.5 realtime. Los valores `whisper`, `parakeet`, `speech` y `openai` siguen siendo válidos para los proveedores legacy de `seneschal-core`. |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
-| `VAD_SILENCE_MS` | `300` | ms of continuous silence before SpeechEnd. Counted as below-`VAD_END_THRESHOLD` audio at the VAD's window resolution, so a pause shorter than this value never closes the turn (Silero's own reaction adds ~100–200 ms). Also sets the short-utterance silence window (speech provider): unconfirmed speech followed by this much silence is still fed to STT. For dictation with thinking pauses, 1500–2500 ms keeps a long monologue in one turn. |
+| `VAD_SILENCE_MS` | `300` | Trailing silence that closes a Nemotron turn: forwarded as `endpointing_ms` to the server's VAD-driven endpointer. For legacy providers it keeps the old in-process SpeechEnd behavior. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |
 | `VAD_END_THRESHOLD` | `0.45` | Speech probability floor to keep a segment open. |
 | `VAD_CONFIRM_PROBES` | `2` | Speech probes required before the VAD *confirms* a segment (live decoding + close): N decisions within a sliding N+1 window, so one natural inter-word gap is tolerated while an isolated burst (cough/click) fails to confirm and is aborted. **`SpeechStart` (LISTENING + barge-in) fires earlier — on the first speech probe (acoustic onset)**, so the assistant stops as soon as the user speaks. Confirmed/unconfirmed text is filtered by `NoSpeechGate`. |
@@ -35,10 +35,10 @@ Read from `.env` (dotenvy loads automatically):
 | `PARAKEET_GPU` | — | Pin the Parakeet ONNX encoder/decoder to a GPU index or `cpu`. |
 | `TTS_GPU` | — | Pin Kokoro ONNX to a GPU index or `cpu`. |
 | `PARAKEET_MODEL_DIR` | — | Required when `STT_PROVIDER=parakeet`. Download ONNX from: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx |
-| `STT_URL` | `http://localhost:8024` | Base URL of the OpenAI-compatible STT service (`STT_PROVIDER=openai`); the provider POSTs to `{STT_URL}/v1/audio/transcriptions`. Reference deployment: `seneschal-asr` (vLLM serving `Qwen3-ASR`). |
+| `STT_URL` | `http://localhost:8026` | Base URL of the NeMo-Speech.cpp `nemotron-asr` service. The provider connects to `{STT_URL}/v1/audio/transcriptions/realtime` and uses its server-side VAD endpointing. |
 | `STT_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>` to the remote STT service. Empty = no auth header. |
-| `STT_MODEL` | `qwen3-asr` | Model name sent in the remote transcription `model` field. |
-| `STT_TIMEOUT_MS` | `10000` | Per-utterance timeout (ms) for a remote transcription; bounds the HTTP round trip. |
+| `STT_MODEL` | `nemotron-3.5` | Model id from the service's `GET /v1/models`. |
+| `STT_TIMEOUT_MS` | `15000` | HTTP timeout for startup verification and the one-shot REST transcription; the streaming WebSocket itself reconnects with backoff. |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
 | `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. |
 | `LLM_MODEL` | `qwen3.8-27b` | Model name sent in the `model` field of API requests. |

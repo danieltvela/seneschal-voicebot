@@ -7,7 +7,7 @@ set includes the voice pipeline + essential tools + agents + plugins.
 
 | Feature | Enables crate | Implies |
 |---------|--------------|---------|
-| (default) | `common`, `core`, `memory`, `tools-core`, `search`, `mcp`, `agents`, `plugins`, `extras` | — |
+| (default) | `common`, `core`, `asr`, `memory`, `tools-core`, `search`, `mcp`, `agents`, `plugins`, `extras` | — |
 | `memory` | `seneschal-memory` | — |
 | `tools-core` | `seneschal-tools-core` | — |
 | `search` | `seneschal-search` | — |
@@ -23,17 +23,22 @@ set includes the voice pipeline + essential tools + agents + plugins.
 
 ## TTS/STT backend features
 
+Runtime STT is **not feature-gated**: `crates/asr` is always linked and speaks
+the Nemotron realtime WebSocket protocol (`STT_URL`, `STT_MODEL`). The table
+below lists the remaining optional TTS providers and the legacy STT providers
+retained in `seneschal-core`.
+
 | Feature | Enables | Extra deps | Requirements |
 |---------|---------|------------|--------------|
 | `kokoro` | Kokoro ONNX TTS | kokorox | `brew install espeak-ng` |
 | `avspeech` | macOS AVSpeechSynthesizer | objc2*, block2 | macOS only |
 | `openai-tts` | OpenAI-compatible TTS (Qwen3-TTS via vLLM-Omni) | — (reqwest already present) | reachable speech service (`OPENAI_TTS_URL`) |
-| `parakeet` | NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
-| `speech` | macOS SFSpeechRecognizer STT | speech | macOS only, microphone permission |
+| `parakeet` | Legacy NVIDIA Parakeet STT (ONNX) | parakeet-rs | ParakeetTDT model files |
+| `speech` | Legacy macOS SFSpeechRecognizer STT | speech | macOS only, microphone permission |
 | `speaker` | Speaker verification | sherpa-rs | `models/speaker_embedding.onnx` |
 | `cuda` | CUDA for whisper.cpp + ONNX Runtime (Parakeet/Kokoro) | — | Linux/NVIDIA host, CUDA toolkit (`nvcc`); ONNX Runtime GPU binaries are downloaded at build time |
 
-**On macOS**: whisper-cpp-plus uses Metal by default (faster STT via metal feature).
+**On macOS**: whisper-cpp-plus uses Metal by default for the legacy Whisper provider.
 Model files: `models/ggml-large-v3-turbo.bin` + `models/*-encoder.mlmodelc` for CoreML encoder fallback.
 
 **On Linux**: whisper-cpp-plus-sys compiles ggml-cpu with OpenMP but does not link
@@ -42,11 +47,13 @@ Model files: `models/ggml-large-v3-turbo.bin` + `models/*-encoder.mlmodelc` for 
 
 ## Multi-GPU (issue #14)
 
-On CUDA builds the local models can be spread across GPUs. `GPU_AUTO` (default
+On CUDA builds the legacy local models can be spread across GPUs. `GPU_AUTO` (default
 on) assigns Silero VAD, Parakeet and Kokoro round-robin over the GPUs with the
 most free VRAM; `VAD_GPU`, `PARAKEET_GPU` and `TTS_GPU` pin a model to a device
 index or to `cpu`. Whisper follows whisper.cpp's default device (GPU 0 of the
-visible devices) — use `CUDA_VISIBLE_DEVICES` to reorder devices for it.
+visible devices) — use `CUDA_VISIBLE_DEVICES` to reorder devices for it. The
+runtime Nemotron ASR and Magpie TTS services are pinned separately in Docker
+(`GPU_SECONDARY`).
 
 ```bash
 # Build with CUDA on a Linux/NVIDIA host

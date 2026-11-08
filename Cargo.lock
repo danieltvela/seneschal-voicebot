@@ -93,6 +93,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "asr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "hound",
+ "reqwest 0.12.28",
+ "seneschal-common",
+ "seneschal-core",
+ "serde",
+ "serde_json",
+ "temp-env",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4238,6 +4257,7 @@ name = "seneschal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "asr",
  "async-channel",
  "async-trait",
  "axum",

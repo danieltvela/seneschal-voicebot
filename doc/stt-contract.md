@@ -4,10 +4,39 @@ Canonical specification of the speech-to-text pipeline's observable behavior.
 Every property below is locked by a named test; when changing STT providers,
 models or thresholds, these are the invariants that must keep holding.
 
-**Sources of truth:** `crates/seneschal-core/src/stt/segmenter.rs` (state
-machine), `crates/seneschal-core/src/stt/streaming.rs` (live transcription),
-`src/audio_events.rs` (pipeline-side event handling), and the audits in
-`crates/seneschal-core/tests/stt_audit_contract.rs`.
+**Sources of truth:** `crates/asr/src/provider.rs` (Nemotron realtime
+transport), `crates/seneschal-core/src/stt/segmenter.rs` (legacy state
+machine), `crates/seneschal-core/src/stt/streaming.rs` (legacy live
+transcription), `src/audio_events.rs` (pipeline-side event handling), and the
+audits in `crates/seneschal-core/tests/stt_audit_contract.rs`.
+
+## Current runtime: Nemotron realtime ASR
+
+The executable no longer runs the in-process Silero segmenter. It opens one
+persistent WebSocket to NeMo-Speech.cpp
+(`/v1/audio/transcriptions/realtime`), sends PCM16LE mono, and maps server
+events to the same `SpeechEvent` stream:
+
+- VAD-driven endpointing runs in the server. `VAD_SILENCE_MS` is sent as
+  `endpointing_ms`.
+- The Nemotron chunk is configured server-side with
+  `NEMO_SPEECH_ASR_STREAMING_RNNT_RIGHT_CONTEXT` (`1` = the 160 ms default).
+- Punctuation and capitalization are native to Nemotron 3.5; the client sends
+  `automatic_punctuation: true`.
+- Partials are accumulated and logged as `debug` traces under target `asr`;
+  every `.completed` is logged as the endpointing trace.
+- A non-empty `.delta` opens the turn and fires `SpeechStart` (barge-in).
+  The ASR endpoint does not expose the acoustic VAD onset, so barge-in
+  intentionally starts at the first partial, not at the first above-threshold
+  VAD probe. `.completed` emits `SpeechEnd`; multiple endpointing finals reuse
+  the same connection.
+- The local `NoSpeechGate` still rejects empty finals. Nemotron does not
+  expose Whisper's `no_speech_prob`/`avg_logprob`, so those metrics are
+  neutral.
+
+The legacy sections below document the providers retained in
+`seneschal-core` and their locked contract; they are not initialized by the
+main runtime unless a test or audit explicitly selects them.
 
 ## Provider landscape
 
@@ -157,6 +186,7 @@ properties. *Locked by the shared unit tests plus the audits running through
 
 ```bash
 make qa           # L1 unit + L2 pipeline contract tests (no models, deterministic)
+cargo test -p asr # Nemotron realtime transport (deterministic, no service)
 make test-stt     # L3 audits with the real Whisper + Silero models
 make test-stt-openai  # L3 against the remote OpenAI-compatible service (:8024)
 ```

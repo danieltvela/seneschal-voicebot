@@ -37,6 +37,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::{Config, SeneschalEnv};
 use crate::db::{Database, Memory};
+use asr::create_provider;
 use seneschal_agents::agent_session::VisibleSessionManager;
 use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
@@ -56,7 +57,7 @@ use seneschal_core::pipeline::{
     sen_task, tts_task,
 };
 use seneschal_core::profile::ProfileFact;
-use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider, create_provider};
+use seneschal_core::stt::{NoSpeechGate, SpeechEvent, SttProvider};
 #[cfg(feature = "avspeech")]
 use seneschal_core::tts::AvSpeechTts;
 #[cfg(feature = "kokoro")]
@@ -173,9 +174,8 @@ async fn async_main() -> Result<()> {
     let gpu_assignments = seneschal_common::gpu::resolve_assignments(&config, &gpu_devices);
     seneschal_common::gpu::log_summary(&gpu_devices, &gpu_assignments);
 
-    // Route whisper.cpp / ggml diagnostics into `tracing` so the `whisper_*` /
-    // `ggml_*` lines don't clutter the terminal/TUI screen.
-    seneschal_core::stt::whisper_log::install();
+    // Route whisper.cpp / ggml diagnostics into `tracing` only for the legacy
+    // STT crates; the Nemotron WebSocket provider does not initialize them.
 
     // Route libasound's stderr diagnostics (e.g. "unable to open slave") into
     // `tracing` so they don't clutter the terminal/TUI screen either.
@@ -1046,11 +1046,13 @@ async fn async_main() -> Result<()> {
         .spawn();
     }
 
-    // ── STT + VAD unified processor ────────────────────────────────────────────
-    let mut stt_provider: Box<dyn SttProvider> = create_provider(&config, &gpu_assignments)?;
+    // ── STT: Nemotron ASR over NeMo-Speech.cpp realtime WebSocket ──────────────
+    // VAD-driven endpointing and partial/final transcription live in the
+    // service; the old local Silero segmenter is no longer initialized.
+    let mut stt_provider: Box<dyn SttProvider> = create_provider(&config)?;
     info!(
         target: "stt",
-        "Initialized STT provider '{}' (configured: {})",
+        "Initialized STT provider '{}' (legacy configured: '{}')",
         stt_provider.provider_name(),
         config.stt_provider
     );
