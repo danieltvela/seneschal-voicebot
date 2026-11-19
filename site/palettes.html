@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seneschal — Palette options</title>
+<style>
+:root { --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#05070a; color:#cbd5e1; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; padding:2.5rem 1.5rem; }
+h1 { text-align:center; font-size:1.5rem; margin-bottom:.4rem; color:#e9edf2; }
+p.sub { text-align:center; color:#64748b; margin-bottom:2.5rem; font-size:.95rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(460px,1fr)); gap:1.8rem; max-width:1400px; margin:0 auto; }
+.option { border-radius:14px; overflow:hidden; border:1px solid #262c36; }
+.opt-head { padding:.9rem 1.2rem; display:flex; justify-content:space-between; align-items:baseline; background:rgba(255,255,255,.03); }
+.opt-head h2 { font-size:1rem; }
+.opt-head .name-es { font-family:var(--mono); font-size:.75rem; opacity:.7; }
+.swatches { display:flex; gap:3px; padding:0 1.2rem 0; margin-top:.6rem; }
+.sw { flex:1; height:26px; border-radius:4px; position:relative; }
+.sw span { position:absolute; bottom:-16px; left:0; font-family:var(--mono); font-size:.56rem; opacity:.6; white-space:nowrap; }
+.mock { margin:1.4rem 1.2rem 1.2rem; border-radius:10px; overflow:hidden; border:1px solid var(--border); }
+.navbar { display:flex; justify-content:space-between; align-items:center; padding:.6rem 1rem; background:var(--nav); border-bottom:1px solid var(--border); }
+.navbar .logo { color:var(--text); font-weight:700; font-size:.9rem; display:flex; align-items:center; gap:.5rem; }
+.navbar .logo .mark { width:18px; height:18px; border-radius:5px; background:var(--accent); display:inline-block; }
+.navbar ul { display:flex; list-style:none; gap:1.1rem; }
+.navbar a { color:var(--muted); text-decoration:none; font-size:.72rem; }
+.navbar a.on { color:var(--accent); }
+.hero { text-align:center; padding:1.3rem 1rem 1.1rem; background:var(--hero); }
+.hero h3 { color:var(--text); font-size:1.05rem; letter-spacing:-.02em; }
+.hero .tag { color:var(--muted); font-size:.72rem; margin-top:.25rem; }
+.btns { display:flex; gap:.6rem; justify-content:center; margin-top:.8rem; }
+.btn { font-size:.72rem; padding:.45rem 1rem; border-radius:7px; text-decoration:none; font-weight:600; }
+.btn.p { background:var(--accent); color:var(--btn-text); }
+.btn.s { border:1px solid var(--border); color:var(--text); }
+.cards { display:grid; grid-template-columns:1fr 1fr 1fr; gap:.55rem; padding:.8rem 1rem; background:var(--bg); }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.6rem; }
+.card .ic { width:22px; height:22px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:.75rem; margin-bottom:.4rem; background:var(--iconbg); color:var(--accent); }
+.card h5 { color:var(--text); font-size:.7rem; }
+.card p { color:var(--muted); font-size:.6rem; line-height:1.45; margin-top:.15rem; }
+.chips { display:flex; gap:.4rem; padding:0 1rem .8rem; background:var(--bg); flex-wrap:wrap; }
+.chip { font-family:var(--mono); font-size:.58rem; padding:.2rem .55rem; border-radius:999px; border:1px solid var(--border); background:var(--surface); display:flex; gap:.35rem; align-items:center; }
+.dot { width:7px; height:7px; border-radius:50%; }
+.cubes { padding:.4rem 1rem 1rem; background:var(--bg); display:flex; gap:.4rem; align-items:flex-end; justify-content:center; }
+svg.cube { width:64px; height:64px; }
+footer.note { font-family:var(--mono); font-size:.62rem; color:var(--muted); padding:.6rem 1.2rem 1.2rem; border-top:1px solid rgba(255,255,255,.04); }
+</style>
+</head>
+<body>
+<h1>Seneschal — dark &amp; silver palette options</h1>
+<p class="sub">Five directions for the night banner: deep backgrounds, silver foregrounds. Pick one — same layout, different soul.</p>
+<div class="grid" id="grid"></div>
+
+<script>
+/* cube renderer: top gradient + two sides, ink outline */
+function cube(hexTop, hexL, hexR, outline) {
+  const w=60, dX=27, dY=13.5, H=26, cx=30, cy=34;
+  const T=[cx,cy-dY-H], R=[cx+dX,cy-H], B=[cx,cy+dY-H], L=[cx-dX,cy-H];
+  const Rd=[cx+dX,cy], Bd=[cx,cy+dY], Ld=[cx-dX,cy];
+  const rp=(pts,r)=>{let d='';const n=pts.length;const inf=(c,o,rr)=>{const dx=o[0]-c[0],dy=o[1]-c[1],L2=Math.hypot(dx,dy)||1,k=Math.min(r,L2/2)/L2;return [c[0]+dx*k,c[1]+dy*k]};for(let i=0;i<n;i++){const p=pts[(i-1+n)%n],c=pts[i],q=pts[(i+1)%n];const a=inf(c,p,r),b=inf(c,q,r);d+=(i?'L':'M')+a[0]+','+a[1]+' Q'+c[0]+','+c[1]+' '+b[0]+','+b[1]+' ';}return d+'Z';};
+  const id='g'+hexTop.slice(1)+hexL.slice(1);
+  return `<svg class="cube" viewBox="0 0 60 64">
+    <defs><linearGradient id="${id}-t" x1="0" y1="0" x2=".35" y2="1"><stop offset="0" stop-color="${hexTop}"/><stop offset="1" stop-color="${hexL}"/></linearGradient>
+    <linearGradient id="${id}-s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${hexL}"/><stop offset="1" stop-color="${hexR}"/></linearGradient></defs>
+    <path d="${rp([T,R,Rd,Bd,Ld,L],[10,9,9,12,9,9])}" fill="url(#${id}-s)" stroke="${outline}" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="${rp([B,R,Rd,Bd],[6,9,9,12])}" fill="${hexR}" opacity=".85"/>
+    <path d="${rp([T,R,B,L],[10,9,6,9])}" fill="url(#${id}-t)" stroke="${outline}" stroke-width="1.6" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+const OPTIONS = [
+  {
+    id:'estandarte', title:'1 · Estandarte Blanco', es:'"white, without charge" — plata pura, monocromo',
+    vars:{ '--bg':'#0b0d10','--surface':'#151a21','--border':'#272e38','--nav':'rgba(11,13,16,.95)','--hero':'linear-gradient(180deg,#0b0d10,#12161d)','--text':'#eceff4','--muted':'#8b95a3','--accent':'#cdd5df','--btn-text':'#0b0d10','--iconbg':'rgba(205,213,223,.1)' },
+    levels:{ good:'#8fd3a8', warn:'#d8c37a', bad:'#e08e8e' },
+    cube:{ top:'#eceff4', left:'#c9d1dc', right:'#aab3c0', outline:'#05070a' },
+    note:'La heráldica literal del Senescal: blanco sin emblema. Elegancia máxima, cero color. Los estados (ok/warn/error) aportan el único matiz.',
+  },
+  {
+    id:'gondor', title:'2 · Noche de Gondor', es:'noche azul + plata, destello estelar',
+    vars:{ '--bg':'#0a1322','--surface':'#122036','--border':'#22385a','--nav':'rgba(10,19,34,.95)','--hero':'linear-gradient(180deg,#0a1322,#0f1c31)','--text':'#e7eef8','--muted':'#8298b5','--accent':'#d5e0ef','--btn-text':'#0a1322','--iconbg':'rgba(110,168,221,.12)' },
+    levels:{ good:'#6fd3a0', warn:'#e3c578', bad:'#e08a8a' },
+    cube:{ top:'#dce7f5', left:'#aebfd8', right:'#8ba3c4', outline:'#050a12' },
+    note:'Tu slate actual llevado a azul de verdad. La plata tiene temperatura fría; los acentos de estado pueden tirar a azul estrella (#6ea8dd).',
+  },
+  {
+    id:'ithilien', title:'3 · Ithilien', es:'noche verde + plata lunar',
+    vars:{ '--bg':'#0a1210','--surface':'#13211b','--border':'#22382d','--nav':'rgba(10,18,16,.95)','--hero':'linear-gradient(180deg,#0a1210,#10201a)','--text':'#e8f1eb','--muted':'#87a394','--accent':'#d2e3d7','--btn-text':'#0a1210','--iconbg':'rgba(79,191,139,.12)' },
+    levels:{ good:'#5fc98f', warn:'#d8c37a', bad:'#e08e8e' },
+    cube:{ top:'#ddeee3', left:'#adc7b6', right:'#8aa894', outline:'#050b08' },
+    note:'La luz de la Luna sobre Ithilien: verde muy apagado bajo la plata. Distintivo, sereno, poco «tech».',
+  },
+  {
+    id:'cormallen', title:'4 · Cormallen', es:'noche neutra + plata y oro viejo',
+    vars:{ '--bg':'#0d1014','--surface':'#171c22','--border':'#2b323b','--nav':'rgba(13,16,20,.95)','--hero':'linear-gradient(180deg,#0d1014,#141920)','--text':'#eceae3','--muted':'#95917f','--accent':'#d6bc82','--btn-text':'#0d1014','--iconbg':'rgba(214,188,130,.12)' },
+    levels:{ good:'#9ccf8f', warn:'#d6bc82', bad:'#dd8a8a' },
+    cube:{ top:'#efe9da', left:'#ccc0a4', right:'#ab9f82', outline:'#08090c' },
+    note:'Evolución natural de tu ámbar actual: el oro viejo de la corona de mithril, mucho más contenido, sobre plata. Transición suave desde lo que ya tienes.',
+  },
+  {
+    id:'mithril', title:'5 · Mithril', es:'acero frío + plata brillante, look tech',
+    vars:{ '--bg':'#0c1116','--surface':'#151d26','--border':'#29384a','--nav':'rgba(12,17,22,.95)','--hero':'linear-gradient(180deg,#0c1116,#121a23)','--text':'#e9eff6','--muted':'#8497aa','--accent':'#e2eaf2','--btn-text':'#0c1116','--iconbg':'rgba(88,166,221,.13)' },
+    levels:{ good:'#63c8a0', warn:'#d9c26f', bad:'#e58a8a' },
+    cube:{ top:'#e6edf4', left:'#b9c6d4', right:'#93a5b8', outline:'#05080c' },
+    note:'La corona de mithril: plata casi blanca muy brillante sobre acero azulado. El más «producto», el más luminoso.',
+  },
+];
+
+const grid = document.getElementById('grid');
+for (const o of OPTIONS) {
+  const style = Object.entries(o.vars).map(([k,v])=>`${k}:${v}`).join(';');
+  const v = o.vars;
+  const el = document.createElement('div');
+  el.className = 'option';
+  el.innerHTML = `
+    <div class="opt-head"><h2>${o.title}</h2><span class="name-es">${o.es}</span></div>
+    <div class="swatches">${['--bg','--surface','--border','--text','--muted','--accent'].map(k=>`<div class="sw" style="background:${v[k]}"><span>${v[k]}</span></div>`).join('')}</div>
+    <div class="mock" style="${style}">
+      <div class="navbar"><span class="logo"><span class="mark"></span>Seneschal</span><ul><li><a class="on" href="#">Home</a></li><li><a href="#">Install</a></li><li><a href="#">Architecture</a></li><li><a href="#">GitHub</a></li></ul></div>
+      <div class="hero"><h3>Voice-First AI Butler</h3><div class="tag">Always listening. Instantly responding. In your language.</div>
+        <div class="btns"><a class="btn p" href="#">Get Started</a><a class="btn s" href="#">View on GitHub</a></div></div>
+      <div class="cards">
+        <div class="card"><div class="ic">★</div><h5>Silver Stars</h5><p>Silver stars over the night — the steward's badge, rendered as UI accents.</p></div>
+        <div class="card"><div class="ic">☾</div><h5>Night Banner</h5><p>Deep night background with a plain white field for content.</p></div>
+        <div class="card"><div class="ic">✦</div><h5>Old Crown</h5><p>Mithril edges and quiet highlights, nothing louder than needed.</p></div>
+      </div>
+      <div class="chips">
+        <span class="chip"><span class="dot" style="background:${o.levels.good}"></span>good</span>
+        <span class="chip"><span class="dot" style="background:${o.levels.warn}"></span>warn</span>
+        <span class="chip"><span class="dot" style="background:${o.levels.bad}"></span>bad</span>
+        <span class="chip"><span class="dot" style="background:${v['--accent']}"></span>accent</span>
+      </div>
+      <div class="cubes">${cube(o.cube.top,o.cube.left,o.cube.right,o.cube.outline)}${cube(o.cube.top,o.cube.left,o.cube.right,o.cube.outline)}</div>
+    </div>
+    <footer class="note">${o.note}</footer>`;
+  grid.appendChild(el);
+}
+</script>
+</body>
+</html>
