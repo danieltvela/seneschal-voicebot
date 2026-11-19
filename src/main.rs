@@ -1046,13 +1046,26 @@ async fn async_main() -> Result<()> {
         .spawn();
     }
 
-    // ── STT: Nemotron ASR over NeMo-Speech.cpp realtime WebSocket ──────────────
+    // ── STT provider selection ─────────────────────────────────────────────────
+    // Default runtime: Nemotron ASR over NeMo-Speech.cpp realtime WebSocket —
     // VAD-driven endpointing and partial/final transcription live in the
-    // service; the old local Silero segmenter is no longer initialized.
-    let mut stt_provider: Box<dyn SttProvider> = create_provider(&config)?;
+    // service. The legacy local providers (whisper/parakeet/speech/openai)
+    // remain selectable via STT_PROVIDER for hosts without the NeMo services
+    // (e.g. CPU-only runs via cpu-seneschal.sh).
+    let mut stt_provider: Box<dyn SttProvider> = match config.stt_provider.as_str() {
+        "whisper" | "parakeet" | "speech" | "openai" => {
+            info!(
+                target: "stt",
+                "STT_PROVIDER={} -> legacy local provider",
+                config.stt_provider
+            );
+            seneschal_core::stt::create_provider(&config, &gpu_assignments)?
+        }
+        _ => create_provider(&config)?,
+    };
     info!(
         target: "stt",
-        "Initialized STT provider '{}' (legacy configured: '{}')",
+        "Initialized STT provider '{}' (STT_PROVIDER: '{}')",
         stt_provider.provider_name(),
         config.stt_provider
     );

@@ -73,13 +73,21 @@ impl KokoroTts {
     ///
     /// CPU-intensive — call from `tokio::task::spawn_blocking`.
     pub fn synthesize(&self, text: &str) -> Result<Vec<f32>> {
+        self.synthesize_with(&self.voice, &self.language, self.speed, text)
+    }
+
+    /// [`synthesize`](Self::synthesize) with per-call voice/language/speed,
+    /// without rebuilding the engine (voice auditioning: examples/tts_audition.rs).
+    pub fn synthesize_with(
+        &self,
+        voice: &str,
+        language: &str,
+        speed: f32,
+        text: &str,
+    ) -> Result<Vec<f32>> {
         self.inner
             .tts_raw_audio(
-                text,
-                &self.language,
-                &self.voice,
-                self.speed,
-                None,  // initial_silence
+                text, language, voice, speed, None,  // initial_silence
                 false, // auto_detect_language (we set it explicitly)
                 true,  // force_style
                 false, // phonemes mode
