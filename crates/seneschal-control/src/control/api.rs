@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use futures_util::Stream;
 use serde::Deserialize;
@@ -22,6 +22,7 @@ use super::audio::{
     setting_string,
 };
 use super::broadcast::ControlEvent;
+use super::models::{ModelControl, ModelError};
 use super::state::ControlState;
 use seneschal_common::settings::SettingsPatch;
 use seneschal_core::pipeline::frames::PipelineFrame;
@@ -42,6 +43,24 @@ pub fn router(state: Arc<ControlState>) -> Router {
         .route("/control/config", get(get_config))
         .route("/control/config/validate", post(post_config_validate))
         .route("/control/config/apply", post(post_config_apply))
+        .route("/control/models", get(get_models))
+        .route("/control/models/{id}", delete(delete_model))
+        .route("/control/models/{id}/download", post(post_model_download))
+        .route("/control/models/{id}/cancel", post(post_model_cancel))
+        .route("/control/models/{id}/activate", post(post_model_activate))
+        .route("/control/nemo/services", get(get_nemo_services))
+        .route(
+            "/control/nemo/services/{id}/start",
+            post(post_nemo_service_start),
+        )
+        .route(
+            "/control/nemo/services/{id}/stop",
+            post(post_nemo_service_stop),
+        )
+        .route(
+            "/control/nemo/services/{id}/download-weights",
+            post(post_nemo_weights),
+        )
         .route("/control/audio/devices", get(get_audio_devices))
         .route("/control/audio/status", get(get_audio_status))
         .route("/control/audio/permission", post(post_audio_permission))
@@ -196,6 +215,7 @@ async fn post_config_apply(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn audio_control(state: &ControlState) -> Result<Arc<AudioControl>, Response> {
     state.audio.clone().ok_or_else(|| {
         (
@@ -209,6 +229,169 @@ fn audio_control(state: &ControlState) -> Result<Arc<AudioControl>, Response> {
         )
             .into_response()
     })
+}
+
+#[allow(clippy::result_large_err)]
+fn models_control(state: &ControlState) -> Result<Arc<ModelControl>, Response> {
+    state.models.clone().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "models_unavailable",
+                    "message": "The model manager is not wired in this daemon",
+                }
+            })),
+        )
+            .into_response()
+    })
+}
+
+fn model_error_response(error: ModelError) -> Response {
+    match error {
+        ModelError::Validation(errors) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "ok": false, "errors": errors })),
+        )
+            .into_response(),
+        other => {
+            let status = StatusCode::from_u16(other.status_code())
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (
+                status,
+                Json(serde_json::json!({
+                    "error": {
+                        "code": other.code(),
+                        "message": other.to_string(),
+                        "hint": other.hint(),
+                    }
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn get_models(State(state): State<Arc<ControlState>>) -> Response {
+    match models_control(&state) {
+        Ok(models) => Json(models.catalog().await).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn post_model_download(
+    State(state): State<Arc<ControlState>>,
+    Path(model_id): Path<String>,
+) -> Response {
+    let models = match models_control(&state) {
+        Ok(models) => models,
+        Err(response) => return response,
+    };
+    match models.start_download(&model_id).await {
+        Ok(snapshot) => (StatusCode::ACCEPTED, Json(snapshot)).into_response(),
+        Err(error) => model_error_response(error),
+    }
+}
+
+async fn post_model_cancel(
+    State(state): State<Arc<ControlState>>,
+    Path(model_id): Path<String>,
+) -> Response {
+    let models = match models_control(&state) {
+        Ok(models) => models,
+        Err(response) => return response,
+    };
+    match models.cancel_download(&model_id) {
+        Ok(()) => Json(serde_json::json!({ "cancelled": true })).into_response(),
+        Err(error) => model_error_response(error),
+    }
+}
+
+async fn post_model_activate(
+    State(state): State<Arc<ControlState>>,
+    Path(model_id): Path<String>,
+) -> Response {
+    let models = match models_control(&state) {
+        Ok(models) => models,
+        Err(response) => return response,
+    };
+    match models.activate(&model_id).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => model_error_response(error),
+    }
+}
+
+async fn delete_model(
+    State(state): State<Arc<ControlState>>,
+    Path(model_id): Path<String>,
+) -> Response {
+    let models = match models_control(&state) {
+        Ok(models) => models,
+        Err(response) => return response,
+    };
+    match models.delete(&model_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => model_error_response(error),
+    }
+}
+
+async fn get_nemo_services(State(state): State<Arc<ControlState>>) -> Response {
+    match models_control(&state) {
+        Ok(models) => Json(models.nemo_services().await).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn post_nemo_service(
+    state: Arc<ControlState>,
+    service_id: String,
+    action: seneschal_models::nemo::ComposeAction,
+) -> Response {
+    let models = match models_control(&state) {
+        Ok(models) => models,
+        Err(response) => return response,
+    };
+    match models.nemo_action(&service_id, action).await {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => model_error_response(error),
+    }
+}
+
+async fn post_nemo_service_start(
+    State(state): State<Arc<ControlState>>,
+    Path(service_id): Path<String>,
+) -> Response {
+    post_nemo_service(state, service_id, seneschal_models::nemo::ComposeAction::Up).await
+}
+
+async fn post_nemo_service_stop(
+    State(state): State<Arc<ControlState>>,
+    Path(service_id): Path<String>,
+) -> Response {
+    post_nemo_service(
+        state,
+        service_id,
+        seneschal_models::nemo::ComposeAction::Stop,
+    )
+    .await
+}
+
+async fn post_nemo_weights(
+    State(state): State<Arc<ControlState>>,
+    Path(service_id): Path<String>,
+) -> Response {
+    let models = match models_control(&state) {
+        Ok(models) => models,
+        Err(response) => return response,
+    };
+    match models.download_nemo_weights(&service_id).await {
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "started": true })),
+        )
+            .into_response(),
+        Err(error) => model_error_response(error),
+    }
 }
 
 fn audio_error_response(error: AudioTestError) -> Response {
@@ -225,6 +408,7 @@ fn audio_error_response(error: AudioTestError) -> Response {
     (status, Json(serde_json::json!({ "error": error }))).into_response()
 }
 
+#[allow(clippy::result_large_err)]
 async fn get_audio_devices(State(state): State<Arc<ControlState>>) -> Response {
     match audio_control(&state).and_then(|audio| {
         audio.devices().map_err(|error| {
@@ -435,6 +619,7 @@ mod tests {
     use super::*;
     use crate::control::broadcast::ControlBroadcast;
     use futures_util::StreamExt;
+    use seneschal_models::ModelManager;
     use std::sync::atomic::AtomicBool;
     use tokio::sync::{broadcast, mpsc, watch};
     use tower::ServiceExt;
@@ -508,6 +693,7 @@ mod tests {
             permission_gate: Arc::new(seneschal_common::PermissionGate::new()),
             settings: Arc::new(settings),
             audio,
+            models: None,
         });
         (control, db_dir)
     }
@@ -527,6 +713,383 @@ mod tests {
             .await
             .unwrap();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    // ── Model manager (issue #35) ────────────────────────────────────────────
+
+    const MODEL_PAYLOAD: &[u8] = b"api test model payload";
+
+    fn test_spec(id: &str, rel_path: &str, url: &str) -> seneschal_models::ModelSpec {
+        use sha2::{Digest, Sha256};
+        seneschal_models::ModelSpec {
+            id: id.to_string(),
+            label: "Test model".to_string(),
+            purpose: seneschal_models::ModelPurpose::Stt,
+            backend: seneschal_models::ModelBackend::Whisper,
+            files: vec![seneschal_models::ModelFile {
+                rel_path: rel_path.to_string(),
+                url: url.to_string(),
+                size_bytes: MODEL_PAYLOAD.len() as u64,
+                sha256: Some(hex::encode(Sha256::digest(MODEL_PAYLOAD))),
+            }],
+            requires: Vec::new(),
+        }
+    }
+
+    async fn build_state_with_models(
+        state: PipelineState,
+        manager: ModelManager,
+    ) -> (Arc<ControlState>, tempfile::TempDir) {
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db =
+            seneschal_common::db::Database::new(db_dir.path().join("control.db").to_str().unwrap())
+                .await
+                .unwrap();
+        let (barge_in_tx, _) = broadcast::channel::<u64>(8);
+        let (transcript_tx, _) = mpsc::channel::<PipelineFrame>(8);
+        let (_state_tx, pipeline_state_rx) = watch::channel(state);
+        let (hot_tx, _hot_rx) = mpsc::channel::<seneschal_common::settings::HotSettings>(8);
+        let tts = Arc::new(tokio::sync::RwLock::new(
+            seneschal_core::tts::TtsEngine::Mock(seneschal_core::tts::mock_tts::MockTts::new().0),
+        ));
+        let settings = Arc::new(
+            crate::control::settings::SettingsService::new(
+                seneschal_common::config::Config::embedded_defaults(),
+                Arc::clone(&tts),
+                Arc::new(seneschal_core::audio::output::AudioOutput::null()),
+                Arc::new(std::sync::Mutex::new(
+                    seneschal_common::settings::HotSettings {
+                        language: "es".to_string(),
+                        wake_word: "seneschal".to_string(),
+                    },
+                )),
+                hot_tx,
+            )
+            .unwrap(),
+        );
+        let workdir = std::env::current_dir().unwrap();
+        let models = Arc::new(crate::control::models::ModelControl::with_manager(
+            ControlBroadcast::new(16),
+            Arc::clone(&settings),
+            manager,
+            &workdir,
+        ));
+        let control = Arc::new(ControlState {
+            broadcast: ControlBroadcast::new(16),
+            pipeline_state_rx,
+            tts_muted: Arc::new(AtomicBool::new(false)),
+            play_cancel: Arc::new(AtomicBool::new(false)),
+            barge_in_tx,
+            transcript_tx,
+            llm_session: Arc::new(std::sync::Mutex::new(seneschal_core::llm::LlmSession::new(
+                "sys",
+            ))),
+            db,
+            permission_gate: Arc::new(seneschal_common::PermissionGate::new()),
+            settings,
+            audio: None,
+            models: Some(models),
+        });
+        (control, db_dir)
+    }
+
+    /// `/control/models` exposes the catalog with per-file states and the root.
+    #[tokio::test]
+    async fn models_endpoint_lists_catalog_with_states() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manager = ModelManager::with_catalog(
+            dir.path().join("root"),
+            dir.path(),
+            vec![test_spec(
+                "test-model",
+                "test-model.bin",
+                "https://example.invalid/m.bin",
+            )],
+        );
+        let (state, _db_dir) = build_state_with_models(PipelineState::Idle, manager).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/models")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["root"].is_string());
+        let models = json["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "test-model");
+        assert_eq!(models[0]["state"], "missing");
+        assert_eq!(models[0]["files"][0]["present"], false);
+        assert!(models[0]["active"].is_boolean());
+    }
+
+    /// Download → completed → installed, through the REST endpoint.
+    #[tokio::test]
+    async fn model_download_completes_and_becomes_installed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/model.bin"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(MODEL_PAYLOAD))
+            .mount(&server)
+            .await;
+        let url = format!("{}/model.bin", server.uri());
+        let root = dir.path().join("root");
+        let manager = ModelManager::with_catalog(
+            root.clone(),
+            dir.path(),
+            vec![test_spec("test-model", "test-model.bin", &url)],
+        );
+        let (state, _db_dir) = build_state_with_models(PipelineState::Idle, manager).await;
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/models/test-model/download")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        // Poll until the background task finishes.
+        let mut installed = false;
+        for _ in 0..100 {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/control/models")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            if json["models"][0]["state"] == "installed" {
+                installed = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(installed, "download never reached installed state");
+        assert!(root.join("test-model.bin").is_file());
+    }
+
+    /// Activate requires an installed model; unknown ids are 404.
+    #[tokio::test]
+    async fn activate_rejects_unknown_and_missing_models() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manager = ModelManager::with_catalog(
+            dir.path().join("root"),
+            dir.path(),
+            vec![test_spec(
+                "test-model",
+                "test-model.bin",
+                "https://example.invalid/m.bin",
+            )],
+        );
+        let (state, _db_dir) = build_state_with_models(PipelineState::Idle, manager).await;
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/models/nope/activate")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/models/test-model/activate")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"]["code"], "model_not_installed");
+    }
+
+    /// Activating an installed model applies the restart-tier settings patch
+    /// and writes absolute paths into the config file.
+    #[test]
+    fn activate_installed_model_applies_settings_patch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("settings.toml");
+        std::fs::write(&config_path, "# config\n").unwrap();
+        let config_str = config_path.to_string_lossy().into_owned();
+        let root = dir.path().join("root");
+
+        let _guard = crate::control::settings::tests::config_env_lock()
+            .lock()
+            .unwrap();
+        temp_env::with_vars(
+            [("SENECHAL_CONFIG_FILE", Some(config_str.as_str()))],
+            || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let manager = ModelManager::with_catalog(
+                        root.clone(),
+                        dir.path(),
+                        vec![test_spec(
+                            "test-model",
+                            "test-model.bin",
+                            "https://example.invalid/m.bin",
+                        )],
+                    );
+                    std::fs::create_dir_all(&root).unwrap();
+                    std::fs::write(root.join("test-model.bin"), MODEL_PAYLOAD).unwrap();
+                    let (state, _db_dir) =
+                        build_state_with_models(PipelineState::Idle, manager).await;
+                    let response = router(state)
+                        .oneshot(
+                            axum::http::Request::builder()
+                                .method("POST")
+                                .uri("/control/models/test-model/activate")
+                                .body(axum::body::Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(json["tier"], "restart");
+
+                    let persisted = std::fs::read_to_string(&config_path).unwrap();
+                    let expected = root.join("test-model.bin").display().to_string();
+                    assert!(
+                        persisted.contains(&format!("whisper_model = \"{expected}\"")),
+                        "persisted TOML was:\n{persisted}"
+                    );
+                });
+            },
+        );
+    }
+
+    /// Deleting a model that the active configuration points at is refused.
+    #[test]
+    fn delete_refuses_in_use_models() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_path = dir.path().join("settings.toml");
+        std::fs::write(&config_path, "# config\n").unwrap();
+        let config_str = config_path.to_string_lossy().into_owned();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("test-model.bin"), MODEL_PAYLOAD).unwrap();
+        let manager = ModelManager::with_catalog(
+            root.clone(),
+            dir.path(),
+            vec![test_spec(
+                "test-model",
+                "test-model.bin",
+                "https://example.invalid/m.bin",
+            )],
+        );
+
+        // The apply below writes the active TOML: pin it to a private file and
+        // serialize with the other config-file tests.
+        let _guard = crate::control::settings::tests::config_env_lock()
+            .lock()
+            .unwrap();
+        temp_env::with_vars(
+            [("SENECHAL_CONFIG_FILE", Some(config_str.as_str()))],
+            || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let (state, _db_dir) =
+                        build_state_with_models(PipelineState::Idle, manager).await;
+                    // Point the active config at the managed file.
+                    let patch: seneschal_common::settings::SettingsPatch =
+                        serde_json::from_value(serde_json::json!({
+                            "stt_provider": "whisper",
+                            "whisper_model": root.join("test-model.bin").display().to_string(),
+                        }))
+                        .unwrap();
+                    state.settings.apply(&patch).await.unwrap();
+                    let response = router(state)
+                        .oneshot(
+                            axum::http::Request::builder()
+                                .method("DELETE")
+                                .uri("/control/models/test-model")
+                                .body(axum::body::Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::CONFLICT);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(json["error"]["code"], "model_in_use");
+                });
+            },
+        );
+    }
+
+    /// The NeMo card endpoint answers (docker may be unavailable in tests).
+    #[tokio::test]
+    async fn nemo_services_endpoint_returns_card_shape() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manager = ModelManager::with_catalog(dir.path().join("root"), dir.path(), Vec::new());
+        let (state, _db_dir) = build_state_with_models(PipelineState::Idle, manager).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/nemo/services")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let services = json.as_array().unwrap();
+        assert_eq!(services.len(), 2);
+        for service in services {
+            assert!(service["id"].is_string());
+            assert!(service["container_state"].is_string());
+            assert!(service["weights_state"].is_string());
+        }
     }
 
     /// `/control/state` must expose the stable wire token plus the utterance id

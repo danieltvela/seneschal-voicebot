@@ -1,6 +1,7 @@
 mod audio;
 mod control;
 mod daemon;
+mod models;
 mod settings;
 mod status;
 
@@ -13,6 +14,7 @@ use tokio::sync::watch;
 use crate::audio::SharedAudioHub;
 use crate::control::ControlBridge;
 use crate::daemon::{AppRuntime, spawn_status_emitter};
+use crate::models::SharedModelHub;
 use crate::status::{SharedStatusHub, StatusHub};
 
 #[tauri::command]
@@ -123,11 +125,109 @@ async fn loopback_test(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn get_models(runtime: State<'_, Arc<AppRuntime>>) -> Result<serde_json::Value, String> {
+    models::catalog(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_model(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    models::download_model(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn cancel_model_download(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    models::cancel_model_download(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn delete_model(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    models::delete_model(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Activating a model applies restart-tier settings, so the shell restarts the
+/// sidecar and waits for the next Control connection before returning (same
+/// contract as `apply_settings`).
+#[tauri::command]
+async fn activate_model(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let result = models::activate_model(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if result.get("tier").and_then(|tier| tier.as_str()) == Some("restart") {
+        runtime.restart().await?;
+        runtime
+            .status
+            .wait_until_connected(Duration::from_secs(30))
+            .await?;
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+async fn get_nemo_services(
+    runtime: State<'_, Arc<AppRuntime>>,
+) -> Result<serde_json::Value, String> {
+    models::nemo_services(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn start_nemo_service(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    models::nemo_start(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn stop_nemo_service(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    models::nemo_stop(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_nemo_weights(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    models::nemo_weights(&runtime.base_url(), &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), String> {
     let control_port = daemon::select_control_port()?;
     let base_url = format!("http://127.0.0.1:{control_port}");
     let status_hub: SharedStatusHub = Arc::new(StatusHub::new());
     let audio_hub: SharedAudioHub = Arc::new(audio::AudioHub::new());
+    let model_hub: SharedModelHub = Arc::new(models::ModelHub::new());
     let (restart_tx, restart_rx) = watch::channel(0u64);
 
     let runtime = Arc::new(AppRuntime::new(
@@ -138,15 +238,18 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
     ));
     app.manage(Arc::clone(&runtime));
     app.manage(Arc::clone(&audio_hub));
+    app.manage(Arc::clone(&model_hub));
 
     spawn_status_emitter(app.handle().clone(), Arc::clone(&status_hub));
     audio::spawn_audio_level_emitter(app.handle().clone(), Arc::clone(&audio_hub));
+    models::spawn_model_progress_emitter(app.handle().clone(), Arc::clone(&model_hub));
     tauri::async_runtime::block_on(runtime.start())?;
 
     let bridge = ControlBridge::new(
         base_url,
         Arc::clone(&status_hub),
         Arc::clone(&audio_hub),
+        Arc::clone(&model_hub),
         restart_rx,
     );
     tauri::async_runtime::spawn(bridge.run());
@@ -177,7 +280,16 @@ pub fn run() {
             tts_preview,
             speaker_test,
             mic_test,
-            loopback_test
+            loopback_test,
+            get_models,
+            download_model,
+            cancel_model_download,
+            delete_model,
+            activate_model,
+            get_nemo_services,
+            start_nemo_service,
+            stop_nemo_service,
+            download_nemo_weights
         ])
         .setup(|app| {
             setup(app).map_err(|error| anyhow::anyhow!(error))?;

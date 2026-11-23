@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Audio from "./lib/components/Audio.svelte";
+  import Models from "./lib/components/Models.svelte";
   import Settings from "./lib/components/Settings.svelte";
   import {
     connectionLabel,
@@ -12,7 +13,7 @@
     status,
   } from "./lib/status";
 
-  let view = $state<"status" | "settings" | "audio">("status");
+  let view = $state<"status" | "settings" | "models" | "audio">("status");
   let restarting = $state(false);
   let restartError = $state<string | null>(null);
 
@@ -54,6 +55,13 @@
       </button>
       <button
         type="button"
+        class:active={view === "models"}
+        onclick={() => (view = "models")}
+      >
+        Models
+      </button>
+      <button
+        type="button"
         class:active={view === "audio"}
         onclick={() => (view = "audio")}
       >
@@ -64,6 +72,8 @@
 
   {#if view === "settings"}
     <Settings />
+  {:else if view === "models"}
+    <Models />
   {:else if view === "audio"}
     <Audio />
   {:else if $status}

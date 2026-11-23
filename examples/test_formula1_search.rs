@@ -91,6 +91,17 @@ async fn main() -> anyhow::Result<()> {
                     ClientControlEvent::Error { message } => {
                         println!("[Error] {}", message);
                     }
+                    ClientControlEvent::ModelDownloadProgress {
+                        model_id,
+                        phase,
+                        downloaded_bytes,
+                        ..
+                    } => {
+                        println!(
+                            "[ModelDownload] {} {} {} bytes",
+                            model_id, phase, downloaded_bytes
+                        );
+                    }
                     ClientControlEvent::SystemNotification { text } => {
                         println!("[System] {}", text);
                     }

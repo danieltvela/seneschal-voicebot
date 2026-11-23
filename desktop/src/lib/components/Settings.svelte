@@ -11,6 +11,13 @@
     type SettingsPatch,
     type SettingsSnapshot,
   } from "../settings";
+  import {
+    isModelField,
+    modelCatalog,
+    modelOptionsForField,
+    refreshModels,
+    type ModelOption,
+  } from "../models";
   import { runTtsPreview } from "../audio";
   import { status } from "../status";
 
@@ -37,6 +44,14 @@
   const PORT_FIELDS = new Set(["control_port", "ws_port"]);
   const DEVICE_FIELDS = new Set(["audio_input_device", "audio_output_device"]);
   const BOOL_FIELDS = new Set(["llm_thinking"]);
+  /** Fields backed by the model catalog (issue #35). */
+  const MODEL_SELECT_FIELDS = new Set([
+    "whisper_model",
+    "parakeet_model_dir",
+    "kokoro_model",
+    "kokoro_voices",
+    "vad_model",
+  ]);
 
   let form = $state<Record<string, FormValue>>({});
   let loading = $state(true);
@@ -49,7 +64,10 @@
 
   onMount(async () => {
     try {
-      await loadSettings();
+      await Promise.all([
+        loadSettings(),
+        refreshModels().catch(() => undefined),
+      ]);
     } catch (error) {
       loadError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -82,6 +100,22 @@
     form = { ...form, [key]: value };
   }
 
+  function modelOptionsFor(key: string): ModelOption[] {
+    return modelOptionsForField($modelCatalog, key);
+  }
+
+  /** Selecting a Kokoro bundle auto-fills the paired voices path. */
+  function onModelFieldInput(field: SettingsField, event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    setForm(field.key, value);
+    if (field.key === "kokoro_model") {
+      const option = modelOptionsFor("kokoro_model").find(
+        (candidate) => candidate.value === value,
+      );
+      if (option?.voices) setForm("kokoro_voices", option.voices);
+    }
+  }
+
   function fieldsIn(category: string): SettingsField[] {
     return ($settings?.fields ?? [])
       .filter((field) => field.category === category)
@@ -93,6 +127,14 @@
     const sttProvider = form.stt_provider;
     if (field.key === "whisper_model" && sttProvider !== "whisper") return false;
     if (field.key === "parakeet_model_dir" && sttProvider !== "parakeet") return false;
+    if (
+      field.key === "vad_model" &&
+      !["whisper", "parakeet", "speech", "openai"].includes(
+        typeof sttProvider === "string" ? sttProvider : "",
+      )
+    ) {
+      return false;
+    }
     if (
       (sttProvider === "whisper" ||
         sttProvider === "parakeet" ||
@@ -235,6 +277,24 @@
                   onchange={(event) =>
                     setForm(field.key, event.currentTarget.checked)}
                 />
+              {:else if MODEL_SELECT_FIELDS.has(field.key) && isModelField(field.key)}
+                <select
+                  id={field.key}
+                  value={settingInputValue(field.value)}
+                  disabled={!field.editable || saving}
+                  oninput={(event) => onModelFieldInput(field, event)}
+                >
+                  {#if !modelOptionsFor(field.key).some(
+                      (option) => option.value === settingInputValue(field.value),
+                    )}
+                    <option value={settingInputValue(field.value)}>
+                      {settingInputValue(field.value) === "" ? "—" : settingInputValue(field.value)}
+                    </option>
+                  {/if}
+                  {#each modelOptionsFor(field.key) as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
               {:else if field.options?.length}
                 <select
                   id={field.key}

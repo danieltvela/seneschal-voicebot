@@ -2049,6 +2049,14 @@ async fn async_main() -> Result<()> {
             Arc::clone(&capture_active),
             Arc::clone(&capture_error),
         ));
+        // Model manager (issue #35): catalog + downloads + NeMo cards.
+        let daemon_workdir =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let models_control = Arc::new(seneschal_control::control::models::ModelControl::new(
+            control_broadcast.clone(),
+            Arc::clone(&settings_service),
+            &daemon_workdir,
+        ));
         let ctrl_state = Arc::new(seneschal_control::control::state::ControlState {
             broadcast: control_broadcast.clone(),
             pipeline_state_rx: pipeline_state_rx.clone(),
@@ -2061,6 +2069,7 @@ async fn async_main() -> Result<()> {
             permission_gate: Arc::clone(&permission_gate),
             settings: settings_service,
             audio: Some(audio_control),
+            models: Some(models_control),
         });
         tokio::spawn(async move {
             if let Err(e) =

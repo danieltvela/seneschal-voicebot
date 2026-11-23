@@ -118,6 +118,18 @@ pub enum ClientControlEvent {
     MuteChanged {
         muted: bool,
     },
+    ModelDownloadProgress {
+        model_id: String,
+        download_id: String,
+        phase: String,
+        downloaded_bytes: u64,
+        #[serde(default)]
+        total_bytes: Option<u64>,
+        #[serde(default)]
+        current_file: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+    },
     Error {
         message: String,
     },

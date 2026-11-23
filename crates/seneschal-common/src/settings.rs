@@ -44,6 +44,9 @@ pub struct SettingsPatch {
     pub whisper_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parakeet_model_dir: Option<Option<String>>,
+    /// Path to the Silero VAD model used by the local STT providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad_model: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tts_provider: Option<String>,
@@ -55,6 +58,12 @@ pub struct SettingsPatch {
     pub kokoro_voice: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kokoro_speed: Option<f32>,
+    /// Path to the Kokoro ONNX model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kokoro_model: Option<String>,
+    /// Path to the Kokoro voices bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kokoro_voices: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_tts_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +228,13 @@ pub const SETTING_SPECS: &[SettingSpec] = &[
         tier: SettingTier::Restart,
     },
     SettingSpec {
+        key: "vad_model",
+        label: "VAD model",
+        category: "stt",
+        env_var: "VAD_MODEL",
+        tier: SettingTier::Restart,
+    },
+    SettingSpec {
         key: "parakeet_model_dir",
         label: "Parakeet model dir",
         category: "stt",
@@ -252,6 +268,20 @@ pub const SETTING_SPECS: &[SettingSpec] = &[
         category: "tts",
         env_var: "KOKORO_VOICE",
         tier: SettingTier::Hot,
+    },
+    SettingSpec {
+        key: "kokoro_model",
+        label: "Kokoro model",
+        category: "tts",
+        env_var: "KOKORO_MODEL",
+        tier: SettingTier::Restart,
+    },
+    SettingSpec {
+        key: "kokoro_voices",
+        label: "Kokoro voices",
+        category: "tts",
+        env_var: "KOKORO_VOICES",
+        tier: SettingTier::Restart,
     },
     SettingSpec {
         key: "kokoro_speed",

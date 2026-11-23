@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/asr",
     "crates/seneschal-common",
+    "crates/seneschal-models",
     "crates/seneschal-core",
     "crates/seneschal-mcp",
     "crates/seneschal-agents",

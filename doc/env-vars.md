@@ -31,6 +31,7 @@ Read from `.env` (dotenvy loads automatically):
 | `STT_LIVE_INTERVAL_MS` | `1000` | Minimum new speech audio (ms) between live partial decodes. Raise on CPU-only hosts. |
 | `STT_LIVE_WINDOW_MS` | `15000` | Cap on the audio length per partial decode; longer segments decode their tail. |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
+| `SENESCHAL_MODELS_DIR` | `~/.local/share/seneschal/models` (Linux) / `~/Library/Application Support/Seneschal/models` (macOS) | Root for app-managed model downloads (desktop model manager, issue #35). Legacy `models/` dirs are detected but never moved. |
 | `GPU_AUTO` | `1` | Auto-assign the local ONNX models (Silero VAD, Parakeet, Kokoro TTS) round-robin over the GPUs with the most free VRAM (CUDA builds, issue #14). `0` = manual only. |
 | `VAD_GPU` | — | Pin Silero VAD to a GPU index (`0`, `1`, ...) or `cpu`. Wins over `GPU_AUTO`. |
 | `PARAKEET_GPU` | — | Pin the Parakeet ONNX encoder/decoder to a GPU index or `cpu`. |

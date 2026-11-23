@@ -4499,13 +4499,16 @@ dependencies = [
  "anyhow",
  "axum",
  "futures-util",
+ "hex",
  "hound",
  "reqwest 0.12.28",
  "rubato",
  "seneschal-common",
  "seneschal-core",
+ "seneschal-models",
  "serde",
  "serde_json",
+ "sha2",
  "temp-env",
  "tempfile",
  "thiserror 2.0.18",
@@ -4515,6 +4518,7 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -4622,6 +4626,28 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "seneschal-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "futures-util",
+ "hex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "temp-env",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
  "wiremock",

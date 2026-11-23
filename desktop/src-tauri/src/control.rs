@@ -5,6 +5,7 @@ use serde::Deserialize;
 use tokio::sync::watch;
 
 use crate::audio::SharedAudioHub;
+use crate::models::SharedModelHub;
 use crate::status::{ConnectionStatus, DaemonStatus, PipelineSnapshot, SharedStatusHub};
 
 const MIN_RECONNECT_DELAY: Duration = Duration::from_millis(100);
@@ -12,7 +13,7 @@ const MAX_RECONNECT_DELAY: Duration = Duration::from_millis(1_000);
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(500);
 const STATE_TIMEOUT: Duration = Duration::from_millis(2_000);
 
-/// Events relevant to the spike. Unknown server event types are skipped, as
+/// Events relevant to the shell. Unknown server event types are skipped, as
 /// the iOS companion does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ControlEvent {
@@ -24,6 +25,15 @@ pub enum ControlEvent {
     AudioLevel {
         rms: f32,
         peak: f32,
+    },
+    ModelDownloadProgress {
+        model_id: String,
+        download_id: String,
+        phase: String,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+        current_file: Option<String>,
+        message: Option<String>,
     },
     Error(String),
 }
@@ -55,6 +65,7 @@ struct StateChangedWire {
 pub struct ControlBridge {
     status: SharedStatusHub,
     audio: SharedAudioHub,
+    models: SharedModelHub,
     base_url: String,
     client: reqwest::Client,
     restart_rx: watch::Receiver<u64>,
@@ -65,11 +76,13 @@ impl ControlBridge {
         base_url: impl Into<String>,
         status: SharedStatusHub,
         audio: SharedAudioHub,
+        models: SharedModelHub,
         restart_rx: watch::Receiver<u64>,
     ) -> Self {
         Self {
             status,
             audio,
+            models,
             base_url: base_url.into(),
             client: build_client(),
             restart_rx,
@@ -80,6 +93,7 @@ impl ControlBridge {
         let Self {
             status,
             audio,
+            models,
             base_url,
             client,
             mut restart_rx,
@@ -101,7 +115,7 @@ impl ControlBridge {
             status.set_daemon(DaemonStatus::Running, None);
             status.mark_connecting();
             let connected = tokio::select! {
-                result = Self::connect_once(&status, &audio, &base_url, &client) => result,
+                result = Self::connect_once(&status, &audio, &models, &base_url, &client) => result,
                 _ = restart_rx.changed() => {
                     backoff = MIN_RECONNECT_DELAY;
                     status.mark_connecting();
@@ -155,6 +169,7 @@ impl ControlBridge {
     async fn connect_once(
         status: &SharedStatusHub,
         audio: &SharedAudioHub,
+        models: &SharedModelHub,
         base_url: &str,
         client: &reqwest::Client,
     ) -> anyhow::Result<()> {
@@ -178,7 +193,7 @@ impl ControlBridge {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(frame) = buffer.next_event() {
                 if let Some(event) = parse_control_event(&frame) {
-                    Self::apply_event(status, audio, base_url, client, event).await;
+                    Self::apply_event(status, audio, models, base_url, client, event).await;
                 }
             }
         }
@@ -208,6 +223,7 @@ impl ControlBridge {
     async fn apply_event(
         status: &SharedStatusHub,
         audio: &SharedAudioHub,
+        models: &SharedModelHub,
         base_url: &str,
         client: &reqwest::Client,
         event: ControlEvent,
@@ -218,6 +234,25 @@ impl ControlBridge {
             }
             ControlEvent::AudioLevel { rms, peak } => {
                 audio.apply(crate::audio::AudioLevel { rms, peak });
+            }
+            ControlEvent::ModelDownloadProgress {
+                model_id,
+                download_id,
+                phase,
+                downloaded_bytes,
+                total_bytes,
+                current_file,
+                message,
+            } => {
+                models.apply(crate::models::ModelProgress {
+                    model_id,
+                    download_id,
+                    phase,
+                    downloaded_bytes,
+                    total_bytes,
+                    current_file,
+                    message,
+                });
             }
             ControlEvent::Error(message) => {
                 let missed = message.contains("Missed");
@@ -294,6 +329,18 @@ pub fn parse_control_event(frame: &str) -> Option<ControlEvent> {
                 peak: event.peak,
             })
         }
+        "model_download_progress" => {
+            let event = serde_json::from_value::<ModelDownloadProgressWire>(value).ok()?;
+            Some(ControlEvent::ModelDownloadProgress {
+                model_id: event.model_id,
+                download_id: event.download_id,
+                phase: event.phase,
+                downloaded_bytes: event.downloaded_bytes,
+                total_bytes: event.total_bytes,
+                current_file: event.current_file,
+                message: event.message,
+            })
+        }
         "error" => {
             let event = serde_json::from_value::<ErrorWire>(value).ok()?;
             Some(ControlEvent::Error(event.message))
@@ -311,6 +358,20 @@ struct ErrorWire {
 struct AudioLevelWire {
     rms: f32,
     peak: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelDownloadProgressWire {
+    model_id: String,
+    download_id: String,
+    phase: String,
+    downloaded_bytes: u64,
+    #[serde(default)]
+    total_bytes: Option<u64>,
+    #[serde(default)]
+    current_file: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[cfg(test)]
@@ -376,6 +437,42 @@ mod tests {
         let error =
             parse_control_event("data: {\"type\":\"error\",\"message\":\"Missed 3 events\"}");
         assert_eq!(error, Some(ControlEvent::Error("Missed 3 events".into())));
+    }
+
+    #[test]
+    fn sse_parser_accepts_model_download_progress() {
+        let event = parse_control_event(
+            "data: {\"type\":\"model_download_progress\",\"model_id\":\"whisper-tiny\",\"download_id\":\"d1\",\"phase\":\"downloading\",\"downloaded_bytes\":1024,\"total_bytes\":4096,\"current_file\":\"ggml-tiny.bin\"}",
+        );
+        assert_eq!(
+            event,
+            Some(ControlEvent::ModelDownloadProgress {
+                model_id: "whisper-tiny".into(),
+                download_id: "d1".into(),
+                phase: "downloading".into(),
+                downloaded_bytes: 1024,
+                total_bytes: Some(4096),
+                current_file: Some("ggml-tiny.bin".into()),
+                message: None,
+            })
+        );
+
+        // Indeterminate NeMo progress omits total_bytes.
+        let event = parse_control_event(
+            "data: {\"type\":\"model_download_progress\",\"model_id\":\"magpie-tts\",\"download_id\":\"d2\",\"phase\":\"downloading\",\"downloaded_bytes\":0}",
+        );
+        assert_eq!(
+            event,
+            Some(ControlEvent::ModelDownloadProgress {
+                model_id: "magpie-tts".into(),
+                download_id: "d2".into(),
+                phase: "downloading".into(),
+                downloaded_bytes: 0,
+                total_bytes: None,
+                current_file: None,
+                message: None,
+            })
+        );
     }
 
     async fn spawn_mock_control() -> String {
@@ -444,6 +541,7 @@ mod tests {
                 base_url,
                 hub.clone(),
                 std::sync::Arc::new(crate::audio::AudioHub::new()),
+                std::sync::Arc::new(crate::models::ModelHub::new()),
                 restart_rx,
             )
             .run(),

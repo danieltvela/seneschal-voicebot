@@ -74,6 +74,13 @@ impl SettingsService {
         }
     }
 
+    /// Effective `Config` (embedded defaults + file + env overrides). The
+    /// model manager uses it for active-model detection and NeMo health
+    /// targets, including values that are not part of the Settings allow-list.
+    pub async fn config(&self) -> seneschal_common::config::Config {
+        self.config.read().await.clone()
+    }
+
     pub async fn validate(&self, patch: &SettingsPatch) -> ValidationResponse {
         let config = self.config.read().await.clone();
         let (tier, errors) = Self::validate_patch(&config, patch);
@@ -344,6 +351,13 @@ impl SettingsService {
                 non_empty(value, "Whisper model path cannot be empty"),
             );
         }
+        if let Some(value) = &patch.vad_model {
+            consider("vad_model", SettingTier::Restart);
+            check(
+                "vad_model",
+                non_empty(value, "VAD model path cannot be empty"),
+            );
+        }
         if patch.parakeet_model_dir.is_some() {
             consider("parakeet_model_dir", SettingTier::Restart);
             if config.stt_provider == "parakeet" && config.parakeet_model_dir.is_none() {
@@ -399,6 +413,20 @@ impl SettingsService {
             check(
                 "kokoro_voice",
                 non_empty(value, "Kokoro voice cannot be empty"),
+            );
+        }
+        if let Some(value) = &patch.kokoro_model {
+            consider("kokoro_model", SettingTier::Restart);
+            check(
+                "kokoro_model",
+                non_empty(value, "Kokoro model path cannot be empty"),
+            );
+        }
+        if let Some(value) = &patch.kokoro_voices {
+            consider("kokoro_voices", SettingTier::Restart);
+            check(
+                "kokoro_voices",
+                non_empty(value, "Kokoro voices path cannot be empty"),
             );
         }
         if let Some(value) = &patch.openai_tts_url {
@@ -515,6 +543,9 @@ fn apply_patch_to_config(config: &mut seneschal_common::config::Config, patch: &
     if let Some(value) = &patch.whisper_model {
         config.whisper_model = value.trim().to_string();
     }
+    if let Some(value) = &patch.vad_model {
+        config.vad_model = value.trim().to_string();
+    }
     if let Some(value) = &patch.parakeet_model_dir {
         config.parakeet_model_dir = value
             .clone()
@@ -532,6 +563,12 @@ fn apply_patch_to_config(config: &mut seneschal_common::config::Config, patch: &
     }
     if let Some(value) = &patch.kokoro_voice {
         config.kokoro_voice = value.trim().to_string();
+    }
+    if let Some(value) = &patch.kokoro_model {
+        config.kokoro_model = value.trim().to_string();
+    }
+    if let Some(value) = &patch.kokoro_voices {
+        config.kokoro_voices = value.trim().to_string();
     }
     if let Some(value) = patch.kokoro_speed {
         config.kokoro_speed = value;
@@ -590,11 +627,14 @@ fn config_value(config: &seneschal_common::config::Config, key: &str) -> serde_j
         "stt_url" => serde_json::json!(config.stt_url),
         "stt_model" => serde_json::json!(config.stt_model),
         "whisper_model" => serde_json::json!(config.whisper_model),
+        "vad_model" => serde_json::json!(config.vad_model),
         "parakeet_model_dir" => serde_json::json!(config.parakeet_model_dir),
         "tts_provider" => serde_json::json!(config.tts_provider),
         "avspeech_voice" => serde_json::json!(config.avspeech_voice),
         "avspeech_rate" => serde_json::json!(config.avspeech_rate),
         "kokoro_voice" => serde_json::json!(config.kokoro_voice),
+        "kokoro_model" => serde_json::json!(config.kokoro_model),
+        "kokoro_voices" => serde_json::json!(config.kokoro_voices),
         "kokoro_speed" => serde_json::json!(config.kokoro_speed),
         "openai_tts_url" => serde_json::json!(config.openai_tts_url),
         "openai_tts_voice" => serde_json::json!(config.openai_tts_voice),
@@ -801,11 +841,18 @@ fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use seneschal_common::settings::SettingsPatch;
     use seneschal_core::tts::mock_tts::MockTts;
     use serde_json::json;
+
+    /// Tests that touch `SENESCHAL_CONFIG_FILE` must serialize: temp-env is
+    /// not thread-safe across parallel tests.
+    pub(crate) fn config_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
 
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
@@ -814,28 +861,22 @@ mod tests {
             .unwrap()
     }
 
-    fn service_with_file(
-        path: &Path,
-    ) -> (
+    type ServiceHandles = (
         Arc<SettingsService>,
         SharedTtsEngine,
         Arc<AudioOutput>,
         Arc<std::sync::Mutex<HotSettings>>,
         mpsc::Receiver<HotSettings>,
-    ) {
+    );
+
+    fn service_with_file(path: &Path) -> ServiceHandles {
         service_with_config(path, seneschal_common::config::Config::embedded_defaults())
     }
 
     fn service_with_config(
         _path: &Path,
         config: seneschal_common::config::Config,
-    ) -> (
-        Arc<SettingsService>,
-        SharedTtsEngine,
-        Arc<AudioOutput>,
-        Arc<std::sync::Mutex<HotSettings>>,
-        mpsc::Receiver<HotSettings>,
-    ) {
+    ) -> ServiceHandles {
         let (hot_tx, hot_rx) = mpsc::channel(4);
         let tts: SharedTtsEngine = Arc::new(RwLock::new(TtsEngine::Mock(MockTts::new().0)));
         let output = Arc::new(AudioOutput::null());
@@ -864,7 +905,8 @@ mod tests {
         )
         .unwrap();
         let path_str = path.to_string_lossy().into_owned();
-        temp_env::with_vars(&[("SENECHAL_CONFIG_FILE", Some(path_str.as_str()))], || {
+        let _guard = config_env_lock().lock().unwrap();
+        temp_env::with_vars([("SENECHAL_CONFIG_FILE", Some(path_str.as_str()))], || {
             let runtime = runtime();
             runtime.block_on(async {
                 let (service, _tts, output, hot, mut hot_rx) = service_with_file(&path);
@@ -913,7 +955,8 @@ mod tests {
         let original = "# unchanged\noutput_volume = 0.5\n";
         std::fs::write(&path, original).unwrap();
         let path_str = path.to_string_lossy().into_owned();
-        temp_env::with_vars(&[("SENECHAL_CONFIG_FILE", Some(path_str.as_str()))], || {
+        let _guard = config_env_lock().lock().unwrap();
+        temp_env::with_vars([("SENECHAL_CONFIG_FILE", Some(path_str.as_str()))], || {
             let runtime = runtime();
             runtime.block_on(async {
                 let (service, _tts, _output, _hot, _rx) = service_with_file(&path);
@@ -932,8 +975,9 @@ mod tests {
         let path = dir.path().join("settings.toml");
         std::fs::write(&path, "kokoro_voice = \"af_bella\"\n").unwrap();
         let path_str = path.to_string_lossy().into_owned();
+        let _guard = config_env_lock().lock().unwrap();
         temp_env::with_vars(
-            &[
+            [
                 ("SENECHAL_CONFIG_FILE", Some(path_str.as_str())),
                 ("KOKORO_VOICE", Some("ef_dora")),
             ],

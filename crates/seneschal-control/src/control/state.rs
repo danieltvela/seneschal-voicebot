@@ -4,6 +4,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 use super::audio::AudioControl;
 use super::broadcast::{ControlBroadcast, ControlEvent};
+use super::models::ModelControl;
 use super::settings::SettingsService;
 use seneschal_common::PermissionGate;
 use seneschal_common::db::Database;
@@ -40,6 +41,8 @@ pub struct ControlState {
     /// the daemon. `Option` keeps existing test-state constructors small while
     /// the endpoint returns a clear 503 when it is absent.
     pub audio: Option<Arc<AudioControl>>,
+    /// Model manager (issue #35); `Option` for the same reason as `audio`.
+    pub models: Option<Arc<ModelControl>>,
 }
 
 #[cfg(test)]

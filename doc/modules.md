@@ -22,7 +22,8 @@
 | `src/agents/` | Agent delegation for complex tasks | 🟡 AISLAR (`seneschal-agents`) | [agents-internal.md](agents-internal.md) |
 | `src/plugins/` | Plugin system (runtime-swappable feature packs) | 🟡 AISLAR (`seneschal-plugins`) | [plugins-internal.md](plugins-internal.md) |
 | `src/classifier/` | Intent classifier cascade (heuristic → keyword → fallback) | 🟡 AISLAR (`seneschal-classifier`) | [classifier.md](classifier.md) |
-| `src/control/` | Control API (HTTP/SSE) + tiered Settings read/validate/apply (issue #33) | 🟡 AISLAR (`seneschal-control`) | [MAIN_PROCESS.md](MAIN_PROCESS.md), [IOS_COMPANION.md](IOS_COMPANION.md), [design/33-desktop-settings.md](design/33-desktop-settings.md) |
+| `src/control/` | Control API (HTTP/SSE) + tiered Settings read/validate/apply (issue #33) + model manager/NeMo cards (issue #35) | 🟡 AISLAR (`seneschal-control`) | [MAIN_PROCESS.md](MAIN_PROCESS.md), [IOS_COMPANION.md](IOS_COMPANION.md), [design/33-desktop-settings.md](design/33-desktop-settings.md), [design/35-desktop-models.md](design/35-desktop-models.md) |
+| `crates/seneschal-models/` | Central model catalog + resumable checksum-verified downloads + NeMo service status (issue #35) | 🟢 SALVAR | [design/35-desktop-models.md](design/35-desktop-models.md) |
 | `src/remote/` | WebSocket server for remote audio streaming | 🟡 AISLAR (`seneschal-remote`) | [APPLE_WATCH_CLIENT.md](APPLE_WATCH_CLIENT.md), [IOS_COMPANION.md](IOS_COMPANION.md) |
 | `src/tui/` | Terminal UI (ratatui), status-only | 🟡 AISLAR (`seneschal-tui`) | readme.md §TUI Key Bindings |
 | `src/daemon.rs` | InferenceDaemon — proactive reasoning loop | 🟡 AISLAR (`seneschal-extras`) | [MAIN_PROCESS.md](MAIN_PROCESS.md) |

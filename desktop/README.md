@@ -14,6 +14,16 @@ tiered apply model: TTS voice/rate, output volume, language and wake word apply
 without a restart; backend/model/URL/port changes restart the sidecar
 automatically while the window stays open.
 
+The Models view (issue #35) is the model manager: catalog cards with
+installed/missing/active state, resumable downloads with live progress over
+SSE, checksum-verified installs, deletion with active-model guards, "Use
+model" activation through the Settings apply flow (restart + reconnect), and
+NeMo service cards with `docker compose` start/stop, `/ready` + `/v1/models`
+health (including `STT_MODEL` mismatch detection) and weight download status.
+Downloads land in the standard per-OS data dir (see
+`doc/design/35-desktop-models.md`); legacy `models/` dirs are detected but
+never moved.
+
 ## Commands
 
 ```bash
