@@ -1,0 +1,23 @@
+/*
+ * Global document reset for the desktop shell.
+ *
+ * Svelte component styles are scoped, so nothing inside a component can
+ * reset the user-agent document defaults. Without this file the WebView
+ * keeps `body { margin: 8px }` and a white page background, painting a
+ * white frame around the dark UI (issue #39).
+ */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #101317;
+}
+
+/*
+ * Opt the document into dark form controls and scrollbars so the
+ * window chrome matches the UI on macOS (WKWebView) and Linux
+ * (WebKitGTK) instead of flashing light widgets at the edges.
+ */
+html {
+  color-scheme: dark;
+}
