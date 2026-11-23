@@ -61,8 +61,8 @@ verify_linux() {
     trap - EXIT
 
     dpkg-deb -I "${deb}" >/dev/null || fail "invalid Debian package: ${deb}"
-    dpkg-deb -c "${deb}" | grep -q 'seneschal' || fail "Debian package does not contain the sidecar: ${deb}"
-    dpkg-deb -c "${deb}" | grep -q 'espeak-ng-data' || fail "Debian package does not contain espeak-ng-data: ${deb}"
+    dpkg-deb -c "${deb}" | grep 'seneschal' >/dev/null || fail "Debian package does not contain the sidecar: ${deb}"
+    dpkg-deb -c "${deb}" | grep 'espeak-ng-data' >/dev/null || fail "Debian package does not contain espeak-ng-data: ${deb}"
     echo "verified ${appimage}"
     echo "verified ${deb}"
 
