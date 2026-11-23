@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Seneschal",
+  "version": "0.1.0",
+  "identifier": "org.veladan.seneschal",
+  "build": {
+    "beforeDevCommand": "npm run dev:vite",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Seneschal — Desktop Spike",
+        "width": 800,
+        "height": 600,
+        "minWidth": 480,
+        "minHeight": 360,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/seneschal"]
+  }
+}

@@ -1,0 +1,41 @@
+[package]
+name = "seneschal-desktop"
+version = "0.1.0"
+description = "Tauri shell for the Seneschal daemon"
+edition = "2024"
+repository = "https://github.com/danieltvela/seneschal-voicebot"
+
+[lib]
+name = "seneschal_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+axum = "0.8"
+
+[profile.release]
+strip = true

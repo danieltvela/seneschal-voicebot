@@ -1,0 +1,239 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::CommandEvent;
+use tokio::sync::{Mutex, watch};
+
+use crate::status::{DaemonStatus, SharedStatusHub};
+
+pub const STATUS_EVENT: &str = "desktop-status";
+
+/// Owns the Seneschal sidecar and coordinates restarts with the Control bridge.
+pub struct AppRuntime {
+    app: AppHandle,
+    pub(crate) status: SharedStatusHub,
+    control_port: u16,
+    restart_tx: watch::Sender<u64>,
+    restart_lock: Mutex<()>,
+    child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
+    generation: Arc<AtomicU64>,
+    workdir: PathBuf,
+}
+
+impl AppRuntime {
+    pub fn new(
+        app: AppHandle,
+        status: SharedStatusHub,
+        control_port: u16,
+        restart_tx: watch::Sender<u64>,
+    ) -> Self {
+        Self {
+            app,
+            status,
+            control_port,
+            restart_tx,
+            restart_lock: Mutex::new(()),
+            child: Mutex::new(None),
+            generation: Arc::new(AtomicU64::new(0)),
+            workdir: daemon_workdir(),
+        }
+    }
+
+    pub async fn start(&self) -> Result<(), String> {
+        self.next_generation();
+        self.spawn_daemon().await
+    }
+
+    pub async fn restart(&self) -> Result<(), String> {
+        let _guard = self.restart_lock.lock().await;
+        self.status.begin_reconnect();
+        self.status.restart();
+        self.next_generation();
+        self.stop_daemon().await?;
+        self.spawn_daemon().await
+    }
+
+    pub async fn shutdown(&self) {
+        let _guard = self.restart_lock.lock().await;
+        let _ = self.stop_daemon().await;
+    }
+
+    fn next_generation(&self) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.restart_tx.send(generation);
+        generation
+    }
+
+    fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    fn sidecar_command(&self) -> Result<tauri_plugin_shell::process::Command, String> {
+        let mut command = self
+            .app
+            .shell()
+            .sidecar("seneschal")
+            .map_err(|error| format!("failed to resolve Seneschal sidecar: {error}"))?;
+        command = command
+            .env("CONTROL_PORT", self.control_port.to_string())
+            .current_dir(&self.workdir)
+            .set_process_group(true)
+            .kill_on_drop(true);
+        Ok(command)
+    }
+
+    async fn spawn_daemon(&self) -> Result<(), String> {
+        let generation = self.current_generation();
+        tracing::debug!(
+            target: "desktop_daemon",
+            "spawning sidecar generation {generation} on port {}",
+            self.control_port
+        );
+        self.status.set_daemon(DaemonStatus::Starting, None);
+        let command = self.sidecar_command()?;
+        let (rx, child) = match command.spawn() {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                tracing::error!(target: "desktop_daemon", "failed to spawn sidecar: {error}");
+                return Err(format!("failed to spawn Seneschal sidecar: {error}"));
+            }
+        };
+        *self.child.lock().await = Some(child);
+
+        let runtime = Arc::new(self.clone_runtime());
+        tauri::async_runtime::spawn(async move {
+            supervise_sidecar(runtime, generation, rx).await;
+        });
+        Ok(())
+    }
+
+    /// The sidecar output task shares the generation counter so events from an
+    /// old process cannot overwrite the status of a newer one.
+    fn clone_runtime(&self) -> AppRuntimeHandle {
+        AppRuntimeHandle {
+            status: Arc::clone(&self.status),
+            generation: Arc::clone(&self.generation),
+        }
+    }
+
+    async fn stop_daemon(&self) -> Result<(), String> {
+        let child = self.child.lock().await.take();
+        if let Some(child) = child {
+            let result = tokio::task::spawn_blocking(move || child.kill())
+                .await
+                .map_err(|error| format!("failed to join sidecar kill task: {error}"))?;
+            result.map_err(|error| format!("failed to stop Seneschal sidecar: {error}"))?;
+        }
+        Ok(())
+    }
+}
+
+/// Minimal handle for the sidecar output task. It only needs the status bus
+/// and an immutable snapshot of the generation it belongs to.
+struct AppRuntimeHandle {
+    status: SharedStatusHub,
+    generation: Arc<AtomicU64>,
+}
+
+async fn supervise_sidecar(
+    runtime: Arc<AppRuntimeHandle>,
+    generation: u64,
+    mut rx: tauri::async_runtime::Receiver<CommandEvent>,
+) {
+    while let Some(event) = rx.recv().await {
+        if runtime.generation.load(Ordering::SeqCst) != generation {
+            continue;
+        }
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                let line = String::from_utf8_lossy(&bytes);
+                tracing::trace!(target: "desktop_sidecar", stdout = %line.trim_end());
+            }
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes);
+                tracing::debug!(target: "desktop_sidecar", stderr = %line.trim_end());
+            }
+            CommandEvent::Error(error) => {
+                runtime
+                    .status
+                    .daemon_exited(DaemonStatus::Failed, Some(error));
+            }
+            CommandEvent::Terminated(payload) => {
+                let message = match payload.code {
+                    Some(code) => format!("daemon exited (code {code})"),
+                    None => "daemon exited".to_string(),
+                };
+                tracing::warn!(target: "desktop_daemon", "{message}");
+                runtime
+                    .status
+                    .daemon_exited(DaemonStatus::Stopped, Some(message));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Reserve a fresh loopback port so the desktop shell never collides with a
+/// manually started daemon or the iOS companion on the default port.
+pub fn select_control_port() -> Result<u16, String> {
+    if let Ok(value) = std::env::var("SENESCHAL_DESKTOP_CONTROL_PORT") {
+        return value
+            .parse()
+            .map_err(|error| format!("invalid SENESCHAL_DESKTOP_CONTROL_PORT: {error}"));
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| format!("failed to reserve a control port: {error}"))?;
+    listener
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|error| format!("failed to read the reserved control port: {error}"))
+}
+
+fn daemon_workdir() -> PathBuf {
+    if let Ok(path) = std::env::var("SENESCHAL_DESKTOP_WORKDIR") {
+        return PathBuf::from(path);
+    }
+    if cfg!(debug_assertions) {
+        // `tauri dev` runs from `desktop/src-tauri`; the daemon expects repo
+        // root for `.env`, embedded TOML fallback and relative data paths.
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../");
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Forward every status change to the webview.
+pub fn spawn_status_emitter(app: AppHandle, status: SharedStatusHub) {
+    let mut rx = status.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(snapshot) => {
+                    let _ = app.emit(STATUS_EVENT, snapshot);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_port_can_be_pinned_for_manual_qa() {
+        // SAFETY: test-only single-threaded mutation.
+        unsafe {
+            std::env::set_var("SENESCHAL_DESKTOP_CONTROL_PORT", "19123");
+        }
+        assert_eq!(select_control_port(), Ok(19123));
+        unsafe {
+            std::env::remove_var("SENESCHAL_DESKTOP_CONTROL_PORT");
+        }
+    }
+}

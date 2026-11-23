@@ -1,0 +1,18 @@
+{
+  "identifier": "default",
+  "description": "Minimum capability for the desktop spike: UI events and the scoped Seneschal sidecar.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/seneschal",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
+  ]
+}
