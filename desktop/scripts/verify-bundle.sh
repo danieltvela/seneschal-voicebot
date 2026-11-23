@@ -39,6 +39,7 @@ verify_linux() {
     [[ -n "${deb}" ]] || fail "no .deb under ${BUNDLE_ROOT}/deb"
 
     file "${appimage}" | grep -q 'ELF' || fail "AppImage is not an ELF image: ${appimage}"
+    appimage="$(realpath "${appimage}")"
 
     EXTRACT_DIR="$(mktemp -d)"
     trap 'rm -rf "${EXTRACT_DIR}"' EXIT
