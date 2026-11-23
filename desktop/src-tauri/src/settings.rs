@@ -56,6 +56,15 @@ pub async fn apply_config(base_url: &str, patch: &Value) -> anyhow::Result<Value
     Ok(body)
 }
 
+pub async fn get_onboarding_defaults(base_url: &str) -> anyhow::Result<Value> {
+    let response = client()
+        .get(format!("{base_url}/control/onboarding/defaults"))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(response.json().await?)
+}
+
 fn settings_error_message(body: &Value) -> String {
     let errors = body
         .get("errors")

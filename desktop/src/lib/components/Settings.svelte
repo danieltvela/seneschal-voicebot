@@ -62,6 +62,12 @@
   let fieldErrors = $state<Record<string, string>>({});
   let previewing = $state(false);
 
+  let {
+    onRunSetup,
+  }: {
+    onRunSetup?: () => void;
+  } = $props();
+
   onMount(async () => {
     try {
       await Promise.all([
@@ -345,6 +351,11 @@
       >
         {previewing ? "Previewing…" : "Preview voice"}
       </button>
+      {#if onRunSetup}
+        <button type="button" class="secondary" onclick={onRunSetup} disabled={saving}>
+          Run setup again
+        </button>
+      {/if}
     </div>
 
     <p class="muted small">Config file: {$settings.config_file ?? "embedded defaults"}</p>
@@ -496,6 +507,10 @@
   button.secondary {
     flex: 0 0 140px;
     background: #202833;
+  }
+
+  button.secondary:last-child {
+    flex: 0 0 auto;
   }
 
   button:disabled {

@@ -229,8 +229,10 @@ impl StatusHub {
                 });
             }
             ControlEvent::Error(error) => self.set_error(error),
-            // The VU bus consumes audio levels before status normalization.
+            // Audio and model progress are consumed by their dedicated hubs;
+            // other Control events are not status state.
             ControlEvent::AudioLevel { .. } => {}
+            ControlEvent::ModelDownloadProgress { .. } => {}
         }
     }
 }

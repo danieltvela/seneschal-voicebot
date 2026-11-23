@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_shell::ShellExt;
@@ -22,6 +22,8 @@ pub struct AppRuntime {
     generation: Arc<AtomicU64>,
     exit_tx: watch::Sender<u64>,
     workdir: PathBuf,
+    config_path: PathBuf,
+    onboarding_active: AtomicBool,
 }
 
 impl AppRuntime {
@@ -30,6 +32,9 @@ impl AppRuntime {
         status: SharedStatusHub,
         control_port: u16,
         restart_tx: watch::Sender<u64>,
+        workdir: PathBuf,
+        config_path: PathBuf,
+        onboarding_active: bool,
     ) -> Self {
         let (exit_tx, _) = watch::channel(0u64);
         Self {
@@ -41,8 +46,14 @@ impl AppRuntime {
             child: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
             exit_tx,
-            workdir: daemon_workdir(),
+            workdir,
+            config_path,
+            onboarding_active: AtomicBool::new(onboarding_active),
         }
+    }
+
+    pub fn set_onboarding_active(&self, active: bool) {
+        self.onboarding_active.store(active, Ordering::SeqCst);
     }
 
     pub(crate) fn base_url(&self) -> String {
@@ -86,6 +97,14 @@ impl AppRuntime {
             .map_err(|error| format!("failed to resolve Seneschal sidecar: {error}"))?;
         command = command
             .env("CONTROL_PORT", self.control_port.to_string())
+            .env(
+                "SENECHAL_CONFIG_FILE",
+                self.config_path.to_string_lossy().into_owned(),
+            );
+        if self.onboarding_active.load(Ordering::SeqCst) {
+            command = command.env("SENESCHAL_DEFER_STARTUP_GREETING", "1");
+        }
+        command = command
             .current_dir(&self.workdir)
             .set_process_group(true)
             .kill_on_drop(true);
@@ -235,7 +254,10 @@ pub fn select_control_port() -> Result<u16, String> {
         .map_err(|error| format!("failed to read the reserved control port: {error}"))
 }
 
-fn daemon_workdir() -> PathBuf {
+/// Resolve the daemon workdir: explicit QA override, the repository in dev, or
+/// Tauri's per-user data directory in packaged builds. The daemon writes TOML,
+/// SQLite and relative data paths under this directory.
+pub fn daemon_workdir(app_data_dir: Option<PathBuf>) -> PathBuf {
     if let Ok(path) = std::env::var("SENESCHAL_DESKTOP_WORKDIR") {
         return PathBuf::from(path);
     }
@@ -244,7 +266,21 @@ fn daemon_workdir() -> PathBuf {
         // root for `.env`, embedded TOML fallback and relative data paths.
         return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../");
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    app_data_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// The single TOML path used for first-run detection and every sidecar spawn.
+/// An explicit override keeps existing behavior; otherwise the env-specific
+/// file lives in the daemon workdir.
+pub fn daemon_config_path(workdir: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var("SENECHAL_CONFIG_FILE") {
+        return PathBuf::from(path);
+    }
+    let env = match std::env::var("SENECHAL_ENV").as_deref() {
+        Ok("dev") | Ok("development") => "dev",
+        _ => "pro",
+    };
+    workdir.join(format!("seneschal.{env}.toml"))
 }
 
 /// Forward every status change to the webview.
@@ -276,6 +312,31 @@ mod tests {
         assert_eq!(select_control_port(), Ok(19123));
         unsafe {
             std::env::remove_var("SENESCHAL_DESKTOP_CONTROL_PORT");
+        }
+    }
+
+    #[test]
+    fn workdir_override_wins_and_config_follows_the_environment() {
+        // SAFETY: test-only single-threaded mutation.
+        unsafe {
+            std::env::set_var("SENESCHAL_DESKTOP_WORKDIR", "/tmp/seneschal-desktop-qa");
+        }
+        let workdir = daemon_workdir(None);
+        assert_eq!(workdir, PathBuf::from("/tmp/seneschal-desktop-qa"));
+        assert_eq!(
+            daemon_config_path(&workdir),
+            PathBuf::from("/tmp/seneschal-desktop-qa/seneschal.pro.toml")
+        );
+        unsafe {
+            std::env::remove_var("SENESCHAL_DESKTOP_WORKDIR");
+            std::env::set_var("SENECHAL_ENV", "dev");
+        }
+        assert_eq!(
+            daemon_config_path(Path::new("/tmp/other")),
+            PathBuf::from("/tmp/other/seneschal.dev.toml")
+        );
+        unsafe {
+            std::env::remove_var("SENECHAL_ENV");
         }
     }
 }

@@ -23,6 +23,7 @@ use super::audio::{
 };
 use super::broadcast::ControlEvent;
 use super::models::{ModelControl, ModelError};
+use super::onboarding;
 use super::state::ControlState;
 use seneschal_common::settings::SettingsPatch;
 use seneschal_core::pipeline::frames::PipelineFrame;
@@ -43,6 +44,7 @@ pub fn router(state: Arc<ControlState>) -> Router {
         .route("/control/config", get(get_config))
         .route("/control/config/validate", post(post_config_validate))
         .route("/control/config/apply", post(post_config_apply))
+        .route("/control/onboarding/defaults", get(get_onboarding_defaults))
         .route("/control/models", get(get_models))
         .route("/control/models/{id}", delete(delete_model))
         .route("/control/models/{id}/download", post(post_model_download))
@@ -213,6 +215,11 @@ async fn post_config_apply(
         )
             .into_response(),
     }
+}
+
+/// Per-OS recommendation for the first-run wizard (issue #36).
+async fn get_onboarding_defaults(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
+    Json(onboarding::defaults(state.gpu_available))
 }
 
 #[allow(clippy::result_large_err)]
@@ -694,6 +701,7 @@ mod tests {
             settings: Arc::new(settings),
             audio,
             models: None,
+            gpu_available: false,
         });
         (control, db_dir)
     }
@@ -789,6 +797,7 @@ mod tests {
             settings,
             audio: None,
             models: Some(models),
+            gpu_available: false,
         });
         (control, db_dir)
     }
@@ -1121,6 +1130,30 @@ mod tests {
         assert!(json["providers"]["stt"].is_array());
         assert!(json["providers"]["tts"].is_array());
         assert!(!json.to_string().contains("api_key"));
+    }
+
+    /// The onboarding defaults endpoint reports a platform-aware backend pair.
+    #[tokio::test]
+    async fn onboarding_defaults_endpoint_returns_recommendation() {
+        let (state, _db_dir) = build_state(PipelineState::Idle).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/onboarding/defaults")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["platform"], std::env::consts::OS);
+        assert_eq!(json["gpu_available"], false);
+        assert!(json["recommended_stt"].is_string());
+        assert!(json["recommended_tts"].is_string());
     }
 
     /// Invalid settings are rejected before applying, with a field name and a

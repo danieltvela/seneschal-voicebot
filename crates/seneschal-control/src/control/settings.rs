@@ -315,6 +315,21 @@ impl SettingsService {
         if patch.llm_thinking.is_some() {
             consider("llm_thinking", SettingTier::Restart);
         }
+        if let Some(value) = &patch.llm_api_key {
+            consider("llm_api_key", SettingTier::Restart);
+            // The effective value would keep coming from the environment after a
+            // TOML write, so an in-app change would silently not take effect.
+            if std::env::var("LLM_API_KEY").is_ok() {
+                check(
+                    "llm_api_key",
+                    Err(
+                        "LLM_API_KEY is set in the environment and cannot be changed in-app"
+                            .to_string(),
+                    ),
+                );
+            }
+            let _ = value;
+        }
 
         if let Some(value) = &patch.stt_provider {
             consider("stt_provider", SettingTier::Restart);
@@ -507,11 +522,16 @@ impl SettingsService {
         old: &seneschal_common::config::Config,
         new: &seneschal_common::config::Config,
     ) -> Vec<&'static str> {
-        seneschal_common::settings::SETTING_SPECS
+        let mut changed: Vec<&'static str> = seneschal_common::settings::SETTING_SPECS
             .iter()
             .filter(|spec| config_value(old, spec.key) != config_value(new, spec.key))
             .map(|spec| spec.key)
-            .collect()
+            .collect();
+        // `llm_api_key` is deliberately outside the snapshot allow-list.
+        if old.llm_api_key != new.llm_api_key {
+            changed.push("llm_api_key");
+        }
+        changed
     }
 }
 
@@ -530,6 +550,9 @@ fn apply_patch_to_config(config: &mut seneschal_common::config::Config, patch: &
     }
     if let Some(value) = patch.llm_thinking {
         config.llm_thinking = value;
+    }
+    if let Some(value) = &patch.llm_api_key {
+        config.llm_api_key = value.trim().to_string();
     }
     if let Some(value) = &patch.stt_provider {
         config.stt_provider = value.trim().to_lowercase();
@@ -708,6 +731,12 @@ fn write_patch(path: &Path, patch: &SettingsPatch, changed: &[&'static str]) -> 
         .context("Failed to parse the active TOML config")?;
 
     for key in changed {
+        if *key == "llm_api_key" {
+            if let Some(value) = patch.llm_api_key.as_deref() {
+                document["llm_api_key"] = toml_edit::value(value.trim());
+            }
+            continue;
+        }
         if setting_spec(key).is_none() {
             continue;
         }
@@ -832,6 +861,17 @@ fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
     let temp = parent.join(format!(".{file_name}.tmp.{}", std::process::id()));
     std::fs::write(&temp, contents)
         .with_context(|| format!("Failed to write {}", temp.display()))?;
+    // A newly created TOML may contain credentials; keep it user-only. An
+    // existing file keeps its current mode.
+    if std::fs::metadata(path).is_err() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
+        }
+        #[cfg(not(unix))]
+        let _ = ();
+    }
     if let Ok(metadata) = std::fs::metadata(path) {
         let _ = std::fs::set_permissions(&temp, metadata.permissions());
     }
@@ -996,6 +1036,81 @@ pub(crate) mod tests {
                     assert_eq!(field.origin, SettingOrigin::Environment);
                     assert_eq!(field.value, json!("ef_dora"));
                     assert!(!field.editable);
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn llm_api_key_is_persisted_but_never_serialized() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("settings.toml");
+        let path_str = path.to_string_lossy().into_owned();
+        let _guard = config_env_lock().lock().unwrap();
+        temp_env::with_vars(
+            [
+                ("SENECHAL_CONFIG_FILE", Some(path_str.as_str())),
+                ("LLM_API_KEY", None),
+            ],
+            || {
+                let runtime = runtime();
+                runtime.block_on(async {
+                    let (service, _tts, _output, _hot, _rx) = service_with_file(&path);
+                    let secret = "test-secret-do-not-leak";
+                    let patch: SettingsPatch = serde_json::from_value(json!({
+                        "llm_api_key": secret,
+                    }))
+                    .unwrap();
+
+                    let response = service.apply(&patch).await.unwrap();
+                    assert_eq!(response.tier, SettingTier::Restart);
+                    assert_eq!(response.snapshot.revision, 2);
+                    assert!(
+                        !serde_json::to_string(&response.snapshot)
+                            .unwrap()
+                            .contains(secret)
+                    );
+
+                    let persisted = std::fs::read_to_string(&path).unwrap();
+                    assert!(persisted.contains("llm_api_key = \"test-secret-do-not-leak\""));
+
+                    // Repeating the same value is a no-op and does not rewrite.
+                    let before = persisted.clone();
+                    let response = service.apply(&patch).await.unwrap();
+                    assert_eq!(response.tier, SettingTier::Hot);
+                    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+                    // An explicit empty string clears the credential.
+                    let patch: SettingsPatch =
+                        serde_json::from_value(json!({ "llm_api_key": "" })).unwrap();
+                    service.apply(&patch).await.unwrap();
+                    let persisted = std::fs::read_to_string(&path).unwrap();
+                    assert!(persisted.contains("llm_api_key = \"\""));
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn environment_llm_api_key_cannot_be_shadowed_by_the_app() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("settings.toml");
+        let path_str = path.to_string_lossy().into_owned();
+        let _guard = config_env_lock().lock().unwrap();
+        temp_env::with_vars(
+            [
+                ("SENECHAL_CONFIG_FILE", Some(path_str.as_str())),
+                ("LLM_API_KEY", Some("from-environment")),
+            ],
+            || {
+                let runtime = runtime();
+                runtime.block_on(async {
+                    let (service, _tts, _output, _hot, _rx) = service_with_file(&path);
+                    let patch: SettingsPatch =
+                        serde_json::from_value(json!({ "llm_api_key": "from-app" })).unwrap();
+                    let errors = service.apply(&patch).await.unwrap_err();
+                    assert!(errors.iter().any(|error| error.field == "llm_api_key"));
+                    assert!(!path.exists());
                 });
             },
         );

@@ -33,6 +33,10 @@ pub struct SettingsPatch {
     pub llm_max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm_thinking: Option<bool>,
+    /// Write-only credential for the OpenAI-compatible LLM endpoint (issue #36).
+    /// Never serialized in the Settings snapshot. `Some("")` clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_api_key: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_provider: Option<String>,

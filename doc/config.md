@@ -15,6 +15,12 @@ The desktop Settings UI writes the same active file (the one selected by
 Writes are atomic and preserve unrelated TOML keys and comments. Values with an
 environment override remain read-only in Settings because env vars win over TOML.
 
+Desktop first-run onboarding (#36) resolves the same path before launching the
+sidecar and creates a minimal runnable TOML when it is absent. In a packaged
+app that path lives in the per-user app-data workdir; in development the
+repository workdir is preserved. The wizard completion marker is separate and
+lives in Tauri's app-config directory.
+
 ## Migration from single-seneschal.toml
 
 If you have an existing `data/seneschal.db`, manually move it to `data/pro/seneschal.db`:

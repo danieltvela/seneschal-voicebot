@@ -42,7 +42,7 @@ Read from `.env` (dotenvy loads automatically):
 | `STT_MODEL` | `nemotron-3.5` | Model id from the service's `GET /v1/models`. |
 | `STT_TIMEOUT_MS` | `15000` | HTTP timeout for startup verification and the one-shot REST transcription; the streaming WebSocket itself reconnects with backoff. |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
-| `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. |
+| `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. Settings can write it to TOML, but never returns it in snapshots; an env override remains read-only. |
 | `LLM_MODEL` | `qwen3.8-27b` | Model name sent in the `model` field of API requests. |
 | `LLM_MAX_TOKENS` | `400` | Max tokens per response |
 | `LLM_TEMPERATURE` | `1.0` | Sampling temperature (NVIDIA generation_config spec for qwen3.8-flash-next) |
@@ -93,6 +93,7 @@ Read from `.env` (dotenvy loads automatically):
 | `SPEAKER_ENABLED` | `true` | Enable/disable speaker verification at runtime (`0`/`false` = disabled, `1`/`true` = enabled). When disabled, the speaker model is not loaded and the associated 50-200ms latency per utterance is avoided. |
 | `WS_PORT` | `9090` | WebSocket server port for remote audio (`--features remote`). Companion mic/TTS path. |
 | `CONTROL_PORT` | — (optional) | HTTP/SSE Control API port (`--features control`). Recommended **9001** for iOS companion dual-channel. Binds `0.0.0.0`. See [`IOS_COMPANION.md`](IOS_COMPANION.md). |
+| `SENESCHAL_DEFER_STARTUP_GREETING` | `false` | Desktop onboarding only (#36): suppress the startup and device-connected greeting until the final restart. Normal TUI/headless runs are unaffected. |
 | `S_DREAM_INTERVAL_SECS` | `3600` | Seconds between consolidation cycles (0 = disabled) |
 | `S_DREAM_ON_IDLE` | `1` | Trigger consolidation when user is idle (1 = true) |
 | `S_DREAM_IDLE_THRESHOLD_SECS` | `600` | Idle seconds before consolidation triggers |

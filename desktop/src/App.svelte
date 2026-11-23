@@ -2,7 +2,14 @@
   import { onMount } from "svelte";
   import Audio from "./lib/components/Audio.svelte";
   import Models from "./lib/components/Models.svelte";
+  import Onboarding from "./lib/components/Onboarding.svelte";
   import Settings from "./lib/components/Settings.svelte";
+  import {
+    abandonOnboarding,
+    beginOnboarding,
+    loadOnboardingState,
+    type OnboardingStateWire,
+  } from "./lib/onboarding";
   import {
     connectionLabel,
     daemonLabel,
@@ -13,13 +20,45 @@
     status,
   } from "./lib/status";
 
-  let view = $state<"status" | "settings" | "models" | "audio">("status");
+  type View = "status" | "settings" | "models" | "audio" | "wizard";
+  let view = $state<View>("status");
   let restarting = $state(false);
   let restartError = $state<string | null>(null);
+  let onboardingState = $state<OnboardingStateWire | null>(null);
 
-  onMount(() => {
+  onMount(async () => {
     void initStatus();
+    try {
+      onboardingState = await loadOnboardingState();
+      if (!onboardingState.completed && onboardingState.in_progress) {
+        view = "wizard";
+      }
+    } catch {
+      // The wizard is opt-in when the state store is unavailable.
+    }
   });
+
+  async function openWizard(): Promise<void> {
+    try {
+      onboardingState = await beginOnboarding();
+      view = "wizard";
+    } catch (error) {
+      restartError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function closeWizard(): Promise<void> {
+    try {
+      onboardingState = await abandonOnboarding();
+    } catch (error) {
+      restartError = error instanceof Error ? error.message : String(error);
+    }
+    view = "status";
+  }
+
+  function completeWizard(): void {
+    view = "status";
+  }
 
   async function onRestart(): Promise<void> {
     restarting = true;
@@ -67,11 +106,25 @@
       >
         Audio
       </button>
+      {#if onboardingState && !onboardingState.completed}
+        <button
+          type="button"
+          class:active={view === "wizard"}
+          onclick={() => (view = "wizard")}
+        >
+          Setup
+        </button>
+      {/if}
     </nav>
   </header>
 
-  {#if view === "settings"}
-    <Settings />
+  {#if view === "wizard" && onboardingState}
+    <Onboarding
+      onComplete={completeWizard}
+      onAbandon={closeWizard}
+    />
+  {:else if view === "settings"}
+    <Settings onRunSetup={openWizard} />
   {:else if view === "models"}
     <Models />
   {:else if view === "audio"}

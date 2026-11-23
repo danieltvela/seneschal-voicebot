@@ -2070,6 +2070,7 @@ async fn async_main() -> Result<()> {
             settings: settings_service,
             audio: Some(audio_control),
             models: Some(models_control),
+            gpu_available: !gpu_devices.is_empty(),
         });
         tokio::spawn(async move {
             if let Err(e) =
@@ -2107,41 +2108,51 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Startup greeting / first-time introduction ─────────────────────────────
-    // If audio capture is active, send the full greeting (first_launch or startup
-    // with time/date). Otherwise send a brief notification that the system started;
-    // the device monitor will send the full greeting when a device connects later.
-    if capture_stream.is_some() {
-        let first = is_first_launch;
-        let key = if first { "first_launch" } else { "startup" };
-        let notification = seneschal_common::i18n::get_notification(key, &config.language);
-        let notification = if first {
-            notification.to_string()
+    // Desktop onboarding (#36) suppresses the greeting while the first-run wizard
+    // is active; the shell clears the flag before its final restart. Without the
+    // flag, behavior is unchanged for TUI/headless runs.
+    let defer_startup_greeting = std::env::var("SENESCHAL_DEFER_STARTUP_GREETING")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !defer_startup_greeting {
+        // If audio capture is active, send the full greeting (first_launch or startup
+        // with time/date). Otherwise send a brief notification that the system started;
+        // the device monitor will send the full greeting when a device connects later.
+        if capture_stream.is_some() {
+            let first = is_first_launch;
+            let key = if first { "first_launch" } else { "startup" };
+            let notification = seneschal_common::i18n::get_notification(key, &config.language);
+            let notification = if first {
+                notification.to_string()
+            } else {
+                let now = chrono::Local::now();
+                let time_str = now.format("%H:%M").to_string();
+                let date_str = now.format("%d/%m/%Y").to_string();
+                notification
+                    .replace("{time_str}", &time_str)
+                    .replace("{date_str}", &date_str)
+            };
+            transcript_tx
+                .send(PipelineFrame::SystemNotification { text: notification })
+                .await
+                .ok();
         } else {
-            let now = chrono::Local::now();
-            let time_str = now.format("%H:%M").to_string();
-            let date_str = now.format("%d/%m/%Y").to_string();
-            notification
-                .replace("{time_str}", &time_str)
-                .replace("{date_str}", &date_str)
-        };
-        transcript_tx
-            .send(PipelineFrame::SystemNotification { text: notification })
-            .await
-            .ok();
-    } else {
-        let msg = seneschal_common::i18n::get_notification("no_device_startup", &config.language);
-        transcript_tx
-            .send(PipelineFrame::SystemNotification {
-                text: msg.to_string(),
-            })
-            .await
-            .ok();
+            let msg =
+                seneschal_common::i18n::get_notification("no_device_startup", &config.language);
+            transcript_tx
+                .send(PipelineFrame::SystemNotification {
+                    text: msg.to_string(),
+                })
+                .await
+                .ok();
+        }
     }
 
     // Greet at most once per session: when capture is running at startup the
     // full greeting was already sent above; otherwise the device monitor will
-    // start capture later and only then (once) send the full greeting.
-    let mut startup_greeted = capture_stream.is_some();
+    // start capture later and only then (once) send the full greeting. While
+    // onboarding defers the greeting, the monitor must not fire it either.
+    let mut startup_greeted = defer_startup_greeting || capture_stream.is_some();
 
     // ── Device monitor ─────────────────────────────────────────────────────────
     // Polls for the configured input device (or default if none specified);

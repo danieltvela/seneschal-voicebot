@@ -24,6 +24,13 @@ Downloads land in the standard per-OS data dir (see
 `doc/design/35-desktop-models.md`); legacy `models/` dirs are detected but
 never moved.
 
+The onboarding wizard (issue #36) chains language, LLM endpoint, voice
+backends, model downloads and audio testing on first run. It owns a durable
+completion marker, writes a bootstrap config that lets Control start before
+local models exist, suppresses the startup greeting until the final restart,
+and can be re-run from Settings ("Run setup again"). See
+`doc/design/36-desktop-onboarding.md`.
+
 ## Commands
 
 ```bash
@@ -51,16 +58,29 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-deps -- -D 
   fresh connected Control SSE snapshot; then the test buttons are enabled.
 - Mic test and loopback require an active capture and an idle pipeline. They do
   not create conversational turns or open a second capture stream.
-- macOS packaged app: the Info.plist includes `NSMicrophoneUsageDescription`.
-  To re-test the prompt, reset TCC for `org.veladan.seneschal` with
-  `tccutil reset Microphone org.veladan.seneschal`, then use the Audio panel.
+- macOS packaged app: the Info.plist includes `NSMicrophoneUsageDescription`
+  and `NSSpeechRecognitionUsageDescription`. To re-test the microphone prompt,
+  reset TCC for `org.veladan.seneschal` with
+  `tccutil reset Microphone org.veladan.seneschal`; reset speech recognition
+  with `tccutil reset SpeechRecognition org.veladan.seneschal`.
 - Linux: CPAL uses ALSA names, which can differ from PipeWire's friendly names.
   Compare picker values with `pactl list short sources` / `sinks` when
   debugging.
 
-On macOS, the default sidecar enables `control,avspeech,openai-tts`. On Linux
-it enables `control,kokoro,openai-tts`, so Settings can offer both compiled
-TTS backends. Override it when your local configuration uses another
+## Onboarding QA
+
+- Use `SENESCHAL_DESKTOP_WORKDIR=/tmp/seneschal-fresh` for an isolated config/
+  SQLite workdir; the shell uses `seneschal.pro.toml` there unless
+  `SENECHAL_CONFIG_FILE` is already set.
+- Delete or move the generated `onboarding.json` in Tauri's app-config directory
+  to exercise the first-run marker; the wizard records skipped steps there.
+- During setup the shell injects `SENESCHAL_DEFER_STARTUP_GREETING=1`; the final
+  restart clears it and produces the normal greeting before the completion
+  marker is written.
+
+On macOS, the default sidecar enables `control,avspeech,speech,openai-tts`.
+On Linux it enables `control,kokoro,openai-tts`, so Settings can offer both
+compiled TTS backends. Override it when your local configuration uses another
 backend:
 
 ```bash

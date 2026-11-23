@@ -14,8 +14,9 @@ BINARIES_DIR="${DESKTOP_DIR}/src-tauri/binaries"
 if [[ -n "${SENESCHAL_SIDECAR_FEATURES:-}" ]]; then
     FEATURES="${SENESCHAL_SIDECAR_FEATURES}"
 elif [[ "$(uname -s)" = "Darwin" ]]; then
-    # Two TTS backends keep provider switching first-class in Settings (#33).
-    FEATURES="control,avspeech,openai-tts"
+    # Native STT/TTS baseline for first-run onboarding (#36), plus OpenAI TTS
+    # so provider switching stays first-class in Settings (#33).
+    FEATURES="control,avspeech,speech,openai-tts"
 else
     FEATURES="control,kokoro,openai-tts"
 fi

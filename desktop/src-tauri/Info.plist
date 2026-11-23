@@ -4,5 +4,7 @@
   <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>Seneschal needs microphone access to hear your voice and run audio diagnostics.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Seneschal uses on-device speech recognition to turn your voice into text.</string>
   </dict>
 </plist>

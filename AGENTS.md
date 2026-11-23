@@ -73,6 +73,7 @@ server-side VAD endpointing)
 - **STT**: the runtime provider is `crates/asr` (Nemotron 3.5 over NeMo-Speech.cpp realtime WebSocket). Whisper/Parakeet/SFSpeechRecognizer remain as legacy providers in `seneschal-core`
 - **STT/VAD contract**: endpointing is server-side; live partials are logged while the user speaks, the LLM is gated on the final transcript, and stale results are dropped after barge-in — specified in `doc/stt-contract.md` and locked by deterministic + audit tests
 - **Desktop shell**: `desktop/` is an isolated Tauri v2 app that launches the real `seneschal` binary as a sidecar, consumes Control REST/SSE, and manages tiered Settings; see `doc/design/32-desktop-spike.md` and `doc/design/33-desktop-settings.md`
+- **Desktop onboarding**: the first-run wizard owns a durable completion marker, bootstraps a runnable config, and suppresses the startup greeting until the final restart; see `doc/design/36-desktop-onboarding.md`
 - **Cold Path Memory (S-DREAM)**: L1/L2 consolidation, see `src/dream/`
 
 ---
@@ -98,3 +99,5 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 | Desktop spike architecture | [`doc/design/32-desktop-spike.md`](doc/design/32-desktop-spike.md) |
 | Desktop Settings & tiered apply | [`doc/design/33-desktop-settings.md`](doc/design/33-desktop-settings.md) |
 | Desktop audio panel & diagnostics | [`doc/design/34-desktop-audio.md`](doc/design/34-desktop-audio.md) |
+| Desktop model manager | [`doc/design/35-desktop-models.md`](doc/design/35-desktop-models.md) |
+| Desktop onboarding wizard | [`doc/design/36-desktop-onboarding.md`](doc/design/36-desktop-onboarding.md) |

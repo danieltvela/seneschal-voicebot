@@ -43,6 +43,8 @@ pub struct ControlState {
     pub audio: Option<Arc<AudioControl>>,
     /// Model manager (issue #35); `Option` for the same reason as `audio`.
     pub models: Option<Arc<ModelControl>>,
+    /// Whether the daemon discovered a usable GPU at startup (issue #36).
+    pub gpu_available: bool,
 }
 
 #[cfg(test)]
