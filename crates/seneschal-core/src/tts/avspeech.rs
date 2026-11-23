@@ -102,8 +102,9 @@ impl AvSpeechTts {
         let identifier = find_voice_identifier(voice_name).with_context(|| {
             format!("Voice '{voice_name}' not found — run `say -v ?` to list available voices")
         })?;
+        let sample_rate = synth_sample_rate(&identifier, self.rate);
         self.voice_identifier = identifier;
-        if let Some(sample_rate) = synth_sample_rate(&identifier, self.rate) {
+        if let Some(sample_rate) = sample_rate {
             self.sample_rate = sample_rate;
         }
         Ok(())
