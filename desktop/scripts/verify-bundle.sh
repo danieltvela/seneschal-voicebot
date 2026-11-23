@@ -10,12 +10,12 @@ DESKTOP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${DESKTOP_DIR}"
 
 TARGET_TRIPLE="${SENESCHAL_BUNDLE_TARGET:-${TARGET_TRIPLE:-$(rustc -vV | awk '/host:/ {print $2}')}}"
-# `tauri build` without --target emits under target/release; an explicit target
-# emits under target/<triple>. Release workflows always set the explicit target.
+# `tauri build` runs from src-tauri; without --target it emits under
+# src-tauri/target/release, and with --target under src-tauri/target/<triple>.
 if [[ -n "${SENESCHAL_BUNDLE_TARGET:-}" ]]; then
-    BUNDLE_ROOT="target/${TARGET_TRIPLE}/release/bundle"
+    BUNDLE_ROOT="src-tauri/target/${TARGET_TRIPLE}/release/bundle"
 else
-    BUNDLE_ROOT="target/release/bundle"
+    BUNDLE_ROOT="src-tauri/target/release/bundle"
 fi
 REQUIRE_UPDATER_ARTIFACTS="${REQUIRE_UPDATER_ARTIFACTS:-0}"
 
