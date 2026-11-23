@@ -34,13 +34,17 @@ fi
 
 mkdir -p "${BINARIES_DIR}"
 
+# espeak-rs-sys has a fixed internal path buffer. Keep Cargo's target directory
+# short in CI with CARGO_TARGET_DIR to avoid truncated phoneme source paths.
+TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
+
 echo "Building Seneschal sidecar for ${TARGET_TRIPLE} (features: ${FEATURES})..."
 (
     cd "${REPO_ROOT}"
-    cargo build --release --locked --target "${TARGET_TRIPLE}" --features "${FEATURES}"
+    cargo build --release --locked --target "${TARGET_TRIPLE}" --target-dir "${TARGET_DIR}" --features "${FEATURES}"
 )
 
-BUILT_SIDECAR="${REPO_ROOT}/target/${TARGET_TRIPLE}/release/seneschal"
+BUILT_SIDECAR="${TARGET_DIR}/${TARGET_TRIPLE}/release/seneschal"
 SIDECAR="${BINARIES_DIR}/seneschal-${TARGET_TRIPLE}"
 if [[ ! -f "${BUILT_SIDECAR}" ]]; then
     echo "sidecar binary was not produced at ${BUILT_SIDECAR}" >&2
@@ -53,7 +57,7 @@ chmod +x "${SIDECAR}"
 # The Linux bundle resource root is injected as PIPER_ESPEAKNG_DATA_DIRECTORY.
 if [[ "${FEATURES}" == *kokoro* ]]; then
     ESPEAK_DATA_SOURCE="$(
-        find "${REPO_ROOT}/target/${TARGET_TRIPLE}/release/build" \
+        find "${TARGET_DIR}/${TARGET_TRIPLE}/release/build" \
             -type d -path '*/out/share/espeak-ng-data' -printf '%T@ %p\n' 2>/dev/null |
             sort -n | tail -n 1 | cut -d' ' -f2-
     )"

@@ -127,6 +127,8 @@ jobs:
       # Tauri's build script validates the Linux resource list, so stage the
       # sidecar/espeak data before cargo test or clippy on a clean checkout.
       - name: Build sidecar
+        env:
+          CARGO_TARGET_DIR: /tmp/seneschal-target
         run: npm run sidecar:build
         working-directory: desktop
 

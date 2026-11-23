@@ -47,6 +47,15 @@ verify_linux() {
     fi
     find "${EXTRACT_DIR}" -type d -name 'espeak-ng-data' -print -quit | grep -q . ||
         fail "AppImage does not contain espeak-ng-data: ${appimage}"
+
+    sidecar="$(find "${EXTRACT_DIR}" -type f -name 'seneschal' -print -quit 2>/dev/null || true)"
+    [[ -x "${sidecar}" ]] || fail "sidecar is missing from the AppImage: ${appimage}"
+    if command -v ldd >/dev/null 2>&1; then
+        if ldd "${sidecar}" 2>/dev/null | grep -q 'not found'; then
+            ldd "${sidecar}" 2>/dev/null | grep 'not found' >&2 || true
+            fail "sidecar has unresolved dynamic libraries"
+        fi
+    fi
     rm -rf "${EXTRACT_DIR}"
     trap - EXIT
 
@@ -55,15 +64,6 @@ verify_linux() {
     dpkg-deb -c "${deb}" | grep -q 'espeak-ng-data' || fail "Debian package does not contain espeak-ng-data: ${deb}"
     echo "verified ${appimage}"
     echo "verified ${deb}"
-
-    sidecar="${DESKTOP_DIR}/../target/${TARGET_TRIPLE}/release/seneschal"
-    [[ -x "${sidecar}" ]] || fail "missing built sidecar: ${sidecar}"
-    if command -v ldd >/dev/null 2>&1; then
-        if ldd "${sidecar}" 2>/dev/null | grep -q 'not found'; then
-            ldd "${sidecar}" 2>/dev/null | grep 'not found' >&2 || true
-            fail "sidecar has unresolved dynamic libraries"
-        fi
-    fi
 
     if [[ "${REQUIRE_UPDATER_ARTIFACTS}" = "1" ]]; then
         require_file '*.AppImage.sig' "${BUNDLE_ROOT}/appimage"
