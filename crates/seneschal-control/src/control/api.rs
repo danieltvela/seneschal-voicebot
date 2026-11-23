@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::broadcast::ControlEvent;
 use super::state::ControlState;
+use seneschal_common::settings::SettingsPatch;
 use seneschal_core::pipeline::frames::PipelineFrame;
 
 pub fn router(state: Arc<ControlState>) -> Router {
@@ -33,6 +34,9 @@ pub fn router(state: Arc<ControlState>) -> Router {
         .route("/control/input", post(post_input))
         .route("/control/permissions", get(get_permissions))
         .route("/control/permission", post(post_permission))
+        .route("/control/config", get(get_config))
+        .route("/control/config/validate", post(post_config_validate))
+        .route("/control/config/apply", post(post_config_apply))
         .with_state(state)
 }
 
@@ -153,6 +157,31 @@ async fn post_input(
 
 async fn get_permissions(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
     Json(state.permission_gate.list())
+}
+
+async fn get_config(State(state): State<Arc<ControlState>>) -> impl IntoResponse {
+    Json(state.settings.snapshot().await)
+}
+
+async fn post_config_validate(
+    State(state): State<Arc<ControlState>>,
+    Json(patch): Json<SettingsPatch>,
+) -> impl IntoResponse {
+    Json(state.settings.validate(&patch).await)
+}
+
+async fn post_config_apply(
+    State(state): State<Arc<ControlState>>,
+    Json(patch): Json<SettingsPatch>,
+) -> impl IntoResponse {
+    match state.settings.apply(&patch).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(errors) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "ok": false, "errors": errors })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -288,6 +317,23 @@ mod tests {
         let (barge_in_tx, _) = broadcast::channel::<u64>(8);
         let (transcript_tx, _) = mpsc::channel::<PipelineFrame>(8);
         let (_state_tx, pipeline_state_rx) = watch::channel(state);
+        let (hot_tx, _hot_rx) = mpsc::channel::<seneschal_common::settings::HotSettings>(8);
+        let tts = Arc::new(tokio::sync::RwLock::new(
+            seneschal_core::tts::TtsEngine::Mock(seneschal_core::tts::mock_tts::MockTts::new().0),
+        ));
+        let settings = crate::control::settings::SettingsService::new(
+            seneschal_common::config::Config::embedded_defaults(),
+            tts,
+            Arc::new(seneschal_core::audio::output::AudioOutput::null()),
+            Arc::new(std::sync::Mutex::new(
+                seneschal_common::settings::HotSettings {
+                    language: "es".to_string(),
+                    wake_word: "seneschal".to_string(),
+                },
+            )),
+            hot_tx,
+        )
+        .unwrap();
 
         let control = Arc::new(ControlState {
             broadcast: ControlBroadcast::new(16),
@@ -301,6 +347,7 @@ mod tests {
             ))),
             db,
             permission_gate: Arc::new(seneschal_common::PermissionGate::new()),
+            settings: Arc::new(settings),
         });
         (control, db_dir)
     }
@@ -324,6 +371,62 @@ mod tests {
 
     /// `/control/state` must expose the stable wire token plus the utterance id
     /// of the active speech state.
+    #[tokio::test]
+    async fn get_config_exposes_fields_origins_and_providers() {
+        let (state, _db_dir) = build_state(PipelineState::Idle).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/config")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let fields = json["fields"].as_array().unwrap();
+        let wake_word = fields
+            .iter()
+            .find(|field| field["key"] == "wake_word")
+            .unwrap();
+        assert_eq!(wake_word["tier"], "hot");
+        assert!(wake_word["editable"].is_boolean());
+        assert!(json["providers"]["stt"].is_array());
+        assert!(json["providers"]["tts"].is_array());
+        assert!(!json.to_string().contains("api_key"));
+    }
+
+    /// Invalid settings are rejected before applying, with a field name and a
+    /// human-readable message.
+    #[tokio::test]
+    async fn apply_invalid_settings_returns_field_errors() {
+        let (state, _db_dir) = build_state(PipelineState::Idle).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/config/apply")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({ "output_volume": 2.0 }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["errors"][0]["field"], "output_volume");
+    }
+
     #[tokio::test]
     async fn get_state_reports_active_state_and_utterance_id() {
         let (state, _db_dir) = build_state(PipelineState::Thinking { utterance_id: 42 }).await;

@@ -18,6 +18,7 @@ pub mod events;
 pub mod gpu;
 pub mod i18n;
 pub mod permission;
+pub mod settings;
 pub mod tools;
 pub mod tui_events;
 

@@ -119,6 +119,10 @@ pub struct Config {
     pub chunk_ms: u32,
     pub audio_input_device: Option<String>,
     pub audio_output_device: Option<String>,
+    /// Master playback volume for TTS/fillers, `0.0`–`1.0`
+    /// (AUDIO_OUTPUT_VOLUME, default 1.0).
+    #[serde(default = "default_output_volume")]
+    pub output_volume: f32,
     pub list_devices: bool,
     pub list_voices: bool,
     pub device_monitor_enabled: bool,
@@ -652,6 +656,10 @@ fn default_vad_post_roll_ms() -> usize {
     200
 }
 
+fn default_output_volume() -> f32 {
+    1.0
+}
+
 fn default_stt_live_enabled() -> bool {
     true
 }
@@ -768,7 +776,7 @@ impl Config {
             .context("Failed to deserialize embedded default config")
     }
 
-    fn resolve_config_path() -> Result<Option<PathBuf>> {
+    pub fn resolve_config_path() -> Result<Option<PathBuf>> {
         if let Ok(path) = env::var("SENECHAL_CONFIG_FILE") {
             return Ok(Some(PathBuf::from(path)));
         }
@@ -823,6 +831,11 @@ impl Config {
         }
         if let Ok(v) = env::var("AUDIO_OUTPUT_DEVICE") {
             self.audio_output_device = Some(v);
+        }
+        if let Ok(v) = env::var("AUDIO_OUTPUT_VOLUME") {
+            self.output_volume = v
+                .parse()
+                .context("Invalid AUDIO_OUTPUT_VOLUME (expected 0.0–1.0)")?;
         }
         if let Ok(v) = env::var("LIST_AUDIO_DEVICES") {
             self.list_devices = v == "1" || v.to_lowercase() == "true";
@@ -1356,7 +1369,11 @@ impl Config {
             self.active_plugin = if v.is_empty() { None } else { Some(v) };
         }
 
-        // Validation
+        self.validate()
+    }
+
+    /// Validate the effective configuration independently of env loading.
+    pub fn validate(&self) -> Result<()> {
         if self.llm_self_managed && self.llm_command.is_none() {
             anyhow::bail!("LLM_COMMAND must be set when LLM_SELF_MANAGED=1");
         }
@@ -1366,8 +1383,8 @@ impl Config {
             "whisper" | "parakeet" | "speech" | "openai" | "nemotron"
         ) {
             anyhow::bail!(
-                "Invalid STT_PROVIDER '{}'. Legacy values: whisper, parakeet, speech, openai; \
-                 'nemotron' documents the runtime provider (the executable ignores this key). \
+                "Invalid STT_PROVIDER '{}'. Values: nemotron (runtime Nemotron realtime), \
+                 whisper, parakeet, speech, openai (legacy). \
                  Note: for TTS backends use TTS_PROVIDER (avspeech, kokoro, openai).",
                 self.stt_provider
             );
@@ -1460,6 +1477,14 @@ impl Config {
     /// Config built from the embedded defaults only (no env, no cwd file).
     /// Used by unit tests that need a fully-populated `Config`.
     pub(crate) fn test_defaults() -> Self {
+        Self::embedded_defaults()
+    }
+}
+
+impl Config {
+    /// Config built from the embedded defaults only (no env, no cwd file).
+    /// Useful for API/service tests that must not touch the host config file.
+    pub fn embedded_defaults() -> Self {
         toml::from_str(DEFAULT_CONFIG_TOML).expect("embedded config must deserialize")
     }
 }

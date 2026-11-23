@@ -35,6 +35,21 @@ pub trait SttProvider: Send {
     }
 }
 
+/// STT backend tokens compiled into this binary (issue #33). `nemotron` is the
+/// realtime runtime provider; `whisper` is always compiled as the legacy local
+/// fallback.
+pub fn supported_providers() -> Vec<&'static str> {
+    #[allow(unused_mut)]
+    let mut providers = vec!["nemotron", "whisper"];
+    #[cfg(feature = "parakeet")]
+    providers.push("parakeet");
+    #[cfg(feature = "speech")]
+    providers.push("speech");
+    #[cfg(feature = "openai-stt")]
+    providers.push("openai");
+    providers
+}
+
 pub fn create_provider(
     config: &Config,
     assignments: &seneschal_common::gpu::GpuAssignments,

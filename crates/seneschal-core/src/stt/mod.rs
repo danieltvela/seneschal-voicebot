@@ -17,7 +17,7 @@ pub mod openai;
 pub mod speech_recognizer;
 
 pub use no_speech_gate::{NoSpeechGate, TranscriptionQuality};
-pub use provider::{SttProvider, create_provider};
+pub use provider::{SttProvider, create_provider, supported_providers};
 pub use segmenter::{SegmenterConfig, SegmenterEvent, SpeechDetector, VadSegmenter};
 pub use streaming::{LiveDecoder, LiveStreamConfig, LiveStreamer};
 #[allow(unused_imports)]

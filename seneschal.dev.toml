@@ -9,6 +9,7 @@ channels = 1
 chunk_ms = 100
 list_devices = false
 list_voices = false
+output_volume = 1.0
 
 # ── VAD ───────────────────────────────────────────────────────────────────────
 vad_silence_ms = 300
@@ -46,7 +47,8 @@ stt_live_window_ms = 15000
 language = "es"
 
 # ── STT: Nemotron ASR (NeMo-Speech.cpp realtime WebSocket) ────────────────────
-# El runtime usa el provider Nemotron del crate `asr`; este campo es documental.
+# nemotron selects the realtime provider in crates/asr. whisper/parakeet/speech/
+# openai select the legacy providers in seneschal-core.
 stt_provider = "nemotron"
 stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"

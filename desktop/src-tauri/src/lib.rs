@@ -1,5 +1,6 @@
 mod control;
 mod daemon;
+mod settings;
 mod status;
 
 use std::sync::Arc;
@@ -19,6 +20,37 @@ async fn desktop_status(runtime: State<'_, Arc<AppRuntime>>) -> Result<status::A
 #[tauri::command]
 async fn restart_daemon(runtime: State<'_, Arc<AppRuntime>>) -> Result<(), String> {
     runtime.restart().await
+}
+
+#[tauri::command]
+async fn get_settings(runtime: State<'_, Arc<AppRuntime>>) -> Result<serde_json::Value, String> {
+    settings::get_config(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn validate_settings(
+    runtime: State<'_, Arc<AppRuntime>>,
+    patch: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    settings::validate_config(&runtime.base_url(), &patch)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn apply_settings(
+    runtime: State<'_, Arc<AppRuntime>>,
+    patch: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mut result = settings::apply_config(&runtime.base_url(), &patch)
+        .await
+        .map_err(|error| error.to_string())?;
+    if result.get("tier").and_then(|tier| tier.as_str()) == Some("restart_required") {
+        runtime.restart().await?;
+    }
+    Ok(result)
 }
 
 fn setup(app: &mut tauri::App) -> Result<(), String> {
@@ -55,7 +87,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![desktop_status, restart_daemon])
+        .invoke_handler(tauri::generate_handler![
+            desktop_status,
+            restart_daemon,
+            get_settings,
+            validate_settings,
+            apply_settings
+        ])
         .setup(|app| {
             setup(app).map_err(|error| anyhow::anyhow!(error))?;
             Ok(())

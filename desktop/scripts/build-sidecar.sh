@@ -14,9 +14,10 @@ BINARIES_DIR="${DESKTOP_DIR}/src-tauri/binaries"
 if [[ -n "${SENESCHAL_SIDECAR_FEATURES:-}" ]]; then
     FEATURES="${SENESCHAL_SIDECAR_FEATURES}"
 elif [[ "$(uname -s)" = "Darwin" ]]; then
-    FEATURES="control,avspeech"
+    # Two TTS backends keep provider switching first-class in Settings (#33).
+    FEATURES="control,avspeech,openai-tts"
 else
-    FEATURES="control,kokoro"
+    FEATURES="control,kokoro,openai-tts"
 fi
 TARGET_TRIPLE="$(rustc -vV | awk '/host:/ {print $2}')"
 if [[ -z "${TARGET_TRIPLE}" ]]; then

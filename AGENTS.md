@@ -72,7 +72,7 @@ server-side VAD endpointing)
 - **Barge-in**: at the first Nemotron ASR partial, `barge_in_tx` cancels the in-flight LLM request (including one just sent) and the TTS queue + playback; STT/VAD keep running, and a dispatched deep-worker task is never cancelled
 - **STT**: the runtime provider is `crates/asr` (Nemotron 3.5 over NeMo-Speech.cpp realtime WebSocket). Whisper/Parakeet/SFSpeechRecognizer remain as legacy providers in `seneschal-core`
 - **STT/VAD contract**: endpointing is server-side; live partials are logged while the user speaks, the LLM is gated on the final transcript, and stale results are dropped after barge-in — specified in `doc/stt-contract.md` and locked by deterministic + audit tests
-- **Desktop shell**: `desktop/` is an isolated Tauri v2 spike that launches the real `seneschal` binary as a sidecar and consumes Control REST/SSE; see `doc/design/32-desktop-spike.md`
+- **Desktop shell**: `desktop/` is an isolated Tauri v2 app that launches the real `seneschal` binary as a sidecar, consumes Control REST/SSE, and manages tiered Settings; see `doc/design/32-desktop-spike.md` and `doc/design/33-desktop-settings.md`
 - **Cold Path Memory (S-DREAM)**: L1/L2 consolidation, see `src/dream/`
 
 ---
@@ -96,3 +96,4 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 | iOS / watch companion (dual-channel) | [`doc/IOS_COMPANION.md`](doc/IOS_COMPANION.md) |
 | Apple Watch networking constraints | [`doc/APPLE_WATCH_CLIENT.md`](doc/APPLE_WATCH_CLIENT.md) |
 | Desktop spike architecture | [`doc/design/32-desktop-spike.md`](doc/design/32-desktop-spike.md) |
+| Desktop Settings & tiered apply | [`doc/design/33-desktop-settings.md`](doc/design/33-desktop-settings.md) |

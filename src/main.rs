@@ -42,6 +42,7 @@ use seneschal_agents::agent_session::VisibleSessionManager;
 use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
+use seneschal_common::settings::HotSettings;
 use seneschal_common::tools::{ConversationMode, ToolRegistry};
 use seneschal_common::{PermissionGate, find_allow_option_id};
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
@@ -135,6 +136,26 @@ fn main() {
 #[tokio::main]
 async fn main() -> Result<()> {
     async_main().await
+}
+
+/// Wait for either terminal signal. Desktop restarts use SIGTERM first
+/// (issue #33), so a graceful sidecar stop must behave like Ctrl-C.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for Ctrl-C");
+    }
 }
 
 async fn async_main() -> Result<()> {
@@ -1213,12 +1234,13 @@ async fn async_main() -> Result<()> {
         }
     };
     let tts_sample_rate = tts.sample_rate();
-    let tts = Arc::new(tts);
+    let tts: Arc<tokio::sync::RwLock<TtsEngine>> = Arc::new(tokio::sync::RwLock::new(tts));
 
     // ── Audio output ──────────────────────────────────────────────────────────
     let audio_output = Arc::new(AudioOutput::new_or_null(
         config.audio_output_device.as_deref(),
     ));
+    audio_output.set_volume(config.output_volume);
     info!(
         target: "audio",
         "Audio output: {}Hz, {}ch",
@@ -1287,6 +1309,14 @@ async fn async_main() -> Result<()> {
     let play_cancel = Arc::new(AtomicBool::new(false));
     let tts_muted = Arc::new(AtomicBool::new(false));
     let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Runtime-switchable settings (issue #33). Control applies TTS/volume
+    // directly and asks the audio loop to reload language/wake-word/prompt.
+    let hot_settings = Arc::new(Mutex::new(HotSettings {
+        language: config.language.clone(),
+        wake_word: config.primary_wake_word().to_string(),
+    }));
+    let (_settings_tx, mut settings_rx) = mpsc::channel::<HotSettings>(8);
 
     // Pipeline FSM state — replaces AtomicBool flags (llm_busy, consolidation_active, etc.)
     // Each actor that owns a transition writes it directly; observers subscribe read-only.
@@ -1884,6 +1914,7 @@ async fn async_main() -> Result<()> {
         let proactive_tx_c = proactive_tx.clone();
         let already_notified_c = Arc::clone(&l1_saturation_notified);
         let prompt_build_c = Arc::clone(&prompt_build_state);
+        let hot_settings_c = Arc::clone(&hot_settings);
         tokio::spawn(async move {
             consolidation_task(
                 events_c,
@@ -1907,6 +1938,7 @@ async fn async_main() -> Result<()> {
                 language_c,
                 proactive_tx_c,
                 already_notified_c,
+                hot_settings_c,
             )
             .await;
         });
@@ -1973,6 +2005,14 @@ async fn async_main() -> Result<()> {
     // ── Control API (HTTP + SSE) ──────────────────────────────────────────────
     #[cfg(feature = "control")]
     if let Some(ctrl_port) = config.control_port {
+        let settings_service =
+            Arc::new(seneschal_control::control::settings::SettingsService::new(
+                config.clone(),
+                Arc::clone(&tts),
+                Arc::clone(&audio_output),
+                Arc::clone(&hot_settings),
+                _settings_tx.clone(),
+            )?);
         let ctrl_state = Arc::new(seneschal_control::control::state::ControlState {
             broadcast: control_broadcast.clone(),
             pipeline_state_rx: pipeline_state_rx.clone(),
@@ -1983,6 +2023,7 @@ async fn async_main() -> Result<()> {
             llm_session: Arc::clone(&llm_session),
             db: db.clone(),
             permission_gate: Arc::clone(&permission_gate),
+            settings: settings_service,
         });
         tokio::spawn(async move {
             if let Err(e) =
@@ -2666,7 +2707,26 @@ async fn async_main() -> Result<()> {
                         }
                     }
                 } => {}
-                _ = tokio::signal::ctrl_c() => {
+                Some(hot) = settings_rx.recv() => {
+                    // Settings hot-reload (issue #33): the next utterance uses
+                    // the new language/wake word, and the live system prompt is
+                    // rebuilt without dropping conversation history.
+                    config.language = hot.language;
+                    config.wake_word = hot.wake_word;
+                    let new_system_prompt = build_system_prompt(
+                        &config.llm_system_prompt,
+                        config.primary_wake_word(),
+                        &profile_facts,
+                        &memories,
+                        &agent_section,
+                        &tool_section,
+                        &immutable_rules,
+                        &voice_plugin_sections,
+                    );
+                    llm_session.lock().unwrap().set_system_prompt(new_system_prompt);
+                    info!(target: "settings", "Hot settings applied (language={}, wake_word={})", config.language, config.primary_wake_word());
+                }
+                _ = shutdown_signal() => {
                     info!(target: "seneschal", "Shutting down...");
                     events.barge_in_tx.send(0).ok();
                     play_cancel.store(true, Ordering::SeqCst);

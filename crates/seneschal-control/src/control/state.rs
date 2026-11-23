@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc, watch};
 
 use super::broadcast::{ControlBroadcast, ControlEvent};
+use super::settings::SettingsService;
 use seneschal_common::PermissionGate;
 use seneschal_common::db::Database;
 use seneschal_core::llm::LlmSession;
@@ -32,6 +33,8 @@ pub struct ControlState {
     pub db: Database,
     /// Shared with the main audio loop (voice permission path).
     pub permission_gate: Arc<PermissionGate>,
+    /// Settings read/validate/apply service (issue #33).
+    pub settings: Arc<SettingsService>,
 }
 
 #[cfg(test)]

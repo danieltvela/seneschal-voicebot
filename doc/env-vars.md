@@ -15,9 +15,10 @@ Read from `.env` (dotenvy loads automatically):
 | `AUDIO_CHANNELS` | `1` | Audio channels |
 | `AUDIO_INPUT_DEVICE` | _(default)_ | Microphone device name. Case-insensitive **partial** match against the CPAL device name; append `#N` to pick the Nth match. Run `--list-devices` or `LIST_AUDIO_DEVICES=1` to see names. **Linux/ALSA:** use the CPAL name (e.g. `USB Audio`), which can differ from the OS "friendly" name (the product name lives only in `/proc/asound/cards`). |
 | `AUDIO_OUTPUT_DEVICE` | _(default)_ | Speaker device name (same matching rules as `AUDIO_INPUT_DEVICE`). |
+| `AUDIO_OUTPUT_VOLUME` | `1.0` | Master TTS/filler playback volume (`0.0`–`1.0`). Settings can hot-apply this value without a restart. |
 | `LIST_AUDIO_DEVICES` | `false` | When `1`, print available input **and** output devices and exit (also `--list-devices`). |
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `nemotron` | Documental en el runtime: `crates/asr` siempre usa Nemotron 3.5 realtime. Los valores `whisper`, `parakeet`, `speech` y `openai` siguen siendo válidos para los proveedores legacy de `seneschal-core`. |
+| `STT_PROVIDER` | `nemotron` | Runtime backend: `nemotron` (Nemotron 3.5 realtime in `crates/asr`) or a legacy `seneschal-core` provider (`whisper`, `parakeet`, `speech`, `openai`). |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `VAD_SILENCE_MS` | `300` | Trailing silence that closes a Nemotron turn: forwarded as `endpointing_ms` to the server's VAD-driven endpointer. For legacy providers it keeps the old in-process SpeechEnd behavior. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |

@@ -186,6 +186,16 @@ impl OpenAiTts {
         self.cfg.effective_sample_rate()
     }
 
+    /// Hot-swap the preset voice (issue #33).
+    pub fn set_voice(&mut self, voice: &str) {
+        self.cfg.voice = voice.to_string();
+    }
+
+    /// Hot-swap the speech speed (`0` omits the field) (issue #33).
+    pub fn set_speed(&mut self, speed: f32) {
+        self.cfg.speed = speed.max(0.0);
+    }
+
     /// Start streaming synthesis of `text`.
     ///
     /// Spawns a task that POSTs to `/v1/audio/speech` and pushes decoded f32

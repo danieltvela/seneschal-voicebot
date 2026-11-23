@@ -94,6 +94,26 @@ impl AvSpeechTts {
         self.sample_rate
     }
 
+    /// Hot-swap the system voice by display name (issue #33).
+    ///
+    /// AVSpeech voices can report different buffer sample rates, so the probe
+    /// is repeated for the new identifier before the next utterance.
+    pub fn set_voice_name(&mut self, voice_name: &str) -> Result<()> {
+        let identifier = find_voice_identifier(voice_name).with_context(|| {
+            format!("Voice '{voice_name}' not found — run `say -v ?` to list available voices")
+        })?;
+        self.voice_identifier = identifier;
+        if let Some(sample_rate) = synth_sample_rate(&identifier, self.rate) {
+            self.sample_rate = sample_rate;
+        }
+        Ok(())
+    }
+
+    /// Hot-swap the normalized speech rate (issue #33).
+    pub fn set_rate(&mut self, rate: f32) {
+        self.rate = rate.clamp(0.0, 1.0);
+    }
+
     /// Print all available AVSpeechSynthesizer voices to stdout.
     pub fn list_voices() {
         autoreleasepool(|_pool| unsafe {

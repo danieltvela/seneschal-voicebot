@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Settings from "./lib/components/Settings.svelte";
   import {
     connectionLabel,
     daemonLabel,
@@ -10,6 +11,7 @@
     status,
   } from "./lib/status";
 
+  let view = $state<"status" | "settings">("status");
   let restarting = $state(false);
   let restartError = $state<string | null>(null);
 
@@ -33,10 +35,28 @@
 <main>
   <header>
     <h1>Seneschal</h1>
-    <p class="subtitle">Desktop spike — live PipelineState over Control SSE</p>
+    <p class="subtitle">Desktop shell — live pipeline state and settings</p>
+    <nav aria-label="App views">
+      <button
+        type="button"
+        class:active={view === "status"}
+        onclick={() => (view = "status")}
+      >
+        Status
+      </button>
+      <button
+        type="button"
+        class:active={view === "settings"}
+        onclick={() => (view = "settings")}
+      >
+        Settings
+      </button>
+    </nav>
   </header>
 
-  {#if $status}
+  {#if view === "settings"}
+    <Settings />
+  {:else if $status}
     <section aria-label="Desktop status">
       <div class="rows">
         <div class="row">
@@ -115,8 +135,26 @@
   }
 
   .subtitle {
-    margin: 4px 0 28px;
+    margin: 4px 0 16px;
     color: #9aa7b5;
+  }
+
+  nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  nav button {
+    width: auto;
+    margin: 0;
+    padding: 8px 14px;
+    background: #171c23;
+  }
+
+  nav button.active {
+    background: #2d3a4a;
+    border-color: #5a8dd6;
   }
 
   section {

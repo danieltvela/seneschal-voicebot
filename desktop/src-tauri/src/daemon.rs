@@ -20,6 +20,7 @@ pub struct AppRuntime {
     restart_lock: Mutex<()>,
     child: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     generation: Arc<AtomicU64>,
+    exit_tx: watch::Sender<u64>,
     workdir: PathBuf,
 }
 
@@ -30,6 +31,7 @@ impl AppRuntime {
         control_port: u16,
         restart_tx: watch::Sender<u64>,
     ) -> Self {
+        let (exit_tx, _) = watch::channel(0u64);
         Self {
             app,
             status,
@@ -38,8 +40,13 @@ impl AppRuntime {
             restart_lock: Mutex::new(()),
             child: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
+            exit_tx,
             workdir: daemon_workdir(),
         }
+    }
+
+    pub(crate) fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.control_port)
     }
 
     pub async fn start(&self) -> Result<(), String> {
@@ -116,12 +123,42 @@ impl AppRuntime {
         AppRuntimeHandle {
             status: Arc::clone(&self.status),
             generation: Arc::clone(&self.generation),
+            exit_tx: self.exit_tx.clone(),
         }
     }
 
     async fn stop_daemon(&self) -> Result<(), String> {
         let child = self.child.lock().await.take();
         if let Some(child) = child {
+            // Subscribe before signaling so a fast graceful exit is not missed.
+            let mut exit_rx = self.exit_tx.subscribe();
+
+            #[cfg(unix)]
+            {
+                let pid = child.pid() as libc::pid_t;
+                let result = unsafe { libc::killpg(pid, libc::SIGTERM) };
+                if result != 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        tracing::warn!(
+                            target: "desktop_daemon",
+                            "failed to send SIGTERM to sidecar {pid}: {error}"
+                        );
+                    }
+                }
+            }
+
+            let stopped = tokio::time::timeout(GRACEFUL_STOP_TIMEOUT, exit_rx.changed())
+                .await
+                .is_ok();
+            if !stopped {
+                tracing::warn!(
+                    target: "desktop_daemon",
+                    "sidecar did not exit within {:?}; sending SIGKILL",
+                    GRACEFUL_STOP_TIMEOUT
+                );
+            }
+
             let result = tokio::task::spawn_blocking(move || child.kill())
                 .await
                 .map_err(|error| format!("failed to join sidecar kill task: {error}"))?;
@@ -131,11 +168,15 @@ impl AppRuntime {
     }
 }
 
+/// How long to wait after SIGTERM before the existing SIGKILL fallback.
+const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Minimal handle for the sidecar output task. It only needs the status bus
 /// and an immutable snapshot of the generation it belongs to.
 struct AppRuntimeHandle {
     status: SharedStatusHub,
     generation: Arc<AtomicU64>,
+    exit_tx: watch::Sender<u64>,
 }
 
 async fn supervise_sidecar(
@@ -170,6 +211,7 @@ async fn supervise_sidecar(
                 runtime
                     .status
                     .daemon_exited(DaemonStatus::Stopped, Some(message));
+                let _ = runtime.exit_tx.send(generation);
             }
             _ => {}
         }

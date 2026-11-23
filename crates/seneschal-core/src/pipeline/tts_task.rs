@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tracing::error;
 
 use super::fsm::PipelineState;
@@ -18,6 +18,9 @@ use tracing::info;
 /// When a remote WebSocket client connects, the remote server installs a sender here.
 /// `tts_task` then forwards synthesized audio to that client instead of local CPAL.
 pub type RemoteTtsTx = Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<TtsAudioPacket>>>>;
+
+/// TTS engine shared with the Settings hot-apply path (issue #33).
+pub type SharedTtsEngine = Arc<RwLock<TtsEngine>>;
 
 /// TTS task: receives sentences from sen_task (and llm_task error paths) via typed channel,
 /// synthesizes and plays each one.
@@ -38,7 +41,7 @@ pub async fn tts_task(
     pipeline_state_tx: Arc<watch::Sender<PipelineState>>,
     t_vad_end: Arc<Mutex<Option<Instant>>>,
     mut sentences_rx: mpsc::Receiver<PipelineFrame>,
-    tts: Arc<TtsEngine>,
+    tts: SharedTtsEngine,
     audio_output: Arc<AudioOutput>,
     tts_sample_rate: u32,
     play_cancel: Arc<AtomicBool>,
@@ -189,7 +192,7 @@ enum SentenceOutcome {
 /// Synthesise `sentence` and stream it to the speaker (or remote sink).
 #[allow(clippy::too_many_arguments)]
 async fn exec_sentence(
-    tts: &Arc<TtsEngine>,
+    tts: &SharedTtsEngine,
     audio_output: &Arc<AudioOutput>,
     remote_tts_tx: &RemoteTtsTx,
     events: &Arc<PipelineEvents>,
@@ -202,15 +205,18 @@ async fn exec_sentence(
     // any audio is played.
     let mut cancel_rx = events.barge_in_tx.subscribe();
 
-    let synth = tts.synthesize_stream(args.sentence);
-    tokio::pin!(synth);
-    let mut stream = tokio::select! {
-        biased;
-        _ = cancel_rx.recv() => return SentenceOutcome::Cancelled,
-        r = &mut synth => match r {
-            Ok(s) => s,
-            Err(e) => return SentenceOutcome::Error(e),
-        },
+    let mut stream = {
+        let engine_guard = tts.read().await;
+        let synth = engine_guard.synthesize_stream(args.sentence);
+        tokio::pin!(synth);
+        tokio::select! {
+            biased;
+            _ = cancel_rx.recv() => return SentenceOutcome::Cancelled,
+            r = &mut synth => match r {
+                Ok(s) => s,
+                Err(e) => return SentenceOutcome::Error(e),
+            },
+        }
     };
 
     // A cancel that arrived while a non-streaming backend was synthesizing.
@@ -234,12 +240,12 @@ async fn exec_sentence(
         let n = all.len();
         let packet = TtsAudioPacket {
             samples: all,
-            sample_rate: args.sample_rate,
+            sample_rate: stream.sample_rate,
         };
         info!(
             target: "remote",
             "Routing TTS to remote client ({n} samples @ {} Hz)",
-            args.sample_rate
+            stream.sample_rate
         );
         if tx.send(packet).await.is_err() {
             tracing::warn!(target: "remote", "Remote TTS channel closed");
@@ -289,6 +295,9 @@ async fn exec_sentence(
 /// Bundle of args for [`exec_sentence`] (avoids a long parameter list).
 struct TtsEngineStreamArgs<'a> {
     sentence: &'a str,
+    /// Kept for call-site symmetry with remote clients; the stream itself now
+    /// carries the authoritative sample rate after hot voice changes.
+    #[allow(dead_code)]
     sample_rate: u32,
     cancel: &'a Arc<AtomicBool>,
     has_audio_device: bool,
@@ -369,7 +378,7 @@ mod state_tests {
             Arc::new(state_tx),
             Arc::new(Mutex::new(None)),
             rx,
-            Arc::new(TtsEngine::Mock(mock)),
+            Arc::new(tokio::sync::RwLock::new(TtsEngine::Mock(mock))),
             Arc::new(AudioOutput::null()),
             22050,
             Arc::new(AtomicBool::new(false)),
@@ -604,7 +613,7 @@ mod state_tests {
             Arc::new(state_tx),
             Arc::new(Mutex::new(None)),
             rx,
-            Arc::new(TtsEngine::Mock(mock)),
+            Arc::new(tokio::sync::RwLock::new(TtsEngine::Mock(mock))),
             Arc::new(AudioOutput::null()),
             22050,
             Arc::new(AtomicBool::new(false)),

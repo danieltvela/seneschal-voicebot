@@ -1,9 +1,13 @@
 # Desktop app
 
-Tauri v2 shell for the Seneschal daemon. This directory is a spike for
-issue #32: launch the real `seneschal` binary as a sidecar, connect to the
-existing Control SSE API, render live `PipelineState`, and restart the sidecar
-with automatic reconnect.
+Tauri v2 shell for the Seneschal daemon. It launches the real `seneschal`
+binary as a sidecar, connects to the existing Control SSE API, renders live
+`PipelineState`, and manages Settings over the Control API (issue #33).
+
+Settings edits the active TOML config, validates before applying, and uses a
+tiered apply model: TTS voice/rate, output volume, language and wake word apply
+without a restart; backend/model/URL/port changes restart the sidecar
+automatically while the window stays open.
 
 ## Commands
 
@@ -21,8 +25,9 @@ npm run check
 npm test
 ```
 
-On macOS, the default sidecar enables `control,avspeech`. On Linux it enables
-`control,kokoro`. Override it when your local configuration uses another
+On macOS, the default sidecar enables `control,avspeech,openai-tts`. On Linux
+it enables `control,kokoro,openai-tts`, so Settings can offer both compiled
+TTS backends. Override it when your local configuration uses another
 backend:
 
 ```bash

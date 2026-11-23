@@ -99,6 +99,16 @@ impl KokoroTts {
         24_000
     }
 
+    /// Hot-swap the voice style without rebuilding the ONNX session (issue #33).
+    pub fn set_voice(&mut self, voice: &str) {
+        self.voice = voice.to_string();
+    }
+
+    /// Hot-swap the speech speed without rebuilding the ONNX session (issue #33).
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed.max(0.0);
+    }
+
     /// Print all available Kokoro voice styles to stdout.
     ///
     /// Voice naming convention: `{lang}{gender}_{name}`
