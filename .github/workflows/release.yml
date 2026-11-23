@@ -117,7 +117,7 @@ jobs:
   # ── CLI daemon — Linux x86_64 ─────────────────────────────────────────────
   build-cli-linux:
     name: CLI · x86_64-unknown-linux-gnu
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     env:
       RUSTFLAGS: "-C link-arg=-lgomp"
       CARGO_TARGET_DIR: /tmp/seneschal-target
@@ -172,7 +172,7 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15-intel
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
