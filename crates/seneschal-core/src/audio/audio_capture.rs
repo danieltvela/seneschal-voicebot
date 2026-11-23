@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use async_channel::Sender;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
+use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, trace, warn};
@@ -13,6 +14,58 @@ pub struct AudioChunk {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+/// One CPAL device as exposed to the Settings/Audio panel (issue #34).
+///
+/// `selector` is the exact value accepted by `AudioCapture::new` /
+/// `AudioOutput::new`: the device name, with `#N` appended when several
+/// devices share the same name.
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioDeviceInfo {
+    pub name: String,
+    pub selector: String,
+    pub is_default: bool,
+    /// `None` means CPAL enumerated the device but its default config failed.
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+    pub sample_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AudioDeviceInventory {
+    pub inputs: Vec<AudioDeviceInfo>,
+    pub outputs: Vec<AudioDeviceInfo>,
+}
+
+/// RMS and peak level for a mono chunk. Values are linear `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioLevels {
+    pub rms: f32,
+    pub peak: f32,
+}
+
+impl AudioLevels {
+    pub fn compute(samples: &[f32]) -> Self {
+        if samples.is_empty() {
+            return Self {
+                rms: 0.0,
+                peak: 0.0,
+            };
+        }
+        let sum_squares: f32 = samples.iter().map(|s| s * s).sum();
+        let peak = samples
+            .iter()
+            .fold(0.0_f32, |max, sample| max.max(sample.abs()));
+        Self {
+            rms: (sum_squares / samples.len() as f32).sqrt(),
+            peak,
+        }
+    }
+
+    pub fn is_silent(&self, threshold: f32) -> bool {
+        self.peak <= threshold
+    }
 }
 
 pub struct AudioCapture {
@@ -155,95 +208,102 @@ impl AudioCapture {
         ))
     }
 
-    // List all available input devices
-    // pub fn list_devices() -> Result<Vec<String>> {
-    //     let host = cpal::default_host();
-    //     let devices = host
-    //         .input_devices()
-    //         .context("Failed to enumerate input devices")?;
+    /// Enumerate input and output devices without opening a stream.
+    ///
+    /// A failing default config is still useful in the UI (the device exists but
+    /// cannot currently provide its default format), so it is reported instead
+    /// of dropping the entry.
+    pub fn enumerate_devices() -> Result<AudioDeviceInventory> {
+        let host = cpal::default_host();
 
-    //     let mut device_names = Vec::new();
-    //     for device in devices {
-    //         if let Ok(name) = device.name() {
-    //             device_names.push(name);
-    //         }
-    //     }
+        let inputs = Self::device_infos(
+            host.input_devices()
+                .context("Failed to enumerate input devices")?,
+            host.default_input_device(),
+            "input",
+        )?;
+        let outputs = Self::device_infos(
+            host.output_devices()
+                .context("Failed to enumerate output devices")?,
+            host.default_output_device(),
+            "output",
+        )?;
 
-    //     Ok(device_names)
-    // }
+        Ok(AudioDeviceInventory { inputs, outputs })
+    }
+
+    fn device_infos<I>(
+        devices: I,
+        default_device: Option<Device>,
+        direction: &str,
+    ) -> Result<Vec<AudioDeviceInfo>>
+    where
+        I: IntoIterator<Item = Device>,
+    {
+        let default_name = default_device
+            .and_then(|device| device.description().ok().map(|d| d.name().to_string()));
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut infos = Vec::new();
+
+        for device in devices {
+            let Ok(description) = device.description() else {
+                continue;
+            };
+            let name = description.name().to_string();
+            let count = counts.entry(name.clone()).or_default();
+            let selector = if *count == 0 {
+                name.clone()
+            } else {
+                format!("{name}#{count}")
+            };
+            *count += 1;
+
+            let config = if direction == "input" {
+                device.default_input_config().ok()
+            } else {
+                device.default_output_config().ok()
+            };
+            let (sample_rate, channels, sample_format) = match config {
+                Some(config) => (
+                    Some(config.sample_rate()),
+                    Some(config.channels()),
+                    Some(format!("{:?}", config.sample_format())),
+                ),
+                None => (None, None, None),
+            };
+
+            infos.push(AudioDeviceInfo {
+                name: name.clone(),
+                selector,
+                is_default: default_name.as_deref() == Some(name.as_str()),
+                sample_rate,
+                channels,
+                sample_format,
+            });
+        }
+
+        Ok(infos)
+    }
 
     /// Print all available input devices to stdout
     pub fn print_devices() -> Result<()> {
-        let host = cpal::default_host();
+        let inventory = Self::enumerate_devices()?;
 
-        // Print default devices
-        if let Some(default_device) = host.default_input_device() {
-            println!(
-                "Default input device: {}",
-                default_device.description()?.name()
-            );
+        if let Some(device) = inventory.inputs.iter().find(|device| device.is_default) {
+            println!("Default input device: {}", device.name);
         }
-        if let Some(default_device) = host.default_output_device() {
-            println!(
-                "Default output device: {}",
-                default_device.description()?.name()
-            );
+        if let Some(device) = inventory.outputs.iter().find(|device| device.is_default) {
+            println!("Default output device: {}", device.name);
         }
 
         println!("\nAvailable input devices:");
-        for (idx, device) in host
-            .input_devices()
-            .context("Failed to enumerate input devices")?
-            .enumerate()
-        {
-            if let Ok(device_description) = device.description() {
-                let config_info = device
-                    .default_input_config()
-                    .map(|c| {
-                        format!(
-                            "{} Hz, {} ch, {:?}",
-                            c.sample_rate(),
-                            c.channels(),
-                            c.sample_format()
-                        )
-                    })
-                    .unwrap_or_else(|_| "config unavailable".to_string());
-
-                println!(
-                    "  [{}] {} ({})",
-                    idx,
-                    device_description.name(),
-                    config_info
-                );
-            }
+        for (idx, device) in inventory.inputs.iter().enumerate() {
+            println!("  [{}] {} ({})", idx, device.name, describe_device(device));
         }
 
         println!("\nAvailable output devices:");
-        for (idx, device) in host
-            .output_devices()
-            .context("Failed to enumerate output devices")?
-            .enumerate()
-        {
-            if let Ok(device_description) = device.description() {
-                let config_info = device
-                    .default_output_config()
-                    .map(|c| {
-                        format!(
-                            "{} Hz, {} ch, {:?}",
-                            c.sample_rate(),
-                            c.channels(),
-                            c.sample_format()
-                        )
-                    })
-                    .unwrap_or_else(|_| "config unavailable".to_string());
-
-                println!(
-                    "  [{}] {} ({})",
-                    idx,
-                    device_description.name(),
-                    config_info
-                );
-            }
+        for (idx, device) in inventory.outputs.iter().enumerate() {
+            println!("  [{}] {} ({})", idx, device.name, describe_device(device));
         }
 
         println!(
@@ -405,5 +465,46 @@ impl AudioCapture {
                 trace!(target: "audio", "Sent audio chunk with {} samples", total_samples_needed);
             }
         }
+    }
+}
+
+fn describe_device(device: &AudioDeviceInfo) -> String {
+    match (device.sample_rate, device.channels, &device.sample_format) {
+        (Some(rate), Some(channels), Some(format)) => format!("{rate} Hz, {channels} ch, {format}"),
+        _ => "config unavailable".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn levels_sine_matches_expected_rms_and_peak() {
+        let samples: Vec<f32> = (0..16_000)
+            .map(|i| (i as f32 * 2.0 * std::f32::consts::PI / 100.0).sin() * 0.5)
+            .collect();
+        let levels = AudioLevels::compute(&samples);
+        assert!((levels.rms - 0.5 / 2f32.sqrt()).abs() < 0.01);
+        assert!((levels.peak - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn levels_silence_and_empty_are_zero() {
+        assert_eq!(
+            AudioLevels::compute(&[0.0; 160]),
+            AudioLevels {
+                rms: 0.0,
+                peak: 0.0
+            }
+        );
+        assert_eq!(
+            AudioLevels::compute(&[]),
+            AudioLevels {
+                rms: 0.0,
+                peak: 0.0
+            }
+        );
+        assert!(AudioLevels::compute(&[0.0; 160]).is_silent(0.01));
     }
 }

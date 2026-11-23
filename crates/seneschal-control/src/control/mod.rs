@@ -1,4 +1,5 @@
 pub mod api;
+pub mod audio;
 pub mod broadcast;
 pub mod client;
 pub mod settings;

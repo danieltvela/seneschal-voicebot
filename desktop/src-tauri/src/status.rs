@@ -178,6 +178,37 @@ impl StatusHub {
         });
     }
 
+    /// Wait for the next successful Control connection.
+    ///
+    /// Used after a restart-tier Settings apply so the caller does not race the
+    /// sidecar restart when it immediately runs an audio/provider test.
+    pub async fn wait_until_connected(&self, timeout: std::time::Duration) -> Result<(), String> {
+        let mut rx = self.subscribe();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.snapshot().connection == ConnectionStatus::Connected {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err("timed out waiting for the daemon to reconnect".to_string());
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Err("status hub closed while waiting for reconnect".to_string());
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "timed out after {} ms waiting for the daemon to reconnect",
+                        timeout.as_millis()
+                    ));
+                }
+            }
+        }
+    }
+
     /// Apply an SSE event after it has been normalized by the control client.
     pub fn apply_control_event(&self, event: ControlEvent) {
         match event {
@@ -198,6 +229,8 @@ impl StatusHub {
                 });
             }
             ControlEvent::Error(error) => self.set_error(error),
+            // The VU bus consumes audio levels before status normalization.
+            ControlEvent::AudioLevel { .. } => {}
         }
     }
 }
@@ -255,5 +288,31 @@ mod tests {
         assert_eq!(status.connection, ConnectionStatus::Disconnected);
         assert!(status.pipeline.is_none());
         assert_eq!(status.last_error.as_deref(), Some("daemon exited"));
+    }
+
+    #[tokio::test]
+    async fn wait_until_connected_resolves_on_the_next_connected_snapshot() {
+        let hub = std::sync::Arc::new(StatusHub::new());
+        hub.set_connection(ConnectionStatus::Disconnected);
+        let waiter = std::sync::Arc::clone(&hub);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            waiter.mark_connecting();
+            waiter.mark_connected();
+        });
+
+        hub.wait_until_connected(std::time::Duration::from_secs(1))
+            .await
+            .expect("connection event should resolve the waiter");
+    }
+
+    #[tokio::test]
+    async fn wait_until_connected_times_out_when_control_stays_down() {
+        let hub = StatusHub::new();
+        hub.set_connection(ConnectionStatus::Disconnected);
+        let result = hub
+            .wait_until_connected(std::time::Duration::from_millis(20))
+            .await;
+        assert!(result.is_err());
     }
 }

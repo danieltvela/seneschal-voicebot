@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Seneschal — Desktop Spike",
+        "title": "Seneschal — Desktop",
         "width": 800,
         "height": 600,
         "minWidth": 480,
@@ -29,6 +29,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/seneschal"]
+    "externalBin": ["binaries/seneschal"],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   }
 }

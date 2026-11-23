@@ -46,7 +46,7 @@ use seneschal_common::settings::HotSettings;
 use seneschal_common::tools::{ConversationMode, ToolRegistry};
 use seneschal_common::{PermissionGate, find_allow_option_id};
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
-use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
+use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk, AudioLevels};
 use seneschal_core::audio::audio_transform::resample_nearest;
 use seneschal_core::audio::buffer::AudioBuffer;
 use seneschal_core::audio::output::AudioOutput;
@@ -82,6 +82,9 @@ use seneschal_tools_core::CurrentTimeTool;
 
 #[cfg(test)]
 mod e2e_tests;
+
+#[cfg(feature = "control")]
+mod audio_diagnostics;
 
 /// Build the OpenAI-compatible TTS provider configuration from the runtime config.
 #[cfg(feature = "openai-tts")]
@@ -1264,6 +1267,9 @@ async fn async_main() -> Result<()> {
     // Tells the device monitor whether capture is currently running, so it only
     // signals DeviceConnected when the device is present AND capture is idle.
     let capture_active = Arc::new(AtomicBool::new(false));
+    // Last capture startup/rebuild error for the desktop audio panel (issue #34).
+    #[cfg(feature = "control")]
+    let capture_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     match AudioCapture::try_new(config.audio_input_device.as_deref()) {
         Some(ac) => {
             source_sample_rate = ac.sample_rate();
@@ -1276,14 +1282,26 @@ async fn async_main() -> Result<()> {
                 Ok(stream) => {
                     capture_active.store(true, Ordering::SeqCst);
                     capture_stream = Some(stream);
+                    #[cfg(feature = "control")]
+                    {
+                        *capture_error.lock().unwrap() = None;
+                    }
                 }
                 Err(e) => {
                     warn!(target: "audio", "Failed to start audio capture: {}. Deferring until device connects.", e);
+                    #[cfg(feature = "control")]
+                    {
+                        *capture_error.lock().unwrap() = Some(format!("{e:#}"));
+                    }
                 }
             }
         }
         None => {
             warn!(target: "audio", "No input device available at startup — deferring capture until device connects");
+            #[cfg(feature = "control")]
+            {
+                *capture_error.lock().unwrap() = Some("No input device available".to_string());
+            }
         }
     }
 
@@ -2003,6 +2021,13 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Control API (HTTP + SSE) ──────────────────────────────────────────────
+    // The receiver always exists so the main select loop keeps one shape; when
+    // Control is disabled the sender is dropped and the branch never fires.
+    #[cfg(feature = "control")]
+    let (audio_test_tx, mut audio_test_rx) =
+        mpsc::channel::<seneschal_control::control::audio::AudioTestRequest>(1);
+    #[cfg(not(feature = "control"))]
+    let (_audio_test_tx, mut audio_test_rx) = mpsc::channel::<()>(1);
     #[cfg(feature = "control")]
     if let Some(ctrl_port) = config.control_port {
         let settings_service =
@@ -2013,6 +2038,17 @@ async fn async_main() -> Result<()> {
                 Arc::clone(&hot_settings),
                 _settings_tx.clone(),
             )?);
+        // Audio diagnostics (issue #34): Control sends a request; the main
+        // loop below owns the recorder and the STT provider.
+        let audio_control = Arc::new(seneschal_control::control::audio::AudioControl::new(
+            Arc::clone(&tts),
+            Arc::clone(&audio_output),
+            audio_test_tx,
+            events.barge_in_tx.clone(),
+            pipeline_state_rx.clone(),
+            Arc::clone(&capture_active),
+            Arc::clone(&capture_error),
+        ));
         let ctrl_state = Arc::new(seneschal_control::control::state::ControlState {
             broadcast: control_broadcast.clone(),
             pipeline_state_rx: pipeline_state_rx.clone(),
@@ -2024,6 +2060,7 @@ async fn async_main() -> Result<()> {
             db: db.clone(),
             permission_gate: Arc::clone(&permission_gate),
             settings: settings_service,
+            audio: Some(audio_control),
         });
         tokio::spawn(async move {
             if let Err(e) =
@@ -2117,6 +2154,16 @@ async fn async_main() -> Result<()> {
     let mut plugin_runtime_spawned_mcp: Option<SpawnedMcpServers> = None;
 
     let mut proactive_rx = proactive_rx;
+    // In-flight mic/loopback diagnostic. Kept beside the main loop because the
+    // STT provider and capture consumer are owned here (issue #34).
+    #[cfg(feature = "control")]
+    type AudioTestState = (
+        audio_diagnostics::AudioTestRecorder,
+        seneschal_control::control::audio::AudioTestRequest,
+    );
+    #[cfg(not(feature = "control"))]
+    type AudioTestState = ();
+    let mut active_audio_test: Option<AudioTestState> = None;
     tokio::select! {
                 _ = async {
                     loop {
@@ -2407,14 +2454,26 @@ async fn async_main() -> Result<()> {
                                                         Ok(stream) => {
                                                             capture_active.store(true, Ordering::SeqCst);
                                                             capture_stream = Some(stream);
+                                                            #[cfg(feature = "control")]
+                                                            {
+                                                                *capture_error.lock().unwrap() = None;
+                                                            }
                                                         }
                                                         Err(e) => {
                                                             error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
+                                                            #[cfg(feature = "control")]
+                                                            {
+                                                                *capture_error.lock().unwrap() = Some(format!("{e:#}"));
+                                                            }
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
                                                     error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
+                                                    #[cfg(feature = "control")]
+                                                    {
+                                                        *capture_error.lock().unwrap() = Some(format!("{e:#}"));
+                                                    }
                                                 }
                                             }
                                             // Swap output device (spawn_blocking — may wait for in-flight playback)
@@ -2538,6 +2597,21 @@ async fn async_main() -> Result<()> {
                             Some(switch_event) = plugin_switch_rx.recv() => {
                                 // Queue switch event — apply between turns only
                                 pending_plugin_switch = Some(switch_event);
+                                continue;
+                            },
+                            Some(test_request) = audio_test_rx.recv(), if active_audio_test.is_none() => {
+                                #[cfg(feature = "control")]
+                                {
+                                    let recorder = audio_diagnostics::AudioTestRecorder::new(
+                                        test_request.kind,
+                                        test_request.duration_secs,
+                                        config.sample_rate,
+                                    );
+                                    info!(target: "audio", "Audio diagnostic started ({:?}, {}s)", test_request.kind, test_request.duration_secs);
+                                    active_audio_test = Some((recorder, test_request));
+                                }
+                                #[cfg(not(feature = "control"))]
+                                ignore_audio_test(test_request);
                                 continue;
                             },
                         };
@@ -2673,6 +2747,77 @@ async fn async_main() -> Result<()> {
                         };
                         let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
 
+                        // Live input level for the desktop VU meter (issue #34).
+                        // Computed after downmix/resample so it matches the exact
+                        // signal the STT consumes; the broadcast send is non-blocking.
+                        let levels = AudioLevels::compute(&mono);
+                        #[cfg(feature = "control")]
+                        control_broadcast.send(seneschal_control::control::broadcast::ControlEvent::AudioLevel {
+                            rms: levels.rms,
+                            peak: levels.peak,
+                        });
+
+                        #[cfg(feature = "control")]
+                        if active_audio_test.is_some() {
+                            let (mut recorder, request) = active_audio_test.take().expect("active audio test");
+                            if !recorder.record(&mono) {
+                                active_audio_test = Some((recorder, request));
+                                continue;
+                            }
+
+                            let (mut result, samples) = recorder.finish();
+                            let outcome = match request.kind {
+                                seneschal_control::control::audio::AudioTestKind::Mic => {
+                                    let provider = stt_provider.provider_name().to_string();
+                                    match tokio::task::block_in_place(|| {
+                                        stt_provider.transcribe_complete(&samples)
+                                    }) {
+                                        Ok(quality) => {
+                                            result.transcript = Some(quality.text.trim().to_string());
+                                            result.provider = Some(provider);
+                                            Ok(result)
+                                        }
+                                        Err(error) => Err(
+                                            seneschal_control::control::audio::AudioTestError::new(
+                                                seneschal_control::control::audio::AudioTestErrorCode::ProviderError,
+                                                format!("STT transcription failed: {error:#}"),
+                                            ),
+                                        ),
+                                    }
+                                }
+                                seneschal_control::control::audio::AudioTestKind::Loopback => {
+                                    let output = Arc::clone(&audio_output);
+                                    let cancel = Arc::new(AtomicBool::new(false));
+                                    let playback = tokio::task::spawn_blocking(move || {
+                                        output.play_blocking(&samples, config.sample_rate, &cancel)
+                                    });
+                                    match playback.await {
+                                        Ok(Ok(())) => Ok(result),
+                                        Ok(Err(error)) => Err(
+                                            seneschal_control::control::audio::AudioTestError::new(
+                                                seneschal_control::control::audio::AudioTestErrorCode::OutputUnavailable,
+                                                format!("Loopback playback failed: {error:#}"),
+                                            ),
+                                        ),
+                                        Err(error) => Err(
+                                            seneschal_control::control::audio::AudioTestError::new(
+                                                seneschal_control::control::audio::AudioTestErrorCode::OutputUnavailable,
+                                                format!("Loopback task failed: {error}"),
+                                            ),
+                                        ),
+                                    }
+                                }
+                            };
+                            let _ = request.reply.send(outcome);
+
+                            // The capture channel buffered the recording window;
+                            // resume on fresh audio so stale speech cannot become
+                            // a normal utterance.
+                            while rx.try_recv().is_ok() {}
+                            while stt_rx.try_recv().is_ok() {}
+                            continue;
+                        }
+
                         stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
                         // Collect pending STT events, then process each one.
@@ -2736,6 +2881,11 @@ async fn async_main() -> Result<()> {
 
     Ok(())
 }
+
+/// No-op sink for the always-present audio-test select branch when the Control
+/// feature is disabled.
+#[cfg(not(feature = "control"))]
+fn ignore_audio_test<T>(_value: T) {}
 
 /// Deep worker wiring context (issue #236). Present only when
 /// `deep_worker_enabled` — every consumer branches on `Option<DeepWorkerCtx>`

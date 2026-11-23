@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Audio from "./lib/components/Audio.svelte";
   import Settings from "./lib/components/Settings.svelte";
   import {
     connectionLabel,
@@ -11,7 +12,7 @@
     status,
   } from "./lib/status";
 
-  let view = $state<"status" | "settings">("status");
+  let view = $state<"status" | "settings" | "audio">("status");
   let restarting = $state(false);
   let restartError = $state<string | null>(null);
 
@@ -51,11 +52,20 @@
       >
         Settings
       </button>
+      <button
+        type="button"
+        class:active={view === "audio"}
+        onclick={() => (view = "audio")}
+      >
+        Audio
+      </button>
     </nav>
   </header>
 
   {#if view === "settings"}
     <Settings />
+  {:else if view === "audio"}
+    <Audio />
   {:else if $status}
     <section aria-label="Desktop status">
       <div class="rows">

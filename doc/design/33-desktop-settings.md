@@ -15,10 +15,11 @@ restart.
 
 1. **The daemon classifies and persists; the shell restarts.**
    `POST /control/config/apply` validates the whole patch, writes the active
-   TOML atomically, and returns `hot`, `restart_required`, or a field-error
-   response. The Tauri shell owns the sidecar and invokes its existing restart
-   path when the response is `restart_required`. The daemon does not try to
-   kill its own process.
+   TOML atomically, and returns `hot`, `restart`, or a field-error response.
+   The Tauri shell owns the sidecar and invokes its existing restart path when
+   the response is `restart`; it then waits for the next connected Control SSE
+   snapshot before resolving the apply. The daemon does not try to kill its own
+   process.
 
 2. **Settings writes the resolved TOML, not `.env`.**
    `SENESCHAL_CONFIG_FILE` wins. Otherwise Settings writes

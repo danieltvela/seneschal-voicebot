@@ -1,13 +1,16 @@
+mod audio;
 mod control;
 mod daemon;
 mod settings;
 mod status;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::{Manager, State};
 use tokio::sync::watch;
 
+use crate::audio::SharedAudioHub;
 use crate::control::ControlBridge;
 use crate::daemon::{AppRuntime, spawn_status_emitter};
 use crate::status::{SharedStatusHub, StatusHub};
@@ -44,19 +47,87 @@ async fn apply_settings(
     runtime: State<'_, Arc<AppRuntime>>,
     patch: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let mut result = settings::apply_config(&runtime.base_url(), &patch)
+    let result = settings::apply_config(&runtime.base_url(), &patch)
         .await
         .map_err(|error| error.to_string())?;
-    if result.get("tier").and_then(|tier| tier.as_str()) == Some("restart_required") {
+    // The wire token is `restart` (issue #33 ADR originally said
+    // `restart_required`; the implementation and TS types use `restart`).
+    if result.get("tier").and_then(|tier| tier.as_str()) == Some("restart") {
         runtime.restart().await?;
+        runtime
+            .status
+            .wait_until_connected(Duration::from_secs(30))
+            .await?;
     }
     Ok(result)
+}
+
+#[tauri::command]
+async fn get_audio_devices(
+    runtime: State<'_, Arc<AppRuntime>>,
+) -> Result<serde_json::Value, String> {
+    audio::devices(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn get_audio_status(
+    runtime: State<'_, Arc<AppRuntime>>,
+) -> Result<serde_json::Value, String> {
+    audio::status(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn request_audio_permission(
+    runtime: State<'_, Arc<AppRuntime>>,
+) -> Result<serde_json::Value, String> {
+    audio::request_permission(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn tts_preview(runtime: State<'_, Arc<AppRuntime>>) -> Result<serde_json::Value, String> {
+    audio::tts_preview(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn speaker_test(runtime: State<'_, Arc<AppRuntime>>) -> Result<serde_json::Value, String> {
+    audio::speaker_test(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn mic_test(
+    runtime: State<'_, Arc<AppRuntime>>,
+    duration_secs: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    audio::mic_test(&runtime.base_url(), duration_secs)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn loopback_test(
+    runtime: State<'_, Arc<AppRuntime>>,
+    duration_secs: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    audio::loopback_test(&runtime.base_url(), duration_secs)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn setup(app: &mut tauri::App) -> Result<(), String> {
     let control_port = daemon::select_control_port()?;
     let base_url = format!("http://127.0.0.1:{control_port}");
     let status_hub: SharedStatusHub = Arc::new(StatusHub::new());
+    let audio_hub: SharedAudioHub = Arc::new(audio::AudioHub::new());
     let (restart_tx, restart_rx) = watch::channel(0u64);
 
     let runtime = Arc::new(AppRuntime::new(
@@ -66,11 +137,18 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
         restart_tx,
     ));
     app.manage(Arc::clone(&runtime));
+    app.manage(Arc::clone(&audio_hub));
 
     spawn_status_emitter(app.handle().clone(), Arc::clone(&status_hub));
+    audio::spawn_audio_level_emitter(app.handle().clone(), Arc::clone(&audio_hub));
     tauri::async_runtime::block_on(runtime.start())?;
 
-    let bridge = ControlBridge::new(base_url, Arc::clone(&status_hub), restart_rx);
+    let bridge = ControlBridge::new(
+        base_url,
+        Arc::clone(&status_hub),
+        Arc::clone(&audio_hub),
+        restart_rx,
+    );
     tauri::async_runtime::spawn(bridge.run());
 
     Ok(())
@@ -92,7 +170,14 @@ pub fn run() {
             restart_daemon,
             get_settings,
             validate_settings,
-            apply_settings
+            apply_settings,
+            get_audio_devices,
+            get_audio_status,
+            request_audio_permission,
+            tts_preview,
+            speaker_test,
+            mic_test,
+            loopback_test
         ])
         .setup(|app| {
             setup(app).map_err(|error| anyhow::anyhow!(error))?;

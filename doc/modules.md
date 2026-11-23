@@ -5,6 +5,7 @@
 | Directory | Purpose | Estado | Doc |
 |-----------|---------|--------|-----|
 | `src/audio/` | Audio pipeline: capture, VAD, resampling, playback, filler, speaker | 🟢 SALVAR | [audio-internals.md](audio-internals.md) |
+| `src/audio_diagnostics.rs` | Main-loop recorder for desktop mic/loopback tests on the existing capture path (issue #34) | 🟢 SALVAR | [design/34-desktop-audio.md](design/34-desktop-audio.md) |
 | `src/stt/` | Legacy provider trait + shared VAD segmenter (pre-roll, gap-tolerant confirm, post-roll) + Whisper + Parakeet + SFSpeechRecognizer + OpenAI-compatible remote (issue #17). 16kHz f32 mono. The runtime STT is now `crates/asr` (Nemotron realtime). Contract: [stt-contract.md](stt-contract.md). | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | `crates/asr/` | Runtime STT provider: Nemotron 3.5 over NeMo-Speech.cpp realtime WebSocket. Server-side VAD endpointing, native PnC, partial/final traces. Reuses the legacy `SpeechEvent` contract. | 🟢 SALVAR | [stt-contract.md](stt-contract.md) |
 | `src/llm/` | HTTP client to `/v1/chat/completions`, session management | 🟢 SALVAR | [llm-provider.md](llm-provider.md) |

@@ -4,6 +4,7 @@ pub mod audio_transform;
 pub mod buffer;
 pub mod filler;
 pub mod output;
+pub mod permissions;
 pub mod speaker;
 
 use tracing::{error, trace};

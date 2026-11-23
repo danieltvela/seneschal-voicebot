@@ -2,6 +2,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc, watch};
 
+use super::audio::AudioControl;
 use super::broadcast::{ControlBroadcast, ControlEvent};
 use super::settings::SettingsService;
 use seneschal_common::PermissionGate;
@@ -35,6 +36,10 @@ pub struct ControlState {
     pub permission_gate: Arc<PermissionGate>,
     /// Settings read/validate/apply service (issue #33).
     pub settings: Arc<SettingsService>,
+    /// Audio diagnostics (issue #34); always present when Control is wired by
+    /// the daemon. `Option` keeps existing test-state constructors small while
+    /// the endpoint returns a clear 503 when it is absent.
+    pub audio: Option<Arc<AudioControl>>,
 }
 
 #[cfg(test)]

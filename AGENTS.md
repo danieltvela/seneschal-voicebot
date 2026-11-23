@@ -97,3 +97,4 @@ Detailed reference docs live in `doc/`. Read the relevant file when needed:
 | Apple Watch networking constraints | [`doc/APPLE_WATCH_CLIENT.md`](doc/APPLE_WATCH_CLIENT.md) |
 | Desktop spike architecture | [`doc/design/32-desktop-spike.md`](doc/design/32-desktop-spike.md) |
 | Desktop Settings & tiered apply | [`doc/design/33-desktop-settings.md`](doc/design/33-desktop-settings.md) |
+| Desktop audio panel & diagnostics | [`doc/design/34-desktop-audio.md`](doc/design/34-desktop-audio.md) |

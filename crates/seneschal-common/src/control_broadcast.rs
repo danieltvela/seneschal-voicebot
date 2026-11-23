@@ -35,6 +35,12 @@ pub enum ControlEvent {
     MuteChanged {
         muted: bool,
     },
+    /// Live input level for the desktop VU meter (issue #34). Linear values in
+    /// `[0, 1]`; emitted at the capture chunk cadence.
+    AudioLevel {
+        rms: f32,
+        peak: f32,
+    },
     Error {
         message: String,
     },
@@ -115,6 +121,20 @@ mod tests {
     fn roundtrip(event: &ControlEvent) -> ControlEvent {
         let json = serde_json::to_string(event).expect("serialize");
         serde_json::from_str(&json).expect("deserialize")
+    }
+
+    #[test]
+    fn audio_level_uses_a_stable_wire_shape() {
+        let event = ControlEvent::AudioLevel {
+            rms: 0.25,
+            peak: 0.75,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(json, r#"{"type":"audio_level","rms":0.25,"peak":0.75}"#);
+        assert!(matches!(
+            roundtrip(&event),
+            ControlEvent::AudioLevel { rms, peak } if rms == 0.25 && peak == 0.75
+        ));
     }
 
     #[test]

@@ -11,6 +11,8 @@
     type SettingsPatch,
     type SettingsSnapshot,
   } from "../settings";
+  import { runTtsPreview } from "../audio";
+  import { status } from "../status";
 
   type FormValue = string | number | boolean | null;
 
@@ -43,6 +45,7 @@
   let actionError = $state<string | null>(null);
   let actionMessage = $state<string | null>(null);
   let fieldErrors = $state<Record<string, string>>({});
+  let previewing = $state(false);
 
   onMount(async () => {
     try {
@@ -185,6 +188,20 @@
       saving = false;
     }
   }
+
+  async function previewVoice(): Promise<void> {
+    previewing = true;
+    actionError = null;
+    actionMessage = null;
+    try {
+      await runTtsPreview();
+      actionMessage = "Voice preview finished";
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : String(error);
+    } finally {
+      previewing = false;
+    }
+  }
 </script>
 
 <section aria-label="Settings">
@@ -263,10 +280,10 @@
       <button
         type="button"
         class="secondary"
-        disabled
-        title="TTS preview arrives with audio setup (#34)"
+        disabled={previewing || saving || $status?.connection !== "connected"}
+        onclick={previewVoice}
       >
-        Preview voice
+        {previewing ? "Previewing…" : "Preview voice"}
       </button>
     </div>
 

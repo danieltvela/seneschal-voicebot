@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::sync::watch;
 
+use crate::audio::SharedAudioHub;
 use crate::status::{ConnectionStatus, DaemonStatus, PipelineSnapshot, SharedStatusHub};
 
 const MIN_RECONNECT_DELAY: Duration = Duration::from_millis(100);
@@ -19,6 +20,10 @@ pub enum ControlEvent {
         state: String,
         utterance_id: Option<u64>,
         pause_reason: Option<String>,
+    },
+    AudioLevel {
+        rms: f32,
+        peak: f32,
     },
     Error(String),
 }
@@ -49,6 +54,7 @@ struct StateChangedWire {
 /// Reconnect-aware client for the existing Control REST/SSE API.
 pub struct ControlBridge {
     status: SharedStatusHub,
+    audio: SharedAudioHub,
     base_url: String,
     client: reqwest::Client,
     restart_rx: watch::Receiver<u64>,
@@ -58,10 +64,12 @@ impl ControlBridge {
     pub fn new(
         base_url: impl Into<String>,
         status: SharedStatusHub,
+        audio: SharedAudioHub,
         restart_rx: watch::Receiver<u64>,
     ) -> Self {
         Self {
             status,
+            audio,
             base_url: base_url.into(),
             client: build_client(),
             restart_rx,
@@ -71,6 +79,7 @@ impl ControlBridge {
     pub async fn run(self) {
         let Self {
             status,
+            audio,
             base_url,
             client,
             mut restart_rx,
@@ -92,7 +101,7 @@ impl ControlBridge {
             status.set_daemon(DaemonStatus::Running, None);
             status.mark_connecting();
             let connected = tokio::select! {
-                result = Self::connect_once(&status, &base_url, &client) => result,
+                result = Self::connect_once(&status, &audio, &base_url, &client) => result,
                 _ = restart_rx.changed() => {
                     backoff = MIN_RECONNECT_DELAY;
                     status.mark_connecting();
@@ -145,6 +154,7 @@ impl ControlBridge {
     /// events. This prevents a transition from being lost between the two.
     async fn connect_once(
         status: &SharedStatusHub,
+        audio: &SharedAudioHub,
         base_url: &str,
         client: &reqwest::Client,
     ) -> anyhow::Result<()> {
@@ -168,7 +178,7 @@ impl ControlBridge {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(frame) = buffer.next_event() {
                 if let Some(event) = parse_control_event(&frame) {
-                    Self::apply_event(status, base_url, client, event).await;
+                    Self::apply_event(status, audio, base_url, client, event).await;
                 }
             }
         }
@@ -197,6 +207,7 @@ impl ControlBridge {
 
     async fn apply_event(
         status: &SharedStatusHub,
+        audio: &SharedAudioHub,
         base_url: &str,
         client: &reqwest::Client,
         event: ControlEvent,
@@ -204,6 +215,9 @@ impl ControlBridge {
         match event {
             ControlEvent::StateChanged { .. } => {
                 status.apply_control_event(event);
+            }
+            ControlEvent::AudioLevel { rms, peak } => {
+                audio.apply(crate::audio::AudioLevel { rms, peak });
             }
             ControlEvent::Error(message) => {
                 let missed = message.contains("Missed");
@@ -273,6 +287,13 @@ pub fn parse_control_event(frame: &str) -> Option<ControlEvent> {
                 pause_reason: event.pause_reason,
             })
         }
+        "audio_level" => {
+            let event = serde_json::from_value::<AudioLevelWire>(value).ok()?;
+            Some(ControlEvent::AudioLevel {
+                rms: event.rms,
+                peak: event.peak,
+            })
+        }
         "error" => {
             let event = serde_json::from_value::<ErrorWire>(value).ok()?;
             Some(ControlEvent::Error(event.message))
@@ -284,6 +305,12 @@ pub fn parse_control_event(frame: &str) -> Option<ControlEvent> {
 #[derive(Debug, Deserialize)]
 struct ErrorWire {
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AudioLevelWire {
+    rms: f32,
+    peak: f32,
 }
 
 #[cfg(test)]
@@ -323,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn sse_parser_accepts_state_and_error_events() {
+    fn sse_parser_accepts_state_audio_and_error_events() {
         let state = parse_control_event(
             "data: {\"type\":\"state_changed\",\"state\":\"paused\",\"utterance_id\":null,\"pause_reason\":\"consolidation\"}",
         );
@@ -333,6 +360,16 @@ mod tests {
                 state: "paused".into(),
                 utterance_id: None,
                 pause_reason: Some("consolidation".into()),
+            })
+        );
+
+        let level =
+            parse_control_event("data: {\"type\":\"audio_level\",\"rms\":0.25,\"peak\":0.75}");
+        assert_eq!(
+            level,
+            Some(ControlEvent::AudioLevel {
+                rms: 0.25,
+                peak: 0.75,
             })
         );
 
@@ -402,7 +439,15 @@ mod tests {
         let (restart_tx, restart_rx) = watch::channel(0u64);
         let mut rx = hub.subscribe();
 
-        tokio::spawn(ControlBridge::new(base_url, hub.clone(), restart_rx).run());
+        tokio::spawn(
+            ControlBridge::new(
+                base_url,
+                hub.clone(),
+                std::sync::Arc::new(crate::audio::AudioHub::new()),
+                restart_rx,
+            )
+            .run(),
+        );
         let status = wait_for_connected(&mut rx).await;
         assert_eq!(status.daemon, DaemonStatus::Running);
         assert!(status.last_reconnect_ms.is_some());

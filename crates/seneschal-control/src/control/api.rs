@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -16,6 +17,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tracing::error;
 use uuid::Uuid;
 
+use super::audio::{
+    AudioControl, AudioTestError, AudioTestErrorCode, AudioTestKind, TestDurationBody,
+    setting_string,
+};
 use super::broadcast::ControlEvent;
 use super::state::ControlState;
 use seneschal_common::settings::SettingsPatch;
@@ -37,6 +42,13 @@ pub fn router(state: Arc<ControlState>) -> Router {
         .route("/control/config", get(get_config))
         .route("/control/config/validate", post(post_config_validate))
         .route("/control/config/apply", post(post_config_apply))
+        .route("/control/audio/devices", get(get_audio_devices))
+        .route("/control/audio/status", get(get_audio_status))
+        .route("/control/audio/permission", post(post_audio_permission))
+        .route("/control/audio/preview-tts", post(post_audio_preview_tts))
+        .route("/control/audio/speaker-test", post(post_audio_speaker_test))
+        .route("/control/audio/mic-test", post(post_audio_mic_test))
+        .route("/control/audio/loopback", post(post_audio_loopback))
         .with_state(state)
 }
 
@@ -184,6 +196,131 @@ async fn post_config_apply(
     }
 }
 
+fn audio_control(state: &ControlState) -> Result<Arc<AudioControl>, Response> {
+    state.audio.clone().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "audio_unavailable",
+                    "message": "Audio diagnostics are not wired in this daemon",
+                }
+            })),
+        )
+            .into_response()
+    })
+}
+
+fn audio_error_response(error: AudioTestError) -> Response {
+    let status = match error.code {
+        AudioTestErrorCode::InvalidDuration => StatusCode::BAD_REQUEST,
+        AudioTestErrorCode::AudioBusy | AudioTestErrorCode::Cancelled => StatusCode::CONFLICT,
+        AudioTestErrorCode::ProviderError => StatusCode::BAD_GATEWAY,
+        AudioTestErrorCode::TestTimedOut => StatusCode::GATEWAY_TIMEOUT,
+        AudioTestErrorCode::TestAssetError => StatusCode::INTERNAL_SERVER_ERROR,
+        AudioTestErrorCode::CaptureUnavailable
+        | AudioTestErrorCode::OutputUnavailable
+        | AudioTestErrorCode::ChannelClosed => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (status, Json(serde_json::json!({ "error": error }))).into_response()
+}
+
+async fn get_audio_devices(State(state): State<Arc<ControlState>>) -> Response {
+    match audio_control(&state).and_then(|audio| {
+        audio.devices().map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": {
+                        "code": "device_enumeration_failed",
+                        "message": format!("{error:#}"),
+                    }
+                })),
+            )
+                .into_response()
+        })
+    }) {
+        Ok(inventory) => Json(inventory).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn get_audio_status(State(state): State<Arc<ControlState>>) -> Response {
+    let audio = match audio_control(&state) {
+        Ok(audio) => audio,
+        Err(response) => return response,
+    };
+    let snapshot = state.settings.snapshot().await;
+    let status = audio
+        .status(
+            setting_string(&snapshot, "audio_input_device"),
+            setting_string(&snapshot, "audio_output_device"),
+            setting_string(&snapshot, "stt_provider").unwrap_or_else(|| "unknown".to_string()),
+            setting_string(&snapshot, "tts_provider").unwrap_or_else(|| "unknown".to_string()),
+        )
+        .await;
+    Json(status).into_response()
+}
+
+async fn post_audio_permission(State(state): State<Arc<ControlState>>) -> Response {
+    let audio = match audio_control(&state) {
+        Ok(audio) => audio,
+        Err(response) => return response,
+    };
+    Json(audio.request_microphone_permission().await).into_response()
+}
+
+async fn post_audio_preview_tts(State(state): State<Arc<ControlState>>) -> Response {
+    let audio = match audio_control(&state) {
+        Ok(audio) => audio,
+        Err(response) => return response,
+    };
+    match audio.preview_tts().await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => audio_error_response(error),
+    }
+}
+
+async fn post_audio_speaker_test(State(state): State<Arc<ControlState>>) -> Response {
+    let audio = match audio_control(&state) {
+        Ok(audio) => audio,
+        Err(response) => return response,
+    };
+    match audio.speaker_test().await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => audio_error_response(error),
+    }
+}
+
+async fn post_audio_mic_test(
+    State(state): State<Arc<ControlState>>,
+    Json(body): Json<TestDurationBody>,
+) -> Response {
+    capture_test_response(state, AudioTestKind::Mic, body.duration_secs).await
+}
+
+async fn post_audio_loopback(
+    State(state): State<Arc<ControlState>>,
+    Json(body): Json<TestDurationBody>,
+) -> Response {
+    capture_test_response(state, AudioTestKind::Loopback, body.duration_secs).await
+}
+
+async fn capture_test_response(
+    state: Arc<ControlState>,
+    kind: AudioTestKind,
+    duration_secs: Option<u64>,
+) -> Response {
+    let audio = match audio_control(&state) {
+        Ok(audio) => audio,
+        Err(response) => return response,
+    };
+    match audio.capture_test(kind, duration_secs).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => audio_error_response(error),
+    }
+}
+
 #[derive(Deserialize)]
 struct PermissionBody {
     task_id: String,
@@ -309,6 +446,13 @@ mod tests {
     ///
     /// The returned `TempDir` must be kept alive for the duration of the test.
     async fn build_state(state: PipelineState) -> (Arc<ControlState>, tempfile::TempDir) {
+        build_state_with_audio(state, false).await
+    }
+
+    async fn build_state_with_audio(
+        state: PipelineState,
+        with_audio: bool,
+    ) -> (Arc<ControlState>, tempfile::TempDir) {
         let db_dir = tempfile::TempDir::new().unwrap();
         let db =
             seneschal_common::db::Database::new(db_dir.path().join("control.db").to_str().unwrap())
@@ -323,7 +467,7 @@ mod tests {
         ));
         let settings = crate::control::settings::SettingsService::new(
             seneschal_common::config::Config::embedded_defaults(),
-            tts,
+            Arc::clone(&tts),
             Arc::new(seneschal_core::audio::output::AudioOutput::null()),
             Arc::new(std::sync::Mutex::new(
                 seneschal_common::settings::HotSettings {
@@ -334,6 +478,21 @@ mod tests {
             hot_tx,
         )
         .unwrap();
+
+        let audio = if with_audio {
+            let (mic_tx, _mic_rx) = mpsc::channel(1);
+            Some(Arc::new(AudioControl::new(
+                tts,
+                Arc::new(seneschal_core::audio::output::AudioOutput::null()),
+                mic_tx,
+                barge_in_tx.clone(),
+                pipeline_state_rx.clone(),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(std::sync::Mutex::new(None)),
+            )))
+        } else {
+            None
+        };
 
         let control = Arc::new(ControlState {
             broadcast: ControlBroadcast::new(16),
@@ -348,6 +507,7 @@ mod tests {
             db,
             permission_gate: Arc::new(seneschal_common::PermissionGate::new()),
             settings: Arc::new(settings),
+            audio,
         });
         (control, db_dir)
     }
@@ -425,6 +585,130 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["ok"], false);
         assert_eq!(json["errors"][0]["field"], "output_volume");
+    }
+
+    #[tokio::test]
+    async fn audio_devices_endpoint_returns_inventory_shape() {
+        let (state, _db_dir) = build_state_with_audio(PipelineState::Idle, true).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/audio/devices")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(json["inputs"].is_array());
+        assert!(json["outputs"].is_array());
+        for direction in ["inputs", "outputs"] {
+            for device in json[direction].as_array().unwrap() {
+                assert!(device["name"].is_string());
+                assert!(device["selector"].is_string());
+                assert!(device["is_default"].is_boolean());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn audio_status_exposes_capture_output_permission_and_providers() {
+        let (state, _db_dir) = build_state_with_audio(PipelineState::Idle, true).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/control/audio/status")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["capture_active"], false);
+        assert_eq!(json["output_available"], false);
+        assert!(json["microphone_permission"].is_string());
+        assert!(json["stt_provider"].is_string());
+        assert!(json["tts_provider"].is_string());
+        assert!(json["test_in_progress"].is_null());
+    }
+
+    #[tokio::test]
+    async fn mic_test_requires_active_capture_and_valid_duration() {
+        let (state, _db_dir) = build_state_with_audio(PipelineState::Idle, true).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/audio/mic-test")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"duration_secs":5}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"]["code"], "capture_unavailable");
+
+        let (state, _db_dir) = build_state_with_audio(PipelineState::Idle, true).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/audio/mic-test")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"duration_secs":0}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn audio_playback_tests_reject_busy_pipeline_or_null_output() {
+        let (state, _db_dir) =
+            build_state_with_audio(PipelineState::Speaking { utterance_id: 1 }, true).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/audio/speaker-test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let (state, _db_dir) = build_state_with_audio(PipelineState::Idle, true).await;
+        let response = router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/control/audio/preview-tts")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"]["code"], "output_unavailable");
     }
 
     #[tokio::test]
