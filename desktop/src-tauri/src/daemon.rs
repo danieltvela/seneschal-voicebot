@@ -23,6 +23,7 @@ pub struct AppRuntime {
     exit_tx: watch::Sender<u64>,
     workdir: PathBuf,
     config_path: PathBuf,
+    espeak_data_root: Option<PathBuf>,
     onboarding_active: AtomicBool,
 }
 
@@ -48,8 +49,14 @@ impl AppRuntime {
             exit_tx,
             workdir,
             config_path,
+            espeak_data_root: None,
             onboarding_active: AtomicBool::new(onboarding_active),
         }
+    }
+
+    pub(crate) fn with_resource_root(mut self, root: Option<PathBuf>) -> Self {
+        self.espeak_data_root = root;
+        self
     }
 
     pub fn set_onboarding_active(&self, active: bool) {
@@ -97,12 +104,26 @@ impl AppRuntime {
             .map_err(|error| format!("failed to resolve Seneschal sidecar: {error}"))?;
         command = command
             .env("CONTROL_PORT", self.control_port.to_string())
+            // Packaged desktop installs must not expose the unauthenticated
+            // Control API to the LAN; the default remains 0.0.0.0 for headless
+            // use and companions.
+            .env("CONTROL_HOST", "127.0.0.1")
             .env(
                 "SENECHAL_CONFIG_FILE",
                 self.config_path.to_string_lossy().into_owned(),
             );
         if self.onboarding_active.load(Ordering::SeqCst) {
             command = command.env("SENESCHAL_DEFER_STARTUP_GREETING", "1");
+        }
+        if let Some(resource_root) = self
+            .espeak_data_root
+            .as_ref()
+            .filter(|root| root.join("espeak-ng-data").is_dir())
+        {
+            command = command.env(
+                "PIPER_ESPEAKNG_DATA_DIRECTORY",
+                resource_root.to_string_lossy().into_owned(),
+            );
         }
         command = command
             .current_dir(&self.workdir)

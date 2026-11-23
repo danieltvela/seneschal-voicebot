@@ -1,5 +1,5 @@
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -15,6 +15,44 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::error;
+
+/// Resolve the bind address. `CONTROL_HOST` lets a packaged desktop shell pin
+/// the Control API to loopback while the default stays LAN-reachable for
+/// companions and headless use.
+fn control_bind_host() -> anyhow::Result<IpAddr> {
+    parse_bind_host(std::env::var("CONTROL_HOST").ok().as_deref())
+}
+
+fn parse_bind_host(value: Option<&str>) -> anyhow::Result<IpAddr> {
+    match value {
+        Some(host) => host
+            .parse::<IpAddr>()
+            .map_err(|error| anyhow::anyhow!("invalid CONTROL_HOST '{host}': {error}")),
+        None => Ok(Ipv4Addr::UNSPECIFIED.into()),
+    }
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+
+    #[test]
+    fn control_bind_defaults_to_all_interfaces() {
+        assert_eq!(
+            parse_bind_host(None).expect("default host"),
+            IpAddr::from(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn control_host_accepts_loopback_and_rejects_bad_values() {
+        assert_eq!(
+            parse_bind_host(Some("127.0.0.1")).expect("valid host"),
+            IpAddr::from(Ipv4Addr::LOCALHOST)
+        );
+        assert!(parse_bind_host(Some("not-an-address")).is_err());
+    }
+}
 use uuid::Uuid;
 
 use super::audio::{
@@ -75,7 +113,8 @@ pub fn router(state: Arc<ControlState>) -> Router {
 
 pub async fn start_control_server(port: u16, state: Arc<ControlState>) -> anyhow::Result<()> {
     let app = router(state);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let host = control_bind_host()?;
+    let addr = SocketAddr::new(host, port);
     tracing::info!(target: "control", "Control API listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

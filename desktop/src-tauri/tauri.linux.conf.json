@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "targets": ["appimage", "deb"],
+    "resources": ["espeak-ng-data/"],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2 | libasound2t64",
+          "libssl3 | libssl3t64",
+          "libgomp1",
+          "libstdc++6",
+          "libgcc-s1"
+        ]
+      }
+    }
+  }
+}

@@ -92,7 +92,8 @@ Read from `.env` (dotenvy loads automatically):
 | `SEARXNG_SECRET` | — | SearXNG bearer token |
 | `SPEAKER_ENABLED` | `true` | Enable/disable speaker verification at runtime (`0`/`false` = disabled, `1`/`true` = enabled). When disabled, the speaker model is not loaded and the associated 50-200ms latency per utterance is avoided. |
 | `WS_PORT` | `9090` | WebSocket server port for remote audio (`--features remote`). Companion mic/TTS path. |
-| `CONTROL_PORT` | — (optional) | HTTP/SSE Control API port (`--features control`). Recommended **9001** for iOS companion dual-channel. Binds `0.0.0.0`. See [`IOS_COMPANION.md`](IOS_COMPANION.md). |
+| `CONTROL_PORT` | — (optional) | HTTP/SSE Control API port (`--features control`). Recommended **9001** for iOS companion dual-channel. Binds `0.0.0.0` by default. See [`IOS_COMPANION.md`](IOS_COMPANION.md). |
+| `CONTROL_HOST` | `0.0.0.0` | Control API bind address. The desktop shell sets `127.0.0.1` for packaged installs; headless/companion defaults are unchanged. |
 | `SENESCHAL_DEFER_STARTUP_GREETING` | `false` | Desktop onboarding only (#36): suppress the startup and device-connected greeting until the final restart. Normal TUI/headless runs are unaffected. |
 | `S_DREAM_INTERVAL_SECS` | `3600` | Seconds between consolidation cycles (0 = disabled) |
 | `S_DREAM_ON_IDLE` | `1` | Trigger consolidation when user is idle (1 = true) |

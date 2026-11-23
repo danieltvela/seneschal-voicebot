@@ -19,15 +19,32 @@
     restartDaemon,
     status,
   } from "./lib/status";
+  import {
+    checkForUpdate,
+    installUpdate,
+    nextUpdateProgress,
+    relaunchAfterUpdate,
+    shouldCheckUpdates,
+    updateProgressLabel,
+    type UpdateInfo,
+    type UpdateProgressEvent,
+    type UpdateProgressState,
+  } from "./lib/update";
 
   type View = "status" | "settings" | "models" | "audio" | "wizard";
   let view = $state<View>("status");
   let restarting = $state(false);
   let restartError = $state<string | null>(null);
   let onboardingState = $state<OnboardingStateWire | null>(null);
+  let updateAvailable = $state<UpdateInfo | null>(null);
+  let updateProgress = $state<UpdateProgressState | null>(null);
+  let updateError = $state<string | null>(null);
+  let installingUpdate = $state(false);
+  let updateInstalled = $state(false);
 
   onMount(async () => {
     void initStatus();
+    void checkUpdates();
     try {
       onboardingState = await loadOnboardingState();
       if (!onboardingState.completed && onboardingState.in_progress) {
@@ -69,6 +86,34 @@
       restartError = error instanceof Error ? error.message : String(error);
     } finally {
       restarting = false;
+    }
+  }
+
+  async function checkUpdates(): Promise<void> {
+    if (!shouldCheckUpdates(import.meta.env.MODE)) return;
+    try {
+      updateAvailable = await checkForUpdate();
+    } catch (error) {
+      updateError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function onUpdateProgress(event: UpdateProgressEvent): void {
+    updateProgress = nextUpdateProgress(updateProgress, event);
+  }
+
+  async function onInstallUpdate(): Promise<void> {
+    installingUpdate = true;
+    updateError = null;
+    updateProgress = null;
+    try {
+      await installUpdate(onUpdateProgress);
+      updateInstalled = true;
+      await relaunchAfterUpdate();
+    } catch (error) {
+      updateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      installingUpdate = false;
     }
   }
 </script>
@@ -117,6 +162,37 @@
       {/if}
     </nav>
   </header>
+
+  {#if updateAvailable && !updateProgress}
+    <section class="update" aria-label="Update available">
+      <div class="update-head">
+        <strong>Update {updateAvailable.version} available</strong>
+        <button
+          type="button"
+          class="inline"
+          onclick={onInstallUpdate}
+          disabled={installingUpdate}
+        >
+          Install and restart
+        </button>
+      </div>
+      {#if updateAvailable.notes}
+        <p class="update-notes">{updateAvailable.notes}</p>
+      {/if}
+    </section>
+  {:else if updateProgress}
+    <section class="update" aria-label="Installing update">
+      <strong>{updateProgressLabel(updateProgress)}</strong>
+    </section>
+  {:else if updateInstalled}
+    <section class="update" aria-label="Update installed">
+      <strong>Update installed. Restarting…</strong>
+    </section>
+  {/if}
+
+  {#if updateError}
+    <p class="error" role="alert">{updateError}</p>
+  {/if}
 
   {#if view === "wizard" && onboardingState}
     <Onboarding
@@ -210,6 +286,35 @@
   .subtitle {
     margin: 4px 0 16px;
     color: #9aa7b5;
+  }
+
+  .update {
+    max-width: 560px;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    border: 1px solid #38475c;
+    border-radius: 12px;
+    background: #202b38;
+  }
+
+  .update-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .update-head button.inline {
+    width: auto;
+    margin: 0;
+    padding: 8px 12px;
+  }
+
+  .update-notes {
+    margin: 10px 0 0;
+    color: #c8d2dd;
+    font-size: 14px;
+    white-space: pre-wrap;
   }
 
   nav {

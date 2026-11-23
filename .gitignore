@@ -58,6 +58,7 @@ npm-debug.log
 /desktop/src-tauri/target/
 /desktop/src-tauri/binaries/
 /desktop/src-tauri/gen/
+/desktop/src-tauri/espeak-ng-data/
 
 # Cache
 .cache/

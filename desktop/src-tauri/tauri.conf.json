@@ -28,10 +28,31 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "appimage", "deb"],
+    "category": "Utility",
+    "shortDescription": "Voice assistant desktop shell",
+    "longDescription": "Desktop shell for the Seneschal voice assistant. It launches the Seneschal daemon as a sidecar, manages settings and models, tests audio devices, and guides first-run setup.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "externalBin": ["binaries/seneschal"],
+    "createUpdaterArtifacts": false,
     "macOS": {
       "infoPlist": "Info.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIzN0U0MDNDNTczMkI3RkYKUldUL3R6SlhQRUIrSTVJVm1raHdVZW9sZTVENDRpVW5wQVRvMFhobG9OUEFxNTJLNjNHRDlXb0MK",
+      "endpoints": [
+        "https://github.com/danieltvela/seneschal-voicebot/releases/latest/download/latest.json"
+      ]
     }
   }
 }

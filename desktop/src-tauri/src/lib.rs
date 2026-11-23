@@ -5,6 +5,7 @@ mod models;
 mod onboarding;
 mod settings;
 mod status;
+mod update;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,6 +19,7 @@ use crate::daemon::{AppRuntime, spawn_status_emitter};
 use crate::models::SharedModelHub;
 use crate::onboarding::OnboardingStore;
 use crate::status::{SharedStatusHub, StatusHub};
+use crate::update::PendingUpdate;
 
 #[tauri::command]
 async fn desktop_status(runtime: State<'_, Arc<AppRuntime>>) -> Result<status::AppStatus, String> {
@@ -335,6 +337,7 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
 
     let workdir = daemon::daemon_workdir(app_data_dir);
     let config_path = daemon::daemon_config_path(&workdir);
+    let espeak_data_root = app.path().resource_dir().ok();
     let mut onboarding_state = store.load();
     let config_exists = config_path.exists();
     if !config_exists {
@@ -356,19 +359,23 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
     let model_hub: SharedModelHub = Arc::new(models::ModelHub::new());
     let (restart_tx, restart_rx) = watch::channel(0u64);
 
-    let runtime = Arc::new(AppRuntime::new(
-        app.handle().clone(),
-        Arc::clone(&status_hub),
-        control_port,
-        restart_tx,
-        workdir,
-        config_path,
-        wizard_active,
-    ));
+    let runtime = Arc::new(
+        AppRuntime::new(
+            app.handle().clone(),
+            Arc::clone(&status_hub),
+            control_port,
+            restart_tx,
+            workdir,
+            config_path,
+            wizard_active,
+        )
+        .with_resource_root(espeak_data_root),
+    );
     app.manage(Arc::clone(&runtime));
     app.manage(Arc::clone(&audio_hub));
     app.manage(Arc::clone(&model_hub));
     app.manage(Arc::clone(&store));
+    app.manage(PendingUpdate::new());
 
     spawn_status_emitter(app.handle().clone(), Arc::clone(&status_hub));
     audio::spawn_audio_level_emitter(app.handle().clone(), Arc::clone(&audio_hub));
@@ -398,6 +405,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             desktop_status,
             restart_daemon,
@@ -426,7 +435,9 @@ pub fn run() {
             get_nemo_services,
             start_nemo_service,
             stop_nemo_service,
-            download_nemo_weights
+            download_nemo_weights,
+            update::check_for_update,
+            update::install_update
         ])
         .setup(|app| {
             setup(app).map_err(|error| anyhow::anyhow!(error))?;

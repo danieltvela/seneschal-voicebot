@@ -39,6 +39,9 @@ npm install
 # Build the sidecar (release, feature-gated)
 npm run sidecar:build
 
+# Build the sidecar for an explicit native target (CI/release)
+npm run sidecar:build -- aarch64-apple-darwin
+
 # Build sidecar + launch the desktop app
 npm run dev
 
@@ -50,7 +53,17 @@ npm run build
 # Rust shell tests/lint
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --no-deps -- -D warnings
+
+# Local unsigned bundle build + structural verification
+npm run sidecar:build
+npm run tauri build
+REQUIRE_UPDATER_ARTIFACTS=0 bash scripts/verify-bundle.sh
 ```
+
+Release bundles add `--config src-tauri/tauri.release.conf.json`, updater signing
+environment, and Apple signing/notarization on macOS. The Linux sidecar build
+also stages generated `espeak-ng-data` as a bundle resource for Kokoro. See
+`doc/design/37-desktop-packaging.md` and `doc/PUBLISHING.md`.
 
 ## Audio diagnostics QA
 
@@ -102,6 +115,14 @@ companion port. Override it for manual QA with
 - Tauri Linux dependencies: WebKitGTK 4.1, GTK 3 and related development
   packages
 - macOS: standard Xcode command-line tools
+- AppImage runtime/FUSE when running a locally built AppImage
 
-Packaging, auto-update and daemon/tray lifecycle are later epic phases; the
-current shell remains a development/QA surface.
+## Packaging and updates
+
+The packaged app launches the same sidecar with `CONTROL_HOST=127.0.0.1`, uses
+the per-user data/config directories prepared by onboarding (#36), and checks a
+signed updater feed on release builds. Update install remains an explicit user
+action. macOS bundles are separate per architecture; Linux uses AppImage as the
+updatable primary package and `.deb` as the native secondary package. The
+release matrix, signing secrets and updater channels are documented in
+`doc/design/37-desktop-packaging.md`.
