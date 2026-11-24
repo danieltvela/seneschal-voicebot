@@ -13,9 +13,13 @@ pub enum ControlEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         pause_reason: Option<String>,
     },
+    /// A finalized user utterance (voice or desktop text input). `source` is a
+    /// stable wire token (`voice` | `text`) for clients that badge the origin.
     Transcript {
         utterance_id: u64,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     LlmToken {
         utterance_id: u64,
@@ -35,8 +39,31 @@ pub enum ControlEvent {
     MuteChanged {
         muted: bool,
     },
+    /// Live input level for the desktop VU meter (issue #34). Linear values in
+    /// `[0, 1]`; emitted at the capture chunk cadence.
+    AudioLevel {
+        rms: f32,
+        peak: f32,
+    },
     Error {
         message: String,
+    },
+    /// Download lifecycle for the desktop model manager (issue #35). Emitted
+    /// at most every ~200 ms plus terminal transitions; consumers resync via
+    /// `GET /control/models`.
+    ModelDownloadProgress {
+        model_id: String,
+        download_id: String,
+        /// `downloading` | `verifying` | `completed` | `failed` | `cancelled`.
+        phase: String,
+        downloaded_bytes: u64,
+        /// `None` for indeterminate downloads (NeMo weight scripts).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total_bytes: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_file: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     SystemNotification {
         text: String,
@@ -118,6 +145,20 @@ mod tests {
     }
 
     #[test]
+    fn audio_level_uses_a_stable_wire_shape() {
+        let event = ControlEvent::AudioLevel {
+            rms: 0.25,
+            peak: 0.75,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(json, r#"{"type":"audio_level","rms":0.25,"peak":0.75}"#);
+        assert!(matches!(
+            roundtrip(&event),
+            ControlEvent::AudioLevel { rms, peak } if rms == 0.25 && peak == 0.75
+        ));
+    }
+
+    #[test]
     fn state_changed_thinking_fixture() {
         let event = ControlEvent::StateChanged {
             state: "thinking".into(),
@@ -157,6 +198,34 @@ mod tests {
             r#"{"type":"state_changed","state":"paused","utterance_id":null,"pause_reason":"consolidation"}"#
         );
         let _ = roundtrip(&event);
+    }
+
+    #[test]
+    fn transcript_source_uses_a_stable_wire_shape() {
+        let voice = ControlEvent::Transcript {
+            utterance_id: 42,
+            text: "hola".into(),
+            source: Some("voice".into()),
+        };
+        let json = serde_json::to_string(&voice).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"transcript","utterance_id":42,"text":"hola","source":"voice"}"#
+        );
+        assert!(matches!(
+            roundtrip(&voice),
+            ControlEvent::Transcript { source: Some(source), .. } if source == "voice"
+        ));
+
+        // Older producers may omit the field; it must remain decodable.
+        let legacy = serde_json::from_str::<ControlEvent>(
+            r#"{"type":"transcript","utterance_id":43,"text":"hola"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            ControlEvent::Transcript { source: None, .. }
+        ));
     }
 
     #[test]
@@ -210,6 +279,45 @@ mod tests {
             r#"{"type":"agent_task_completed","task_id":"t1","objective":"list files","result":"ok\n"}"#
         );
         let _ = roundtrip(&event);
+    }
+
+    #[test]
+    fn model_download_progress_uses_a_stable_wire_shape() {
+        let event = ControlEvent::ModelDownloadProgress {
+            model_id: "whisper-tiny".into(),
+            download_id: "d-1".into(),
+            phase: "downloading".into(),
+            downloaded_bytes: 1024,
+            total_bytes: Some(4096),
+            current_file: Some("ggml-tiny.bin".into()),
+            message: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"model_download_progress","model_id":"whisper-tiny","download_id":"d-1","phase":"downloading","downloaded_bytes":1024,"total_bytes":4096,"current_file":"ggml-tiny.bin"}"#
+        );
+        assert!(matches!(
+            roundtrip(&event),
+            ControlEvent::ModelDownloadProgress {
+                downloaded_bytes: 1024,
+                ..
+            }
+        ));
+
+        let indeterminate = ControlEvent::ModelDownloadProgress {
+            model_id: "magpie-tts".into(),
+            download_id: "d-2".into(),
+            phase: "downloading".into(),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            current_file: None,
+            message: Some("nemo-speech pull magpie".into()),
+        };
+        let json = serde_json::to_string(&indeterminate).unwrap();
+        assert!(!json.contains("total_bytes"));
+        assert!(json.contains(r#""message":"nemo-speech pull magpie""#));
+        let _ = roundtrip(&indeterminate);
     }
 
     #[test]

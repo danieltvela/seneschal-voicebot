@@ -3,7 +3,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use rubato::{FftFixedIn, Resampler};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -55,6 +55,8 @@ struct AudioOutputState {
     /// for it to reach 0, restoring the serialisation the previous
     /// `Mutex`-per-playback gave.
     active_streams: AtomicUsize,
+    /// Master playback volume as f32 bits (issue #33).
+    volume: Arc<AtomicU32>,
     /// Signalled whenever `active_streams` drops, so waiters can proceed.
     idle: Condvar,
     idle_lock: Mutex<()>,
@@ -149,6 +151,7 @@ impl AudioOutput {
                     sample_format,
                 }),
                 active_streams: AtomicUsize::new(0),
+                volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
                 idle: Condvar::new(),
                 idle_lock: Mutex::new(()),
             }),
@@ -345,6 +348,7 @@ impl AudioOutput {
                     sample_format: SampleFormat::F32,
                 }),
                 active_streams: AtomicUsize::new(0),
+                volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
                 idle: Condvar::new(),
                 idle_lock: Mutex::new(()),
             }),
@@ -357,6 +361,17 @@ impl AudioOutput {
 
     pub fn channels(&self) -> u16 {
         self.state.inner.read().unwrap().channels
+    }
+
+    /// Hot-set master playback volume without restarting the daemon (issue #33).
+    pub fn set_volume(&self, volume: f32) {
+        self.state
+            .volume
+            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::SeqCst);
+    }
+
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.state.volume.load(Ordering::SeqCst))
     }
 
     /// Resample mono `samples` from `source_rate` to `target_rate`, then
@@ -472,6 +487,8 @@ pub struct StreamSession {
     fill_gen: Arc<Mutex<BlockResampler>>,
     finished: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
+    /// Shared master volume snapshot handle (issue #33).
+    volume: Arc<AtomicU32>,
     fill_thread: Option<std::thread::JoinHandle<()>>,
     /// Kept alive so CPAL keeps calling the callback until the session drops.
     _stream: Option<cpal::Stream>,
@@ -503,6 +520,7 @@ impl StreamSession {
         ));
         let finished = Arc::new(AtomicBool::new(false));
         let fill_gen = Arc::new(Mutex::new(BlockResampler::new(source_rate, snapshot.rate)));
+        let volume = Arc::clone(&output.volume);
 
         let mut session = StreamSession {
             source_rate,
@@ -511,6 +529,7 @@ impl StreamSession {
             fill_gen: Arc::clone(&fill_gen),
             finished,
             cancel,
+            volume,
             fill_thread: None,
             _stream: None,
             snapshot,
@@ -603,6 +622,18 @@ impl StreamSession {
         }
 
         let mono = { self.fill_gen.lock().unwrap().push(samples) };
+        if mono.is_empty() {
+            self.notify();
+            return;
+        }
+        let volume = f32::from_bits(self.volume.load(Ordering::SeqCst));
+        let mono = if volume >= 0.999 {
+            mono
+        } else if volume <= 0.001 {
+            Vec::new()
+        } else {
+            mono.into_iter().map(|sample| sample * volume).collect()
+        };
         if mono.is_empty() {
             self.notify();
             return;
@@ -824,7 +855,13 @@ where
     for (dst, src) in data.iter_mut().take(n).zip(st.ring.drain(..n)) {
         *dst = T::from_sample(src);
     }
-    // Remaining frames stay zeroed by CPAL.
+    // CPAL does NOT zero the render buffer on CoreAudio — the buffer memory is
+    // reused between callbacks, so frames past the ring repeat the previous
+    // callback's audio (audible buzz at the end of every utterance, while the
+    // stream is kept alive to flush the device buffer). Silence them.
+    for dst in data.iter_mut().skip(n) {
+        *dst = T::EQUILIBRIUM;
+    }
     if n > 0 {
         st.playback_started = true;
         cvar.notify_all();
@@ -1001,10 +1038,13 @@ mod tests {
             let mut st = shared.0.lock().unwrap();
             st.ring.extend([0.25f32, 0.5, 0.75]);
         }
-        let mut out = [0.0f32; 8];
+        // Pre-fill with a sentinel: frames past the ring must be silenced,
+        // never left carrying stale audio (CoreAudio reuses the buffer).
+        let mut out = [9.9f32; 8];
         let n = drain_callback(&shared, &mut out);
         assert_eq!(n, 3);
         assert_eq!(&out[..3], &[0.25, 0.5, 0.75]);
+        assert!(out[3..].iter().all(|s| *s == 0.0));
         assert!(shared.0.lock().unwrap().playback_started);
         assert!(shared.0.lock().unwrap().ring.is_empty());
     }

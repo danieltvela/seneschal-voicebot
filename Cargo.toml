@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/asr",
     "crates/seneschal-common",
+    "crates/seneschal-models",
     "crates/seneschal-core",
     "crates/seneschal-mcp",
     "crates/seneschal-agents",
@@ -17,6 +18,9 @@ members = [
     "crates/seneschal-extras",
     "crates/seneschal-tui",
 ]
+# The Tauri shell has its own native dependencies and lockfile; keep it out of
+# the core workspace so `make qa` does not require Linux WebKit/GTK packages.
+exclude = ["desktop/src-tauri"]
 
 [package]
 name = "seneschal"
@@ -227,6 +231,10 @@ required-features = ["control"]
 [[example]]
 name = "test_formula1_demo"
 required-features = ["control"]
+
+[[example]]
+name = "tts_audition"
+required-features = ["kokoro"]
 
 [dependencies.hound]
 version = "3"

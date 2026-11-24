@@ -2,7 +2,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc, watch};
 
+use super::audio::AudioControl;
 use super::broadcast::{ControlBroadcast, ControlEvent};
+use super::models::ModelControl;
+use super::settings::SettingsService;
 use seneschal_common::PermissionGate;
 use seneschal_common::db::Database;
 use seneschal_core::llm::LlmSession;
@@ -32,6 +35,16 @@ pub struct ControlState {
     pub db: Database,
     /// Shared with the main audio loop (voice permission path).
     pub permission_gate: Arc<PermissionGate>,
+    /// Settings read/validate/apply service (issue #33).
+    pub settings: Arc<SettingsService>,
+    /// Audio diagnostics (issue #34); always present when Control is wired by
+    /// the daemon. `Option` keeps existing test-state constructors small while
+    /// the endpoint returns a clear 503 when it is absent.
+    pub audio: Option<Arc<AudioControl>>,
+    /// Model manager (issue #35); `Option` for the same reason as `audio`.
+    pub models: Option<Arc<ModelControl>>,
+    /// Whether the daemon discovered a usable GPU at startup (issue #36).
+    pub gpu_available: bool,
 }
 
 #[cfg(test)]

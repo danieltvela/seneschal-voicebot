@@ -83,7 +83,7 @@ struct E2eHarness {
     pub server: MockServer,
     pub llm_client: Arc<dyn LlmProvider>,
     pub llm_session: Arc<Mutex<LlmSession>>,
-    pub tts: Arc<TtsEngine>,
+    pub tts: Arc<tokio::sync::RwLock<TtsEngine>>,
     /// Accumulates every sentence sent to TTS.
     pub captured: Arc<Mutex<Vec<String>>>,
     pub audio_output: Arc<AudioOutput>,
@@ -116,7 +116,7 @@ impl E2eHarness {
         let llm_session = Arc::new(Mutex::new(LlmSession::new(system_prompt)));
 
         let (mock_tts, captured) = MockTts::new();
-        let tts = Arc::new(TtsEngine::Mock(mock_tts));
+        let tts = Arc::new(tokio::sync::RwLock::new(TtsEngine::Mock(mock_tts)));
 
         let audio_output = Arc::new(AudioOutput::null());
 
@@ -208,7 +208,7 @@ impl E2eHarness {
         tokio::task::JoinHandle<()>,
         tokio::task::JoinHandle<()>,
     ) {
-        let sample_rate = self.tts.sample_rate();
+        let sample_rate = self.tts.read().await.sample_rate();
 
         let tts_muted = Arc::new(AtomicBool::new(false));
         let turn_commit = Arc::new(AtomicU64::new(0));

@@ -305,12 +305,13 @@ pub async fn consolidation_task(
     idle_consolidation_secs: u64,
     idle_min_context_pct: usize,
     base_prompt: String,
-    wake_word: String,
+    _wake_word: String,
     agent_section: String,
     tool_section: String,
-    language: String,
+    _language: String,
     proactive_tx: mpsc::Sender<ProactiveEvent>,
     already_notified: Arc<AtomicBool>,
+    hot_settings: Arc<std::sync::Mutex<seneschal_common::settings::HotSettings>>,
 ) {
     let mut cancel_rx = events.barge_in_tx.subscribe();
     let mut last_turn_at = Instant::now();
@@ -341,6 +342,12 @@ pub async fn consolidation_task(
                 }
                 _ = cancel_rx.recv() => {}
             }
+        };
+
+        // Hot settings (issue #33): reload wake word/language on every cycle.
+        let (wake_word, language) = {
+            let hot = hot_settings.lock().unwrap();
+            (hot.wake_word.clone(), hot.language.clone())
         };
 
         let (needs, approx_tokens, current_pct, msg_count, effective_threshold) = {
@@ -815,6 +822,10 @@ mod tests {
             "es".into(),
             proactive_tx,
             Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(seneschal_common::settings::HotSettings {
+                language: "es".to_string(),
+                wake_word: "seneschal".to_string(),
+            })),
         ));
 
         let mut rx = state_rx;

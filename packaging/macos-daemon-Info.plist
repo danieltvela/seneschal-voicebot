@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Embedded into the Seneschal daemon binary via -Wl,-sectcreate,__TEXT,__info_plist
+  (see build.rs). The daemon runs as a sidecar inside the desktop bundle, but TCC
+  does not resolve the containing .app's Info.plist for child processes, so every
+  TCC-protected API the daemon touches (microphone, SFSpeechRecognizer) needs the
+  usage descriptions in its own binary. Strings mirror desktop/src-tauri/Info.plist.
+-->
+<plist version="1.0">
+  <dict>
+    <key>CFBundleName</key>
+    <string>Seneschal</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.veladan.seneschal.daemon</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Seneschal needs microphone access to hear your voice and run audio diagnostics.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Seneschal uses on-device speech recognition to turn your voice into text.</string>
+  </dict>
+</plist>

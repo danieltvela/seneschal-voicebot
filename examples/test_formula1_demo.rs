@@ -49,7 +49,9 @@ async fn main() -> anyhow::Result<()> {
     while start.elapsed() < Duration::from_secs(30) && !response_complete {
         match tokio::time::timeout(Duration::from_millis(500), events.recv()).await {
             Ok(Some(event)) => match event {
-                ClientControlEvent::Transcript { utterance_id, text } => {
+                ClientControlEvent::Transcript {
+                    utterance_id, text, ..
+                } => {
                     println!("[STT] Utterance {}: '{}'", utterance_id, text);
                 }
                 ClientControlEvent::ToolCall { name, result } => {

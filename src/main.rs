@@ -42,10 +42,11 @@ use seneschal_agents::agent_session::VisibleSessionManager;
 use seneschal_agents::{AcpSessionManager, AgentRegistry, OpenCodeHttpTransport};
 use seneschal_common::events::ProactiveEvent;
 use seneschal_common::events::{PluginPromptSections, PluginSwitchEvent};
+use seneschal_common::settings::HotSettings;
 use seneschal_common::tools::{ConversationMode, ToolRegistry};
 use seneschal_common::{PermissionGate, find_allow_option_id};
 use seneschal_core::audio::ambient_buffer::AmbientBuffer;
-use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk};
+use seneschal_core::audio::audio_capture::{AudioCapture, AudioChunk, AudioLevels};
 use seneschal_core::audio::audio_transform::resample_nearest;
 use seneschal_core::audio::buffer::AudioBuffer;
 use seneschal_core::audio::output::AudioOutput;
@@ -81,6 +82,9 @@ use seneschal_tools_core::CurrentTimeTool;
 
 #[cfg(test)]
 mod e2e_tests;
+
+#[cfg(feature = "control")]
+mod audio_diagnostics;
 
 /// Build the OpenAI-compatible TTS provider configuration from the runtime config.
 #[cfg(feature = "openai-tts")]
@@ -135,6 +139,26 @@ fn main() {
 #[tokio::main]
 async fn main() -> Result<()> {
     async_main().await
+}
+
+/// Wait for either terminal signal. Desktop restarts use SIGTERM first
+/// (issue #33), so a graceful sidecar stop must behave like Ctrl-C.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for Ctrl-C");
+    }
 }
 
 async fn async_main() -> Result<()> {
@@ -1213,12 +1237,13 @@ async fn async_main() -> Result<()> {
         }
     };
     let tts_sample_rate = tts.sample_rate();
-    let tts = Arc::new(tts);
+    let tts: Arc<tokio::sync::RwLock<TtsEngine>> = Arc::new(tokio::sync::RwLock::new(tts));
 
     // ── Audio output ──────────────────────────────────────────────────────────
     let audio_output = Arc::new(AudioOutput::new_or_null(
         config.audio_output_device.as_deref(),
     ));
+    audio_output.set_volume(config.output_volume);
     info!(
         target: "audio",
         "Audio output: {}Hz, {}ch",
@@ -1242,6 +1267,9 @@ async fn async_main() -> Result<()> {
     // Tells the device monitor whether capture is currently running, so it only
     // signals DeviceConnected when the device is present AND capture is idle.
     let capture_active = Arc::new(AtomicBool::new(false));
+    // Last capture startup/rebuild error for the desktop audio panel (issue #34).
+    #[cfg(feature = "control")]
+    let capture_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     match AudioCapture::try_new(config.audio_input_device.as_deref()) {
         Some(ac) => {
             source_sample_rate = ac.sample_rate();
@@ -1254,14 +1282,26 @@ async fn async_main() -> Result<()> {
                 Ok(stream) => {
                     capture_active.store(true, Ordering::SeqCst);
                     capture_stream = Some(stream);
+                    #[cfg(feature = "control")]
+                    {
+                        *capture_error.lock().unwrap() = None;
+                    }
                 }
                 Err(e) => {
                     warn!(target: "audio", "Failed to start audio capture: {}. Deferring until device connects.", e);
+                    #[cfg(feature = "control")]
+                    {
+                        *capture_error.lock().unwrap() = Some(format!("{e:#}"));
+                    }
                 }
             }
         }
         None => {
             warn!(target: "audio", "No input device available at startup — deferring capture until device connects");
+            #[cfg(feature = "control")]
+            {
+                *capture_error.lock().unwrap() = Some("No input device available".to_string());
+            }
         }
     }
 
@@ -1287,6 +1327,14 @@ async fn async_main() -> Result<()> {
     let play_cancel = Arc::new(AtomicBool::new(false));
     let tts_muted = Arc::new(AtomicBool::new(false));
     let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Runtime-switchable settings (issue #33). Control applies TTS/volume
+    // directly and asks the audio loop to reload language/wake-word/prompt.
+    let hot_settings = Arc::new(Mutex::new(HotSettings {
+        language: config.language.clone(),
+        wake_word: config.primary_wake_word().to_string(),
+    }));
+    let (_settings_tx, mut settings_rx) = mpsc::channel::<HotSettings>(8);
 
     // Pipeline FSM state — replaces AtomicBool flags (llm_busy, consolidation_active, etc.)
     // Each actor that owns a transition writes it directly; observers subscribe read-only.
@@ -1884,6 +1932,7 @@ async fn async_main() -> Result<()> {
         let proactive_tx_c = proactive_tx.clone();
         let already_notified_c = Arc::clone(&l1_saturation_notified);
         let prompt_build_c = Arc::clone(&prompt_build_state);
+        let hot_settings_c = Arc::clone(&hot_settings);
         tokio::spawn(async move {
             consolidation_task(
                 events_c,
@@ -1907,6 +1956,7 @@ async fn async_main() -> Result<()> {
                 language_c,
                 proactive_tx_c,
                 already_notified_c,
+                hot_settings_c,
             )
             .await;
         });
@@ -1971,8 +2021,42 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Control API (HTTP + SSE) ──────────────────────────────────────────────
+    // The receiver always exists so the main select loop keeps one shape; when
+    // Control is disabled the sender is dropped and the branch never fires.
+    #[cfg(feature = "control")]
+    let (audio_test_tx, mut audio_test_rx) =
+        mpsc::channel::<seneschal_control::control::audio::AudioTestRequest>(1);
+    #[cfg(not(feature = "control"))]
+    let (_audio_test_tx, mut audio_test_rx) = mpsc::channel::<()>(1);
     #[cfg(feature = "control")]
     if let Some(ctrl_port) = config.control_port {
+        let settings_service =
+            Arc::new(seneschal_control::control::settings::SettingsService::new(
+                config.clone(),
+                Arc::clone(&tts),
+                Arc::clone(&audio_output),
+                Arc::clone(&hot_settings),
+                _settings_tx.clone(),
+            )?);
+        // Audio diagnostics (issue #34): Control sends a request; the main
+        // loop below owns the recorder and the STT provider.
+        let audio_control = Arc::new(seneschal_control::control::audio::AudioControl::new(
+            Arc::clone(&tts),
+            Arc::clone(&audio_output),
+            audio_test_tx,
+            events.barge_in_tx.clone(),
+            pipeline_state_rx.clone(),
+            Arc::clone(&capture_active),
+            Arc::clone(&capture_error),
+        ));
+        // Model manager (issue #35): catalog + downloads + NeMo cards.
+        let daemon_workdir =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let models_control = Arc::new(seneschal_control::control::models::ModelControl::new(
+            control_broadcast.clone(),
+            Arc::clone(&settings_service),
+            &daemon_workdir,
+        ));
         let ctrl_state = Arc::new(seneschal_control::control::state::ControlState {
             broadcast: control_broadcast.clone(),
             pipeline_state_rx: pipeline_state_rx.clone(),
@@ -1983,6 +2067,10 @@ async fn async_main() -> Result<()> {
             llm_session: Arc::clone(&llm_session),
             db: db.clone(),
             permission_gate: Arc::clone(&permission_gate),
+            settings: settings_service,
+            audio: Some(audio_control),
+            models: Some(models_control),
+            gpu_available: !gpu_devices.is_empty(),
         });
         tokio::spawn(async move {
             if let Err(e) =
@@ -2020,41 +2108,51 @@ async fn async_main() -> Result<()> {
     }
 
     // ── Startup greeting / first-time introduction ─────────────────────────────
-    // If audio capture is active, send the full greeting (first_launch or startup
-    // with time/date). Otherwise send a brief notification that the system started;
-    // the device monitor will send the full greeting when a device connects later.
-    if capture_stream.is_some() {
-        let first = is_first_launch;
-        let key = if first { "first_launch" } else { "startup" };
-        let notification = seneschal_common::i18n::get_notification(key, &config.language);
-        let notification = if first {
-            notification.to_string()
+    // Desktop onboarding (#36) suppresses the greeting while the first-run wizard
+    // is active; the shell clears the flag before its final restart. Without the
+    // flag, behavior is unchanged for TUI/headless runs.
+    let defer_startup_greeting = std::env::var("SENESCHAL_DEFER_STARTUP_GREETING")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !defer_startup_greeting {
+        // If audio capture is active, send the full greeting (first_launch or startup
+        // with time/date). Otherwise send a brief notification that the system started;
+        // the device monitor will send the full greeting when a device connects later.
+        if capture_stream.is_some() {
+            let first = is_first_launch;
+            let key = if first { "first_launch" } else { "startup" };
+            let notification = seneschal_common::i18n::get_notification(key, &config.language);
+            let notification = if first {
+                notification.to_string()
+            } else {
+                let now = chrono::Local::now();
+                let time_str = now.format("%H:%M").to_string();
+                let date_str = now.format("%d/%m/%Y").to_string();
+                notification
+                    .replace("{time_str}", &time_str)
+                    .replace("{date_str}", &date_str)
+            };
+            transcript_tx
+                .send(PipelineFrame::SystemNotification { text: notification })
+                .await
+                .ok();
         } else {
-            let now = chrono::Local::now();
-            let time_str = now.format("%H:%M").to_string();
-            let date_str = now.format("%d/%m/%Y").to_string();
-            notification
-                .replace("{time_str}", &time_str)
-                .replace("{date_str}", &date_str)
-        };
-        transcript_tx
-            .send(PipelineFrame::SystemNotification { text: notification })
-            .await
-            .ok();
-    } else {
-        let msg = seneschal_common::i18n::get_notification("no_device_startup", &config.language);
-        transcript_tx
-            .send(PipelineFrame::SystemNotification {
-                text: msg.to_string(),
-            })
-            .await
-            .ok();
+            let msg =
+                seneschal_common::i18n::get_notification("no_device_startup", &config.language);
+            transcript_tx
+                .send(PipelineFrame::SystemNotification {
+                    text: msg.to_string(),
+                })
+                .await
+                .ok();
+        }
     }
 
     // Greet at most once per session: when capture is running at startup the
     // full greeting was already sent above; otherwise the device monitor will
-    // start capture later and only then (once) send the full greeting.
-    let mut startup_greeted = capture_stream.is_some();
+    // start capture later and only then (once) send the full greeting. While
+    // onboarding defers the greeting, the monitor must not fire it either.
+    let mut startup_greeted = defer_startup_greeting || capture_stream.is_some();
 
     // ── Device monitor ─────────────────────────────────────────────────────────
     // Polls for the configured input device (or default if none specified);
@@ -2076,6 +2174,16 @@ async fn async_main() -> Result<()> {
     let mut plugin_runtime_spawned_mcp: Option<SpawnedMcpServers> = None;
 
     let mut proactive_rx = proactive_rx;
+    // In-flight mic/loopback diagnostic. Kept beside the main loop because the
+    // STT provider and capture consumer are owned here (issue #34).
+    #[cfg(feature = "control")]
+    type AudioTestState = (
+        audio_diagnostics::AudioTestRecorder,
+        seneschal_control::control::audio::AudioTestRequest,
+    );
+    #[cfg(not(feature = "control"))]
+    type AudioTestState = ();
+    let mut active_audio_test: Option<AudioTestState> = None;
     tokio::select! {
                 _ = async {
                     loop {
@@ -2366,14 +2474,26 @@ async fn async_main() -> Result<()> {
                                                         Ok(stream) => {
                                                             capture_active.store(true, Ordering::SeqCst);
                                                             capture_stream = Some(stream);
+                                                            #[cfg(feature = "control")]
+                                                            {
+                                                                *capture_error.lock().unwrap() = None;
+                                                            }
                                                         }
                                                         Err(e) => {
                                                             error!(target: "audio", "Failed to start audio capture on device connect: {}", e);
+                                                            #[cfg(feature = "control")]
+                                                            {
+                                                                *capture_error.lock().unwrap() = Some(format!("{e:#}"));
+                                                            }
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
                                                     error!(target: "audio", "Failed to create audio capture on device connect: {}", e);
+                                                    #[cfg(feature = "control")]
+                                                    {
+                                                        *capture_error.lock().unwrap() = Some(format!("{e:#}"));
+                                                    }
                                                 }
                                             }
                                             // Swap output device (spawn_blocking — may wait for in-flight playback)
@@ -2497,6 +2617,21 @@ async fn async_main() -> Result<()> {
                             Some(switch_event) = plugin_switch_rx.recv() => {
                                 // Queue switch event — apply between turns only
                                 pending_plugin_switch = Some(switch_event);
+                                continue;
+                            },
+                            Some(test_request) = audio_test_rx.recv(), if active_audio_test.is_none() => {
+                                #[cfg(feature = "control")]
+                                {
+                                    let recorder = audio_diagnostics::AudioTestRecorder::new(
+                                        test_request.kind,
+                                        test_request.duration_secs,
+                                        config.sample_rate,
+                                    );
+                                    info!(target: "audio", "Audio diagnostic started ({:?}, {}s)", test_request.kind, test_request.duration_secs);
+                                    active_audio_test = Some((recorder, test_request));
+                                }
+                                #[cfg(not(feature = "control"))]
+                                ignore_audio_test(test_request);
                                 continue;
                             },
                         };
@@ -2632,6 +2767,77 @@ async fn async_main() -> Result<()> {
                         };
                         let mono = resample_nearest(&mono, chunk.sample_rate, config.sample_rate);
 
+                        // Live input level for the desktop VU meter (issue #34).
+                        // Computed after downmix/resample so it matches the exact
+                        // signal the STT consumes; the broadcast send is non-blocking.
+                        let levels = AudioLevels::compute(&mono);
+                        #[cfg(feature = "control")]
+                        control_broadcast.send(seneschal_control::control::broadcast::ControlEvent::AudioLevel {
+                            rms: levels.rms,
+                            peak: levels.peak,
+                        });
+
+                        #[cfg(feature = "control")]
+                        if active_audio_test.is_some() {
+                            let (mut recorder, request) = active_audio_test.take().expect("active audio test");
+                            if !recorder.record(&mono) {
+                                active_audio_test = Some((recorder, request));
+                                continue;
+                            }
+
+                            let (mut result, samples) = recorder.finish();
+                            let outcome = match request.kind {
+                                seneschal_control::control::audio::AudioTestKind::Mic => {
+                                    let provider = stt_provider.provider_name().to_string();
+                                    match tokio::task::block_in_place(|| {
+                                        stt_provider.transcribe_complete(&samples)
+                                    }) {
+                                        Ok(quality) => {
+                                            result.transcript = Some(quality.text.trim().to_string());
+                                            result.provider = Some(provider);
+                                            Ok(result)
+                                        }
+                                        Err(error) => Err(
+                                            seneschal_control::control::audio::AudioTestError::new(
+                                                seneschal_control::control::audio::AudioTestErrorCode::ProviderError,
+                                                format!("STT transcription failed: {error:#}"),
+                                            ),
+                                        ),
+                                    }
+                                }
+                                seneschal_control::control::audio::AudioTestKind::Loopback => {
+                                    let output = Arc::clone(&audio_output);
+                                    let cancel = Arc::new(AtomicBool::new(false));
+                                    let playback = tokio::task::spawn_blocking(move || {
+                                        output.play_blocking(&samples, config.sample_rate, &cancel)
+                                    });
+                                    match playback.await {
+                                        Ok(Ok(())) => Ok(result),
+                                        Ok(Err(error)) => Err(
+                                            seneschal_control::control::audio::AudioTestError::new(
+                                                seneschal_control::control::audio::AudioTestErrorCode::OutputUnavailable,
+                                                format!("Loopback playback failed: {error:#}"),
+                                            ),
+                                        ),
+                                        Err(error) => Err(
+                                            seneschal_control::control::audio::AudioTestError::new(
+                                                seneschal_control::control::audio::AudioTestErrorCode::OutputUnavailable,
+                                                format!("Loopback task failed: {error}"),
+                                            ),
+                                        ),
+                                    }
+                                }
+                            };
+                            let _ = request.reply.send(outcome);
+
+                            // The capture channel buffered the recording window;
+                            // resume on fresh audio so stale speech cannot become
+                            // a normal utterance.
+                            while rx.try_recv().is_ok() {}
+                            while stt_rx.try_recv().is_ok() {}
+                            continue;
+                        }
+
                         stt_provider.process_audio(&mono, &stt_tx).await.ok();
 
                         // Collect pending STT events, then process each one.
@@ -2666,7 +2872,26 @@ async fn async_main() -> Result<()> {
                         }
                     }
                 } => {}
-                _ = tokio::signal::ctrl_c() => {
+                Some(hot) = settings_rx.recv() => {
+                    // Settings hot-reload (issue #33): the next utterance uses
+                    // the new language/wake word, and the live system prompt is
+                    // rebuilt without dropping conversation history.
+                    config.language = hot.language;
+                    config.wake_word = hot.wake_word;
+                    let new_system_prompt = build_system_prompt(
+                        &config.llm_system_prompt,
+                        config.primary_wake_word(),
+                        &profile_facts,
+                        &memories,
+                        &agent_section,
+                        &tool_section,
+                        &immutable_rules,
+                        &voice_plugin_sections,
+                    );
+                    llm_session.lock().unwrap().set_system_prompt(new_system_prompt);
+                    info!(target: "settings", "Hot settings applied (language={}, wake_word={})", config.language, config.primary_wake_word());
+                }
+                _ = shutdown_signal() => {
                     info!(target: "seneschal", "Shutting down...");
                     events.barge_in_tx.send(0).ok();
                     play_cancel.store(true, Ordering::SeqCst);
@@ -2676,6 +2901,11 @@ async fn async_main() -> Result<()> {
 
     Ok(())
 }
+
+/// No-op sink for the always-present audio-test select branch when the Control
+/// feature is disabled.
+#[cfg(not(feature = "control"))]
+fn ignore_audio_test<T>(_value: T) {}
 
 /// Deep worker wiring context (issue #236). Present only when
 /// `deep_worker_enabled` — every consumer branches on `Option<DeepWorkerCtx>`

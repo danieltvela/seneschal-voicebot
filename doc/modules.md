@@ -5,6 +5,7 @@
 | Directory | Purpose | Estado | Doc |
 |-----------|---------|--------|-----|
 | `src/audio/` | Audio pipeline: capture, VAD, resampling, playback, filler, speaker | 🟢 SALVAR | [audio-internals.md](audio-internals.md) |
+| `src/audio_diagnostics.rs` | Main-loop recorder for desktop mic/loopback tests on the existing capture path (issue #34) | 🟢 SALVAR | [design/34-desktop-audio.md](design/34-desktop-audio.md) |
 | `src/stt/` | Legacy provider trait + shared VAD segmenter (pre-roll, gap-tolerant confirm, post-roll) + Whisper + Parakeet + SFSpeechRecognizer + OpenAI-compatible remote (issue #17). 16kHz f32 mono. The runtime STT is now `crates/asr` (Nemotron realtime). Contract: [stt-contract.md](stt-contract.md). | 🟢 SALVAR | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | `crates/asr/` | Runtime STT provider: Nemotron 3.5 over NeMo-Speech.cpp realtime WebSocket. Server-side VAD endpointing, native PnC, partial/final traces. Reuses the legacy `SpeechEvent` contract. | 🟢 SALVAR | [stt-contract.md](stt-contract.md) |
 | `src/llm/` | HTTP client to `/v1/chat/completions`, session management | 🟢 SALVAR | [llm-provider.md](llm-provider.md) |
@@ -21,7 +22,8 @@
 | `src/agents/` | Agent delegation for complex tasks | 🟡 AISLAR (`seneschal-agents`) | [agents-internal.md](agents-internal.md) |
 | `src/plugins/` | Plugin system (runtime-swappable feature packs) | 🟡 AISLAR (`seneschal-plugins`) | [plugins-internal.md](plugins-internal.md) |
 | `src/classifier/` | Intent classifier cascade (heuristic → keyword → fallback) | 🟡 AISLAR (`seneschal-classifier`) | [classifier.md](classifier.md) |
-| `src/control/` | Control API (HTTP/SSE) | 🟡 AISLAR (`seneschal-control`) | [MAIN_PROCESS.md](MAIN_PROCESS.md), [IOS_COMPANION.md](IOS_COMPANION.md) |
+| `src/control/` | Control API (HTTP/SSE) + tiered Settings read/validate/apply (issue #33) + model manager/NeMo cards (issue #35) | 🟡 AISLAR (`seneschal-control`) | [MAIN_PROCESS.md](MAIN_PROCESS.md), [IOS_COMPANION.md](IOS_COMPANION.md), [design/33-desktop-settings.md](design/33-desktop-settings.md), [design/35-desktop-models.md](design/35-desktop-models.md) |
+| `crates/seneschal-models/` | Central model catalog + resumable checksum-verified downloads + NeMo service status (issue #35) | 🟢 SALVAR | [design/35-desktop-models.md](design/35-desktop-models.md) |
 | `src/remote/` | WebSocket server for remote audio streaming | 🟡 AISLAR (`seneschal-remote`) | [APPLE_WATCH_CLIENT.md](APPLE_WATCH_CLIENT.md), [IOS_COMPANION.md](IOS_COMPANION.md) |
 | `src/tui/` | Terminal UI (ratatui), status-only | 🟡 AISLAR (`seneschal-tui`) | readme.md §TUI Key Bindings |
 | `src/daemon.rs` | InferenceDaemon — proactive reasoning loop | 🟡 AISLAR (`seneschal-extras`) | [MAIN_PROCESS.md](MAIN_PROCESS.md) |

@@ -67,6 +67,11 @@ objc2-avf-audio = { version = "0.3.1", features = [
     "AVAudioTypes",
     "block2",
 ], optional = true }
+objc2-av-foundation = { version = "0.3.1", optional = true, features = [
+    "AVCaptureDevice",
+    "AVMediaFormat",
+    "block2",
+] }
 
 [features]
 kokoro = ["dep:kokorox"]
@@ -83,7 +88,8 @@ speech = ["dep:speech"]
 # per-model device pinning. The whisper.cpp side is enabled separately via the
 # root `cuda` feature (`whisper-cpp-plus/cuda`).
 cuda = ["dep:ort", "kokorox?/cuda", "parakeet-rs?/cuda"]
-avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio"]
+avspeech = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-avf-audio", "microphone_permission"]
+microphone_permission = ["dep:objc2", "dep:block2", "dep:objc2-foundation", "dep:objc2-av-foundation"]
 # Feature flags used in #[cfg] attributes within the crate (propagated from root)
 tui = []
 control = []

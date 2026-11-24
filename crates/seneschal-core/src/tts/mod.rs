@@ -114,6 +114,78 @@ impl TtsEngine {
             _ => unreachable!("no TTS backend enabled"),
         }
     }
+
+    /// Human-readable backend token (`avspeech`, `kokoro`, `openai`, `mock`).
+    #[allow(unreachable_patterns)]
+    pub fn provider_name(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "avspeech")]
+            Self::AvSpeech(_) => "avspeech",
+            #[cfg(feature = "kokoro")]
+            Self::Kokoro(_) => "kokoro",
+            #[cfg(feature = "openai-tts")]
+            Self::OpenAi(_) => "openai",
+            Self::Mock(_) => "mock",
+            _ => unreachable!("no TTS backend enabled"),
+        }
+    }
+
+    /// TTS backend tokens compiled into this binary (issue #33).
+    pub fn supported_providers() -> Vec<&'static str> {
+        #[allow(unused_mut)]
+        let mut providers = Vec::new();
+        #[cfg(feature = "avspeech")]
+        providers.push("avspeech");
+        #[cfg(feature = "kokoro")]
+        providers.push("kokoro");
+        #[cfg(feature = "openai-tts")]
+        providers.push("openai");
+        providers
+    }
+
+    /// Apply runtime-switchable voice/rate settings without rebuilding the
+    /// backend or restarting the process (issue #33). `voice` and `rate` are
+    /// provider-specific config fields: Kokoro/OpenAI use "speed" as rate.
+    #[allow(unreachable_patterns)]
+    #[allow(unused_variables)]
+    pub fn apply_voice_and_rate(
+        &mut self,
+        voice: Option<&str>,
+        rate: Option<f32>,
+    ) -> anyhow::Result<()> {
+        match self {
+            #[cfg(feature = "avspeech")]
+            Self::AvSpeech(t) => {
+                if let Some(voice) = voice {
+                    t.set_voice_name(voice)?;
+                }
+                if let Some(rate) = rate {
+                    t.set_rate(rate);
+                }
+            }
+            #[cfg(feature = "kokoro")]
+            Self::Kokoro(t) => {
+                if let Some(voice) = voice {
+                    t.set_voice(voice);
+                }
+                if let Some(rate) = rate {
+                    t.set_speed(rate);
+                }
+            }
+            #[cfg(feature = "openai-tts")]
+            Self::OpenAi(t) => {
+                if let Some(voice) = voice {
+                    t.set_voice(voice);
+                }
+                if let Some(rate) = rate {
+                    t.set_speed(rate);
+                }
+            }
+            Self::Mock(_) => {}
+            _ => unreachable!("no TTS backend enabled"),
+        }
+        Ok(())
+    }
 }
 
 /// Test-only TTS backend.
@@ -173,6 +245,22 @@ pub mod mock_tts {
 
         pub fn sample_rate(&self) -> u32 {
             22050
+        }
+    }
+
+    #[cfg(test)]
+    mod hot_settings_tests {
+        use super::super::{TtsEngine, mock_tts::MockTts};
+
+        /// The unified hot-apply seam must work for every backend; Mock covers
+        /// the shared dispatch without audio hardware.
+        #[test]
+        fn mock_accepts_hot_voice_and_rate() {
+            let mut engine = TtsEngine::Mock(MockTts::new().0);
+            engine
+                .apply_voice_and_rate(Some("test"), Some(0.8))
+                .unwrap();
+            assert_eq!(engine.provider_name(), "mock");
         }
     }
 }

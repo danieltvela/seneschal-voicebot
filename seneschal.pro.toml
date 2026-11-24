@@ -11,6 +11,8 @@ list_devices = false
 list_voices = false
 device_monitor_enabled = true
 device_monitor_poll_secs = 5
+# Master playback volume for TTS and filler audio (0.0–1.0).
+output_volume = 1.0
 
 # ── VAD ───────────────────────────────────────────────────────────────────────
 vad_silence_ms = 300
@@ -48,9 +50,9 @@ stt_live_window_ms = 15000
 language = "es"
 
 # ── STT: Nemotron ASR (NeMo-Speech.cpp realtime WebSocket) ────────────────────
-# El runtime usa siempre el provider Nemotron del crate `asr`; este campo es
-# documental. whisper_* y stt_live_* solo alimentan los crates/auditorías legacy.
-stt_provider = "nemotron"
+# nemotron selects the realtime provider in crates/asr. whisper/parakeet/speech/
+# openai select the legacy providers in seneschal-core.
+stt_provider = "speech"
 # Idioma del prompt ASR: "auto" activa langid/code-switching ES/EN.
 stt_language = "auto"
 whisper_model = "models/ggml-large-v3-turbo.bin"
@@ -68,7 +70,9 @@ stt_timeout_ms = 15000          # timeout HTTP del verify / one-shot REST
 # Whisper follows whisper.cpp's default device (GPU 0); use CUDA_VISIBLE_DEVICES
 # to reorder the visible devices for it.
 gpu_auto = true
-# vad_gpu = "0"
+# Silero VAD crasha en Metal con este build de whisper.cpp; lo anclamos a CPU
+# (el VAD es minúsculo y en CPU va instantáneo).
+vad_gpu = "cpu"
 # parakeet_gpu = "0"
 # tts_gpu = "1"
 
@@ -79,10 +83,10 @@ stt_compression_threshold = 2.4
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm_provider = "openai"
-llm_url = "http://127.0.0.1:8000"
+llm_url = "http://tesla.tail4c7b1f.ts.net:8005"
 llm_api_key = ""
-llm_model = "qwen3.8-27b"
-llm_max_tokens = 400
+llm_model = "tesla-model"
+llm_max_tokens = 4000
 llm_system_prompt = """Eres el mayordomo digital de Daniel.
 
 IDENTIDAD
@@ -180,8 +184,9 @@ deep_worker_timeout_ms = 300000
 deep_worker_vision_enabled = false
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
-tts_provider = "kokoro"
-avspeech_voice = ""
+# Sin `tts_provider` aquí ni `TTS_PROVIDER` en el entorno, el backend se elige
+# por plataforma: "avspeech" en macOS, "kokoro" en Linux (issue #33/#36).
+avspeech_voice = "Jorge (Enhanced)"
 avspeech_rate = 0.55
 kokoro_model = "models/kokoro-v1.0.onnx"
 kokoro_voices = "models/voices-v1.0.bin"
@@ -293,6 +298,8 @@ ws_port = 9090
 # ── Plugins ───────────────────────────────────────────────────────────────────
 plugins = []
 active_plugin = ""
+audio_input_device = "Vieta Pro Clear"
+audio_output_device = "Vieta Pro Clear"
 
 # ── MCP servers ───────────────────────────────────────────────────────────────
 # WARNING: [[mcp_servers]] MUST be the last section in this file. The toml 0.8

@@ -15,9 +15,10 @@ Read from `.env` (dotenvy loads automatically):
 | `AUDIO_CHANNELS` | `1` | Audio channels |
 | `AUDIO_INPUT_DEVICE` | _(default)_ | Microphone device name. Case-insensitive **partial** match against the CPAL device name; append `#N` to pick the Nth match. Run `--list-devices` or `LIST_AUDIO_DEVICES=1` to see names. **Linux/ALSA:** use the CPAL name (e.g. `USB Audio`), which can differ from the OS "friendly" name (the product name lives only in `/proc/asound/cards`). |
 | `AUDIO_OUTPUT_DEVICE` | _(default)_ | Speaker device name (same matching rules as `AUDIO_INPUT_DEVICE`). |
+| `AUDIO_OUTPUT_VOLUME` | `1.0` | Master TTS/filler playback volume (`0.0`–`1.0`). Settings can hot-apply this value without a restart. |
 | `LIST_AUDIO_DEVICES` | `false` | When `1`, print available input **and** output devices and exit (also `--list-devices`). |
 | `SENECHAL_LANGUAGE` | `en` | Language (`en` or `es`) |
-| `STT_PROVIDER` | `nemotron` | Documental en el runtime: `crates/asr` siempre usa Nemotron 3.5 realtime. Los valores `whisper`, `parakeet`, `speech` y `openai` siguen siendo válidos para los proveedores legacy de `seneschal-core`. |
+| `STT_PROVIDER` | `nemotron` | Runtime backend: `nemotron` (Nemotron 3.5 realtime in `crates/asr`) or a legacy `seneschal-core` provider (`whisper`, `parakeet`, `speech`, `openai`). |
 | `WHISPER_MODEL` | `models/ggml-large-v3-turbo.bin` | Whisper GGML model path |
 | `VAD_SILENCE_MS` | `300` | Trailing silence that closes a Nemotron turn: forwarded as `endpointing_ms` to the server's VAD-driven endpointer. For legacy providers it keeps the old in-process SpeechEnd behavior. |
 | `VAD_START_THRESHOLD` | `0.65` | Speech probability to start a segment (silence → speech). |
@@ -30,6 +31,7 @@ Read from `.env` (dotenvy loads automatically):
 | `STT_LIVE_INTERVAL_MS` | `1000` | Minimum new speech audio (ms) between live partial decodes. Raise on CPU-only hosts. |
 | `STT_LIVE_WINDOW_MS` | `15000` | Cap on the audio length per partial decode; longer segments decode their tail. |
 | `VAD_MODEL` | `models/ggml-silero-vad.bin` | Path to Silero VAD model (`.bin`) used by whisper-cpp-plus. |
+| `SENESCHAL_MODELS_DIR` | `~/.local/share/seneschal/models` (Linux) / `~/Library/Application Support/Seneschal/models` (macOS) | Root for app-managed model downloads (desktop model manager, issue #35). Legacy `models/` dirs are detected but never moved. |
 | `GPU_AUTO` | `1` | Auto-assign the local ONNX models (Silero VAD, Parakeet, Kokoro TTS) round-robin over the GPUs with the most free VRAM (CUDA builds, issue #14). `0` = manual only. |
 | `VAD_GPU` | — | Pin Silero VAD to a GPU index (`0`, `1`, ...) or `cpu`. Wins over `GPU_AUTO`. |
 | `PARAKEET_GPU` | — | Pin the Parakeet ONNX encoder/decoder to a GPU index or `cpu`. |
@@ -40,7 +42,7 @@ Read from `.env` (dotenvy loads automatically):
 | `STT_MODEL` | `nemotron-3.5` | Model id from the service's `GET /v1/models`. |
 | `STT_TIMEOUT_MS` | `15000` | HTTP timeout for startup verification and the one-shot REST transcription; the streaming WebSocket itself reconnects with backoff. |
 | `LLM_URL` | `http://127.0.0.1:8000` | LLM server URL (mlx-lm default; oMLX is 8001) |
-| `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. |
+| `LLM_API_KEY` | _(empty)_ | Bearer token sent as `Authorization: Bearer <key>`; leave unset for local servers with no auth. Settings can write it to TOML, but never returns it in snapshots; an env override remains read-only. |
 | `LLM_MODEL` | `qwen3.8-27b` | Model name sent in the `model` field of API requests. |
 | `LLM_MAX_TOKENS` | `400` | Max tokens per response |
 | `LLM_TEMPERATURE` | `1.0` | Sampling temperature (NVIDIA generation_config spec for qwen3.8-flash-next) |
@@ -90,7 +92,9 @@ Read from `.env` (dotenvy loads automatically):
 | `SEARXNG_SECRET` | — | SearXNG bearer token |
 | `SPEAKER_ENABLED` | `true` | Enable/disable speaker verification at runtime (`0`/`false` = disabled, `1`/`true` = enabled). When disabled, the speaker model is not loaded and the associated 50-200ms latency per utterance is avoided. |
 | `WS_PORT` | `9090` | WebSocket server port for remote audio (`--features remote`). Companion mic/TTS path. |
-| `CONTROL_PORT` | — (optional) | HTTP/SSE Control API port (`--features control`). Recommended **9001** for iOS companion dual-channel. Binds `0.0.0.0`. See [`IOS_COMPANION.md`](IOS_COMPANION.md). |
+| `CONTROL_PORT` | — (optional) | HTTP/SSE Control API port (`--features control`). Recommended **9001** for iOS companion dual-channel. Binds `0.0.0.0` by default. See [`IOS_COMPANION.md`](IOS_COMPANION.md). |
+| `CONTROL_HOST` | `0.0.0.0` | Control API bind address. The desktop shell sets `127.0.0.1` for packaged installs; headless/companion defaults are unchanged. |
+| `SENESCHAL_DEFER_STARTUP_GREETING` | `false` | Desktop onboarding only (#36): suppress the startup and device-connected greeting until the final restart. Normal TUI/headless runs are unaffected. |
 | `S_DREAM_INTERVAL_SECS` | `3600` | Seconds between consolidation cycles (0 = disabled) |
 | `S_DREAM_ON_IDLE` | `1` | Trigger consolidation when user is idle (1 = true) |
 | `S_DREAM_IDLE_THRESHOLD_SECS` | `600` | Idle seconds before consolidation triggers |
