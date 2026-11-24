@@ -15,7 +15,10 @@ use seneschal_common::events::ProactiveEvent;
 use seneschal_common::tools::ToolRegistry;
 use seneschal_common::tui_events::{InputSource, TuiEvent, TuiEventTx};
 
-/// Monotonically increasing counter for tagging each pipeline run with a unique ID.
+/// Monotonically increasing counter for tagging each pipeline turn with a
+/// unique utterance ID. Allocated inside the actor loop: one long-lived
+/// `llm_task` serves many turns, and Control consumers key transcript rows by
+/// this ID.
 static PIPELINE_RUN_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Maximum number of sequential tool calls allowed per user turn.
@@ -100,7 +103,6 @@ pub async fn llm_task(
     // for companions and dashboards. Always typed in common (no feature gate).
     control_broadcast: Option<ControlBroadcast>,
 ) {
-    let pipeline_id = PIPELINE_RUN_ID.fetch_add(1, Ordering::SeqCst);
     let mut cancel_rx = events.barge_in_tx.subscribe();
     // Original content of the first transcript of a pending user turn, captured
     // at user-commit for SQLite reconciliation on assistant-commit. Persists
@@ -141,6 +143,11 @@ pub async fn llm_task(
             }
             pipeline_state_rx.changed().await.ok();
         }
+
+        // Mint the utterance ID per accepted turn, not once per actor. The
+        // desktop transcript and other Control clients use it as the stable
+        // key for the user row and its streamed assistant response.
+        let pipeline_id = PIPELINE_RUN_ID.fetch_add(1, Ordering::SeqCst);
 
         let _ = pipeline_state_tx.send(PipelineState::Thinking {
             utterance_id: pipeline_id,
@@ -747,6 +754,10 @@ pub async fn llm_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::filler::FillerController;
+    use crate::audio::output::AudioOutput;
+    use crate::llm::Message;
+    use async_trait::async_trait;
 
     /// issue #41: the Control transcript must expose the same origin that the
     /// TUI already receives through `TuiEvent::UserMessage`.
@@ -754,6 +765,142 @@ mod tests {
     fn transcript_source_distinguishes_text_and_voice() {
         assert_eq!(transcript_source(true), Some("text".to_string()));
         assert_eq!(transcript_source(false), Some("voice".to_string()));
+    }
+
+    /// Streams one token per request, enough for a full `Transcript` →
+    /// `LlmToken` → `LlmDone` Control sequence.
+    struct SingleTokenLlm;
+
+    #[async_trait]
+    impl LlmProvider for SingleTokenLlm {
+        fn provider_name(&self) -> &'static str {
+            "single-token-test"
+        }
+
+        async fn stream(
+            &self,
+            _messages: &[serde_json::Value],
+            _tools: &[serde_json::Value],
+            _options: RequestOptions,
+        ) -> anyhow::Result<(mpsc::Receiver<StreamToken>, tokio::task::JoinHandle<()>)> {
+            let (token_tx, token_rx) = mpsc::channel(2);
+            let handle = tokio::spawn(async move {
+                token_tx
+                    .send(StreamToken::Content("respuesta".to_string()))
+                    .await
+                    .ok();
+            });
+            Ok((token_rx, handle))
+        }
+
+        async fn complete(&self, _messages: &[Message]) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
+        async fn complete_short(&self, _messages: &[Message]) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
+        async fn complete_multimodal(
+            &self,
+            _image_data_url: &str,
+            _text_prompt: &str,
+        ) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    /// Consecutive turns from one long-lived `llm_task` must not share an
+    /// utterance ID: the desktop transcript keys its user/assistant rows by
+    /// the Control `utterance_id`, so a repeated ID merges turns.
+    #[tokio::test]
+    async fn consecutive_turns_use_distinct_control_utterance_ids() {
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db = Database::new(db_dir.path().join("test.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let session_id = uuid::Uuid::new_v4();
+
+        let (state_tx, state_rx) = watch::channel(PipelineState::Idle);
+        let state_tx = Arc::new(state_tx);
+        let (sentences_tx, _sentences_rx) = mpsc::channel(16);
+        let (llm_tx, _llm_rx) = mpsc::channel(16);
+        let (transcript_tx, transcript_rx) = mpsc::channel(16);
+        let control = ControlBroadcast::new(64);
+        let mut control_rx = control.subscribe();
+        let events = Arc::new(PipelineEvents::new());
+        let filler = Arc::new(FillerController::new(Arc::new(AudioOutput::null()), 16_000));
+
+        let task = tokio::spawn(llm_task(
+            Arc::clone(&events),
+            Arc::clone(&state_tx),
+            state_rx,
+            sentences_tx,
+            llm_tx,
+            transcript_rx,
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::Mutex::new(LlmSession::new("test"))),
+            Arc::new(SingleTokenLlm),
+            db,
+            session_id,
+            Arc::new(std::sync::Mutex::new(ToolRegistry::new())),
+            Arc::new(AtomicU64::new(0)),
+            mpsc::channel(8).0,
+            filler,
+            0.0,
+            false,
+            None,
+            Some(control),
+        ));
+
+        async fn turn_ids(rx: &mut tokio::sync::broadcast::Receiver<ControlEvent>) -> Vec<u64> {
+            let mut ids = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    ControlEvent::Transcript { utterance_id, .. }
+                    | ControlEvent::LlmToken { utterance_id, .. }
+                    | ControlEvent::LlmDone { utterance_id, .. } => ids.push(utterance_id),
+                    _ => {}
+                }
+            }
+            ids
+        }
+
+        transcript_tx
+            .send(PipelineFrame::TranscriptReady {
+                utterance_id: 100,
+                text: "primera".to_string(),
+            })
+            .await
+            .unwrap();
+        events.llm_post_finished.notified().await;
+        let first = turn_ids(&mut control_rx).await;
+
+        transcript_tx
+            .send(PipelineFrame::TextInput {
+                text: "segunda".to_string(),
+            })
+            .await
+            .unwrap();
+        events.llm_post_finished.notified().await;
+        let second = turn_ids(&mut control_rx).await;
+
+        task.abort();
+
+        assert_eq!(first.len(), 3, "expected Transcript/LlmToken/LlmDone");
+        assert!(
+            first.windows(2).all(|pair| pair[0] == pair[1]),
+            "one turn must share one utterance ID: {first:?}"
+        );
+        assert_eq!(second.len(), 3, "expected Transcript/LlmToken/LlmDone");
+        assert!(
+            second.windows(2).all(|pair| pair[0] == pair[1]),
+            "one turn must share one utterance ID: {second:?}"
+        );
+        assert_ne!(
+            first[0], second[0],
+            "consecutive turns must get distinct utterance IDs"
+        );
     }
 
     /// issue #218: when the LLM already streamed a narration before the

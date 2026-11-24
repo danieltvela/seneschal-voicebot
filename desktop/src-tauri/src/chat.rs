@@ -622,6 +622,35 @@ mod tests {
         assert_eq!(entries[2].source, Some(ChatSource::Text));
     }
 
+    /// Two complete turns must append four rows. A repeated utterance ID
+    /// would upsert the prior user row and concatenate the prior assistant
+    /// response instead.
+    #[test]
+    fn consecutive_turns_append_new_user_and_assistant_rows() {
+        let hub = ChatHub::new();
+        hub.apply_transcript(1, "por texto".into(), Some("text"));
+        hub.apply_token(1, "primera respuesta".into());
+        hub.apply_done(1, "primera respuesta".into());
+        hub.apply_transcript(2, "por voz".into(), Some("voice"));
+        hub.apply_token(2, "segunda respuesta".into());
+        hub.apply_done(2, "segunda respuesta".into());
+
+        let entries = hub.snapshot().entries;
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].id, "user-1");
+        assert_eq!(entries[0].text, "por texto");
+        assert_eq!(entries[0].source, Some(ChatSource::Text));
+        assert_eq!(entries[1].id, "assistant-1");
+        assert_eq!(entries[1].text, "primera respuesta");
+        assert_eq!(entries[2].id, "user-2");
+        assert_eq!(entries[2].text, "por voz");
+        assert_eq!(entries[2].source, Some(ChatSource::Voice));
+        assert_eq!(entries[3].id, "assistant-2");
+        assert_eq!(entries[3].text, "segunda respuesta");
+        assert!(!entries[3].text.contains("primera"));
+        assert!(!entries.iter().any(|entry| entry.streaming));
+    }
+
     #[test]
     fn history_replaces_ephemeral_rows_and_is_capped() {
         let hub = ChatHub::new();
