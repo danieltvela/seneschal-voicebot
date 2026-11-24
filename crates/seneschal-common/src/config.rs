@@ -349,8 +349,9 @@ pub struct Config {
     pub deep_worker_vision_enabled: bool,
 
     // ── TTS ──────────────────────────────────────────────────────────────────
-    /// TTS backend: "avspeech" (default, native AVSpeechSynthesizer, --features avspeech)
-    /// or "kokoro" (--features kokoro).
+    /// TTS backend: "avspeech" (default on macOS, native AVSpeechSynthesizer,
+    /// --features avspeech) or "kokoro" (default elsewhere, --features kokoro).
+    #[serde(default = "default_tts_provider")]
     pub tts_provider: String,
     /// AVSpeechSynthesizer voice display name (AVSPEECH_VOICE, default "Jorge (Enhanced)").
     pub avspeech_voice: String,
@@ -707,6 +708,17 @@ fn default_openai_tts_voice() -> String {
 /// Adaptive language by default — the model decides per utterance (issue #16).
 fn default_openai_tts_language() -> String {
     "auto".to_string()
+}
+
+/// Platform-aware TTS backend for launches that specify neither `TTS_PROVIDER`
+/// (env) nor `tts_provider` (config): native AVSpeech on macOS, Kokoro ONNX
+/// on Linux and other platforms.
+fn default_tts_provider() -> String {
+    if cfg!(target_os = "macos") {
+        "avspeech".to_string()
+    } else {
+        "kokoro".to_string()
+    }
 }
 
 /// Generous timeout: the first request after container start takes ~90 s.
@@ -1492,6 +1504,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tts_provider_defaults_to_the_platform_backend() {
+        let expected = if cfg!(target_os = "macos") {
+            "avspeech"
+        } else {
+            "kokoro"
+        };
+        assert_eq!(Config::embedded_defaults().tts_provider, expected);
+    }
 
     #[test]
     fn speaker_enabled_defaults_true() {
