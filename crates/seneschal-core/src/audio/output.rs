@@ -855,7 +855,13 @@ where
     for (dst, src) in data.iter_mut().take(n).zip(st.ring.drain(..n)) {
         *dst = T::from_sample(src);
     }
-    // Remaining frames stay zeroed by CPAL.
+    // CPAL does NOT zero the render buffer on CoreAudio — the buffer memory is
+    // reused between callbacks, so frames past the ring repeat the previous
+    // callback's audio (audible buzz at the end of every utterance, while the
+    // stream is kept alive to flush the device buffer). Silence them.
+    for dst in data.iter_mut().skip(n) {
+        *dst = T::EQUILIBRIUM;
+    }
     if n > 0 {
         st.playback_started = true;
         cvar.notify_all();
@@ -1032,10 +1038,13 @@ mod tests {
             let mut st = shared.0.lock().unwrap();
             st.ring.extend([0.25f32, 0.5, 0.75]);
         }
-        let mut out = [0.0f32; 8];
+        // Pre-fill with a sentinel: frames past the ring must be silenced,
+        // never left carrying stale audio (CoreAudio reuses the buffer).
+        let mut out = [9.9f32; 8];
         let n = drain_callback(&shared, &mut out);
         assert_eq!(n, 3);
         assert_eq!(&out[..3], &[0.25, 0.5, 0.75]);
+        assert!(out[3..].iter().all(|s| *s == 0.0));
         assert!(shared.0.lock().unwrap().playback_started);
         assert!(shared.0.lock().unwrap().ring.is_empty());
     }
