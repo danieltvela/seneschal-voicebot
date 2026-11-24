@@ -298,6 +298,8 @@ ws_port = 9090
 # ── Plugins ───────────────────────────────────────────────────────────────────
 plugins = []
 active_plugin = ""
+audio_input_device = "Vieta Pro Clear"
+audio_output_device = "Vieta Pro Clear"
 
 # ── MCP servers ───────────────────────────────────────────────────────────────
 # WARNING: [[mcp_servers]] MUST be the last section in this file. The toml 0.8
