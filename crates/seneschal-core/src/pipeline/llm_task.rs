@@ -70,6 +70,11 @@ pub fn truncate_chars(s: &str, n: usize) -> String {
     }
 }
 
+/// Stable Control wire origin for a finalized user utterance (issue #41).
+fn transcript_source(is_text_input: bool) -> Option<String> {
+    Some(if is_text_input { "text" } else { "voice" }.to_string())
+}
+
 /// LLM task: receives transcript frames, runs the LLM+tools pipeline, fires events.
 #[allow(clippy::too_many_arguments)]
 pub async fn llm_task(
@@ -175,6 +180,7 @@ pub async fn llm_task(
             ctrl.send(ControlEvent::Transcript {
                 utterance_id: pipeline_id,
                 text: text.clone(),
+                source: transcript_source(is_text_input),
             });
         }
 
@@ -741,6 +747,14 @@ pub async fn llm_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// issue #41: the Control transcript must expose the same origin that the
+    /// TUI already receives through `TuiEvent::UserMessage`.
+    #[test]
+    fn transcript_source_distinguishes_text_and_voice() {
+        assert_eq!(transcript_source(true), Some("text".to_string()));
+        assert_eq!(transcript_source(false), Some("voice".to_string()));
+    }
 
     /// issue #218: when the LLM already streamed a narration before the
     /// background tool call, the ack must NOT be re-emitted as a token (it

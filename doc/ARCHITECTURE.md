@@ -308,7 +308,8 @@ An HTTP + SSE server (built on axum) for external management of the seneschal.
 | `/control/permission` | POST | Resolve permission `{task_id, option_id}` (ACP optionId) |
 
 `ControlEvent` types include: `StateChanged` (stable tokens `idle` | `listening` |
-`thinking` | `speaking` | `paused`, optional `pause_reason`), `Transcript`,
+`thinking` | `speaking` | `paused`, optional `pause_reason`), `Transcript`
+(with `source`: `voice` or `text`),
 `LlmToken`, `LlmDone`, `TtsStart`, `ToolCall`, `MuteChanged`, `Error`,
 `SystemNotification`, `McpNotification`, `Classification`, agent task lifecycle
 (`AgentTaskStarted` / `Running` / `Delegated` / `Finalizing` / `Completed` /

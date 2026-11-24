@@ -5,6 +5,7 @@ use serde::Deserialize;
 use tokio::sync::watch;
 
 use crate::audio::SharedAudioHub;
+use crate::chat::{SharedChatHub, rehydrate_history};
 use crate::models::SharedModelHub;
 use crate::status::{ConnectionStatus, DaemonStatus, PipelineSnapshot, SharedStatusHub};
 
@@ -21,6 +22,32 @@ pub enum ControlEvent {
         state: String,
         utterance_id: Option<u64>,
         pause_reason: Option<String>,
+    },
+    Transcript {
+        utterance_id: u64,
+        text: String,
+        source: Option<String>,
+    },
+    LlmToken {
+        utterance_id: u64,
+        token: String,
+    },
+    LlmDone {
+        utterance_id: u64,
+        full_text: String,
+    },
+    TtsStart {
+        utterance_id: u64,
+    },
+    ToolCall {
+        name: String,
+        result: String,
+    },
+    MuteChanged {
+        muted: bool,
+    },
+    SystemNotification {
+        text: String,
     },
     AudioLevel {
         rms: f32,
@@ -66,6 +93,7 @@ pub struct ControlBridge {
     status: SharedStatusHub,
     audio: SharedAudioHub,
     models: SharedModelHub,
+    chat: SharedChatHub,
     base_url: String,
     client: reqwest::Client,
     restart_rx: watch::Receiver<u64>,
@@ -77,12 +105,14 @@ impl ControlBridge {
         status: SharedStatusHub,
         audio: SharedAudioHub,
         models: SharedModelHub,
+        chat: SharedChatHub,
         restart_rx: watch::Receiver<u64>,
     ) -> Self {
         Self {
             status,
             audio,
             models,
+            chat,
             base_url: base_url.into(),
             client: build_client(),
             restart_rx,
@@ -94,6 +124,7 @@ impl ControlBridge {
             status,
             audio,
             models,
+            chat,
             base_url,
             client,
             mut restart_rx,
@@ -115,7 +146,7 @@ impl ControlBridge {
             status.set_daemon(DaemonStatus::Running, None);
             status.mark_connecting();
             let connected = tokio::select! {
-                result = Self::connect_once(&status, &audio, &models, &base_url, &client) => result,
+                result = Self::connect_once(&status, &audio, &models, &chat, &base_url, &client) => result,
                 _ = restart_rx.changed() => {
                     backoff = MIN_RECONNECT_DELAY;
                     status.mark_connecting();
@@ -131,6 +162,7 @@ impl ControlBridge {
                 }
             }
 
+            chat.reset_streaming();
             status.set_connection(ConnectionStatus::Disconnected);
             if Self::wait_or_restart(&mut restart_rx, backoff).await {
                 backoff = MIN_RECONNECT_DELAY;
@@ -164,12 +196,14 @@ impl ControlBridge {
         }
     }
 
-    /// Open SSE first, take a state snapshot second, then process queued SSE
-    /// events. This prevents a transition from being lost between the two.
+    /// Open SSE first, take a state snapshot and chat history second, then
+    /// process queued SSE events. This prevents a transition or transcript
+    /// emitted during rehydration from being lost.
     async fn connect_once(
         status: &SharedStatusHub,
         audio: &SharedAudioHub,
         models: &SharedModelHub,
+        chat: &SharedChatHub,
         base_url: &str,
         client: &reqwest::Client,
     ) -> anyhow::Result<()> {
@@ -184,6 +218,7 @@ impl ControlBridge {
 
         let snapshot = Self::get_state(client, base_url).await?;
         status.set_pipeline(snapshot);
+        rehydrate_history(base_url, chat).await;
         status.mark_connected();
 
         let mut stream = response.bytes_stream();
@@ -192,8 +227,21 @@ impl ControlBridge {
             let chunk = chunk?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(frame) = buffer.next_event() {
-                if let Some(event) = parse_control_event(&frame) {
-                    Self::apply_event(status, audio, models, base_url, client, event).await;
+                if let Some(event) = parse_control_event(&frame)
+                    && Self::apply_event(
+                        status,
+                        audio,
+                        models,
+                        chat,
+                        base_url,
+                        client,
+                        event,
+                    )
+                    .await
+                {
+                    // Lag already lost deltas: reconnect so history is loaded
+                    // before the next live event is consumed.
+                    return Ok(());
                 }
             }
         }
@@ -220,16 +268,52 @@ impl ControlBridge {
         })
     }
 
+    /// Apply an SSE event. Returns `true` when the caller must reconnect and
+    /// rehydrate (currently subscriber lag).
     async fn apply_event(
         status: &SharedStatusHub,
         audio: &SharedAudioHub,
         models: &SharedModelHub,
+        chat: &SharedChatHub,
         base_url: &str,
         client: &reqwest::Client,
         event: ControlEvent,
-    ) {
+    ) -> bool {
         match event {
-            ControlEvent::StateChanged { .. } => {
+            ControlEvent::StateChanged { ref state, .. } => {
+                let finalize = state == "idle" || state == "listening";
+                status.apply_control_event(event);
+                if finalize {
+                    chat.finalize_streaming(None);
+                }
+            }
+            ControlEvent::Transcript {
+                utterance_id,
+                text,
+                source,
+            } => {
+                chat.apply_transcript(utterance_id, text, source.as_deref());
+            }
+            ControlEvent::LlmToken {
+                utterance_id,
+                token,
+            } => {
+                chat.apply_token(utterance_id, token);
+            }
+            ControlEvent::LlmDone {
+                utterance_id,
+                full_text,
+            } => {
+                chat.apply_done(utterance_id, full_text);
+            }
+            ControlEvent::TtsStart { .. } => {}
+            ControlEvent::ToolCall { name, result } => {
+                chat.apply_tool_call(name, result);
+            }
+            ControlEvent::SystemNotification { text } => {
+                chat.apply_system_notification(text);
+            }
+            ControlEvent::MuteChanged { .. } => {
                 status.apply_control_event(event);
             }
             ControlEvent::AudioLevel { rms, peak } => {
@@ -256,12 +340,18 @@ impl ControlBridge {
             }
             ControlEvent::Error(message) => {
                 let missed = message.contains("Missed");
-                status.apply_control_event(ControlEvent::Error(message));
-                if missed && let Ok(snapshot) = Self::get_state(client, base_url).await {
-                    status.set_pipeline(snapshot);
+                status.apply_control_event(ControlEvent::Error(message.clone()));
+                if missed {
+                    if let Ok(snapshot) = Self::get_state(client, base_url).await {
+                        status.set_pipeline(snapshot);
+                    }
+                    rehydrate_history(base_url, chat).await;
+                    return true;
                 }
+                chat.apply_error(message);
             }
         }
+        false
     }
 }
 
@@ -322,6 +412,49 @@ pub fn parse_control_event(frame: &str) -> Option<ControlEvent> {
                 pause_reason: event.pause_reason,
             })
         }
+        "transcript" => {
+            let event = serde_json::from_value::<TranscriptWire>(value).ok()?;
+            Some(ControlEvent::Transcript {
+                utterance_id: event.utterance_id,
+                text: event.text,
+                source: event.source,
+            })
+        }
+        "llm_token" => {
+            let event = serde_json::from_value::<LlmTokenWire>(value).ok()?;
+            Some(ControlEvent::LlmToken {
+                utterance_id: event.utterance_id,
+                token: event.token,
+            })
+        }
+        "llm_done" => {
+            let event = serde_json::from_value::<LlmDoneWire>(value).ok()?;
+            Some(ControlEvent::LlmDone {
+                utterance_id: event.utterance_id,
+                full_text: event.full_text,
+            })
+        }
+        "tts_start" => {
+            let event = serde_json::from_value::<UtteranceWire>(value).ok()?;
+            Some(ControlEvent::TtsStart {
+                utterance_id: event.utterance_id,
+            })
+        }
+        "tool_call" => {
+            let event = serde_json::from_value::<ToolCallWire>(value).ok()?;
+            Some(ControlEvent::ToolCall {
+                name: event.name,
+                result: event.result,
+            })
+        }
+        "mute_changed" => {
+            let event = serde_json::from_value::<MuteChangedWire>(value).ok()?;
+            Some(ControlEvent::MuteChanged { muted: event.muted })
+        }
+        "system_notification" => {
+            let event = serde_json::from_value::<SystemNotificationWire>(value).ok()?;
+            Some(ControlEvent::SystemNotification { text: event.text })
+        }
         "audio_level" => {
             let event = serde_json::from_value::<AudioLevelWire>(value).ok()?;
             Some(ControlEvent::AudioLevel {
@@ -352,6 +485,47 @@ pub fn parse_control_event(frame: &str) -> Option<ControlEvent> {
 #[derive(Debug, Deserialize)]
 struct ErrorWire {
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptWire {
+    utterance_id: u64,
+    text: String,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmTokenWire {
+    utterance_id: u64,
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmDoneWire {
+    utterance_id: u64,
+    full_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UtteranceWire {
+    utterance_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallWire {
+    name: String,
+    result: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MuteChangedWire {
+    muted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SystemNotificationWire {
+    text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,15 +573,15 @@ mod tests {
 
     #[test]
     fn sse_parser_skips_keepalive_and_unknown_events() {
-        let frame = ": keepalive\n\ndata: {\"type\":\"tool_call\"}\n\n";
+        let frame = ": keepalive\n\ndata: {\"type\":\"mcp_notification\"}\n\n";
         let mut buffer = SseBuffer::default();
         buffer.push_str(frame);
         assert_eq!(buffer.next_event(), Some(": keepalive".to_string()));
         assert_eq!(
             buffer.next_event(),
-            Some("data: {\"type\":\"tool_call\"}".to_string())
+            Some("data: {\"type\":\"mcp_notification\"}".to_string())
         );
-        assert!(parse_control_event("data: {\"type\":\"tool_call\"}").is_none());
+        assert!(parse_control_event("data: {\"type\":\"mcp_notification\"}").is_none());
     }
 
     #[test]
@@ -475,6 +649,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sse_parser_accepts_chat_mute_and_system_events() {
+        let transcript = parse_control_event(
+            "data: {\"type\":\"transcript\",\"utterance_id\":4,\"text\":\"hola\",\"source\":\"voice\"}",
+        );
+        assert_eq!(
+            transcript,
+            Some(ControlEvent::Transcript {
+                utterance_id: 4,
+                text: "hola".into(),
+                source: Some("voice".into()),
+            })
+        );
+
+        let token = parse_control_event(
+            "data: {\"type\":\"llm_token\",\"utterance_id\":4,\"token\":\"hola\"}",
+        );
+        assert_eq!(
+            token,
+            Some(ControlEvent::LlmToken {
+                utterance_id: 4,
+                token: "hola".into(),
+            })
+        );
+
+        let done = parse_control_event(
+            "data: {\"type\":\"llm_done\",\"utterance_id\":4,\"full_text\":\"hola\"}",
+        );
+        assert_eq!(
+            done,
+            Some(ControlEvent::LlmDone {
+                utterance_id: 4,
+                full_text: "hola".into(),
+            })
+        );
+
+        let tool = parse_control_event(
+            "data: {\"type\":\"tool_call\",\"name\":\"web_search\",\"result\":\"ok\"}",
+        );
+        assert_eq!(
+            tool,
+            Some(ControlEvent::ToolCall {
+                name: "web_search".into(),
+                result: "ok".into(),
+            })
+        );
+
+        let mute = parse_control_event("data: {\"type\":\"mute_changed\",\"muted\":true}");
+        assert_eq!(mute, Some(ControlEvent::MuteChanged { muted: true }));
+
+        let system =
+            parse_control_event("data: {\"type\":\"system_notification\",\"text\":\"hello\"}");
+        assert_eq!(
+            system,
+            Some(ControlEvent::SystemNotification {
+                text: "hello".into(),
+            })
+        );
+
+        // Historical transcripts from an older daemon omit source.
+        let legacy = parse_control_event(
+            "data: {\"type\":\"transcript\",\"utterance_id\":5,\"text\":\"hola\"}",
+        );
+        assert!(matches!(
+            legacy,
+            Some(ControlEvent::Transcript { source: None, .. })
+        ));
+    }
+
     async fn spawn_mock_control() -> String {
         let health = || async {
             Json(serde_json::json!({
@@ -489,6 +732,21 @@ mod tests {
                 "tts_muted": false
             }))
         };
+        let sessions = || async {
+            Json(serde_json::json!([{
+                "id": "11111111-1111-1111-1111-111111111111",
+                "created_at": "2026-01-01T00:00:00Z",
+                "is_active": true
+            }]))
+        };
+        let messages = || async {
+            Json(serde_json::json!([{
+                "id": 1,
+                "role": "User",
+                "content": "history",
+                "timestamp": "2026-01-01T00:00:01Z"
+            }]))
+        };
         let events = || async {
             (
                 [(header::CONTENT_TYPE, "text/event-stream")],
@@ -499,6 +757,8 @@ mod tests {
         let app = Router::new()
             .route("/control/health", get(health))
             .route("/control/state", get(state))
+            .route("/control/sessions", get(sessions))
+            .route("/control/sessions/{id}/messages", get(messages))
             .route("/control/events", get(events));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -533,6 +793,8 @@ mod tests {
     async fn bridge_connects_applies_snapshot_and_sse_then_reconnects() {
         let base_url = spawn_mock_control().await;
         let hub = std::sync::Arc::new(StatusHub::new());
+        let chat = std::sync::Arc::new(crate::chat::ChatHub::new());
+        let mut chat_rx = chat.subscribe();
         let (restart_tx, restart_rx) = watch::channel(0u64);
         let mut rx = hub.subscribe();
 
@@ -542,6 +804,7 @@ mod tests {
                 hub.clone(),
                 std::sync::Arc::new(crate::audio::AudioHub::new()),
                 std::sync::Arc::new(crate::models::ModelHub::new()),
+                chat.clone(),
                 restart_rx,
             )
             .run(),
@@ -549,6 +812,15 @@ mod tests {
         let status = wait_for_connected(&mut rx).await;
         assert_eq!(status.daemon, DaemonStatus::Running);
         assert!(status.last_reconnect_ms.is_some());
+
+        // History is hydrated before the bridge reports connected.
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), chat_rx.recv())
+            .await
+            .expect("chat snapshot timed out")
+            .expect("chat channel closed");
+        assert!(matches!(event, crate::chat::ChatEvent::Snapshot { .. }));
+        assert_eq!(chat.snapshot().entries.len(), 1);
+        assert_eq!(chat.snapshot().entries[0].text, "history");
 
         // A real restart bumps the generation; the bridge must cancel the old
         // connection and reconnect to the same mock daemon.

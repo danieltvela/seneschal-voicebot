@@ -1,4 +1,5 @@
 mod audio;
+mod chat;
 mod control;
 mod daemon;
 mod models;
@@ -14,6 +15,7 @@ use tauri::{Manager, State};
 use tokio::sync::watch;
 
 use crate::audio::SharedAudioHub;
+use crate::chat::SharedChatHub;
 use crate::control::ControlBridge;
 use crate::daemon::{AppRuntime, spawn_status_emitter};
 use crate::models::SharedModelHub;
@@ -105,6 +107,33 @@ fn complete_onboarding(
 #[tauri::command]
 async fn restart_daemon(runtime: State<'_, Arc<AppRuntime>>) -> Result<(), String> {
     runtime.restart().await
+}
+
+#[tauri::command]
+fn chat_snapshot(chat: State<'_, SharedChatHub>) -> Result<chat::ChatSnapshot, String> {
+    Ok(chat.snapshot())
+}
+
+#[tauri::command]
+async fn refresh_chat_history(
+    runtime: State<'_, Arc<AppRuntime>>,
+    chat: State<'_, SharedChatHub>,
+) -> Result<chat::ChatSnapshot, String> {
+    let entries = chat::fetch_history(&runtime.base_url())
+        .await
+        .map_err(|error| error.to_string())?;
+    chat.replace_history(entries);
+    Ok(chat.snapshot())
+}
+
+#[tauri::command]
+async fn send_chat_input(
+    runtime: State<'_, Arc<AppRuntime>>,
+    text: String,
+) -> Result<(), String> {
+    chat::send_text_input(&runtime.base_url(), &text)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -357,6 +386,7 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
     let status_hub: SharedStatusHub = Arc::new(StatusHub::new());
     let audio_hub: SharedAudioHub = Arc::new(audio::AudioHub::new());
     let model_hub: SharedModelHub = Arc::new(models::ModelHub::new());
+    let chat_hub: SharedChatHub = Arc::new(chat::ChatHub::new());
     let (restart_tx, restart_rx) = watch::channel(0u64);
 
     let runtime = Arc::new(
@@ -374,12 +404,14 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
     app.manage(Arc::clone(&runtime));
     app.manage(Arc::clone(&audio_hub));
     app.manage(Arc::clone(&model_hub));
+    app.manage(Arc::clone(&chat_hub));
     app.manage(Arc::clone(&store));
     app.manage(PendingUpdate::new());
 
     spawn_status_emitter(app.handle().clone(), Arc::clone(&status_hub));
     audio::spawn_audio_level_emitter(app.handle().clone(), Arc::clone(&audio_hub));
     models::spawn_model_progress_emitter(app.handle().clone(), Arc::clone(&model_hub));
+    chat::spawn_chat_event_emitter(app.handle().clone(), Arc::clone(&chat_hub));
     tauri::async_runtime::block_on(runtime.start())?;
 
     let bridge = ControlBridge::new(
@@ -387,6 +419,7 @@ fn setup(app: &mut tauri::App) -> Result<(), String> {
         Arc::clone(&status_hub),
         Arc::clone(&audio_hub),
         Arc::clone(&model_hub),
+        Arc::clone(&chat_hub),
         restart_rx,
     );
     tauri::async_runtime::spawn(bridge.run());
@@ -410,6 +443,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_status,
             restart_daemon,
+            chat_snapshot,
+            refresh_chat_history,
+            send_chat_input,
             get_onboarding_state,
             begin_onboarding,
             record_onboarding_step,

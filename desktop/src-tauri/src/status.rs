@@ -178,6 +178,15 @@ impl StatusHub {
         });
     }
 
+    /// Apply a live mute transition without losing the current pipeline token.
+    pub fn set_tts_muted(&self, muted: bool) {
+        self.publish(|status| {
+            if let Some(pipeline) = status.pipeline.as_mut() {
+                pipeline.tts_muted = Some(muted);
+            }
+        });
+    }
+
     /// Wait for the next successful Control connection.
     ///
     /// Used after a restart-tier Settings apply so the caller does not race the
@@ -229,8 +238,15 @@ impl StatusHub {
                 });
             }
             ControlEvent::Error(error) => self.set_error(error),
-            // Audio and model progress are consumed by their dedicated hubs;
-            // other Control events are not status state.
+            ControlEvent::MuteChanged { muted } => self.set_tts_muted(muted),
+            // Chat state is owned by `ChatHub`; audio and model progress are
+            // consumed by their dedicated hubs.
+            ControlEvent::Transcript { .. }
+            | ControlEvent::LlmToken { .. }
+            | ControlEvent::LlmDone { .. }
+            | ControlEvent::TtsStart { .. }
+            | ControlEvent::ToolCall { .. }
+            | ControlEvent::SystemNotification { .. } => {}
             ControlEvent::AudioLevel { .. } => {}
             ControlEvent::ModelDownloadProgress { .. } => {}
         }
@@ -270,6 +286,24 @@ mod tests {
         let pipeline = status.pipeline.expect("pipeline is present");
         assert_eq!(pipeline.state, "speaking");
         assert_eq!(pipeline.utterance_id, Some(7));
+        assert_eq!(pipeline.tts_muted, Some(true));
+    }
+
+    #[test]
+    fn mute_changed_updates_pipeline_without_resetting_state() {
+        let hub = StatusHub::new();
+        hub.set_pipeline(PipelineSnapshot {
+            state: "speaking".into(),
+            utterance_id: Some(9),
+            pause_reason: None,
+            tts_muted: Some(false),
+        });
+
+        hub.apply_control_event(ControlEvent::MuteChanged { muted: true });
+
+        let pipeline = hub.snapshot().pipeline.expect("pipeline is present");
+        assert_eq!(pipeline.state, "speaking");
+        assert_eq!(pipeline.utterance_id, Some(9));
         assert_eq!(pipeline.tts_muted, Some(true));
     }
 

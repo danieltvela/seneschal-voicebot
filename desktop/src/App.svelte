@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Audio from "./lib/components/Audio.svelte";
+  import Chat from "./lib/components/Chat.svelte";
   import Models from "./lib/components/Models.svelte";
   import Onboarding from "./lib/components/Onboarding.svelte";
   import Settings from "./lib/components/Settings.svelte";
+  import StatusBar from "./lib/components/StatusBar.svelte";
   import {
     abandonOnboarding,
     beginOnboarding,
@@ -15,7 +17,6 @@
     daemonLabel,
     formatReconnect,
     initStatus,
-    pipelineLabel,
     restartDaemon,
     status,
   } from "./lib/status";
@@ -31,8 +32,8 @@
     type UpdateProgressState,
   } from "./lib/update";
 
-  type View = "status" | "settings" | "models" | "audio" | "wizard";
-  let view = $state<View>("status");
+  type View = "chat" | "status" | "settings" | "models" | "audio" | "wizard";
+  let view = $state<View>("chat");
   let restarting = $state(false);
   let restartError = $state<string | null>(null);
   let onboardingState = $state<OnboardingStateWire | null>(null);
@@ -70,11 +71,11 @@
     } catch (error) {
       restartError = error instanceof Error ? error.message : String(error);
     }
-    view = "status";
+    view = "chat";
   }
 
   function completeWizard(): void {
-    view = "status";
+    view = "chat";
   }
 
   async function onRestart(): Promise<void> {
@@ -121,8 +122,15 @@
 <main>
   <header>
     <h1>Seneschal</h1>
-    <p class="subtitle">Desktop shell — live pipeline state and settings</p>
+    <p class="subtitle">Desktop shell — conversation, status and settings</p>
     <nav aria-label="App views">
+      <button
+        type="button"
+        class:active={view === "chat"}
+        onclick={() => (view = "chat")}
+      >
+        Chat
+      </button>
       <button
         type="button"
         class:active={view === "status"}
@@ -194,87 +202,85 @@
     <p class="error" role="alert">{updateError}</p>
   {/if}
 
-  {#if view === "wizard" && onboardingState}
-    <Onboarding
-      onComplete={completeWizard}
-      onAbandon={closeWizard}
-    />
-  {:else if view === "settings"}
-    <Settings onRunSetup={openWizard} />
-  {:else if view === "models"}
-    <Models />
-  {:else if view === "audio"}
-    <Audio />
-  {:else if $status}
-    <section aria-label="Desktop status">
-      <div class="rows">
-        <div class="row">
-          <span>Daemon</span>
-          <strong class="daemon {$status.daemon}">
-            {daemonLabel($status.daemon)}
-          </strong>
+  <div class="view">
+    {#if view === "wizard" && onboardingState}
+      <Onboarding
+        onComplete={completeWizard}
+        onAbandon={closeWizard}
+      />
+    {:else if view === "chat"}
+      <Chat />
+    {:else if view === "settings"}
+      <Settings onRunSetup={openWizard} />
+    {:else if view === "models"}
+      <Models />
+    {:else if view === "audio"}
+      <Audio />
+    {:else if $status}
+      <section aria-label="Desktop status">
+        <div class="rows">
+          <div class="row">
+            <span>Daemon</span>
+            <strong class="daemon {$status.daemon}">
+              {daemonLabel($status.daemon)}
+            </strong>
+          </div>
+          <div class="row">
+            <span>Control</span>
+            <strong class="connection {$status.connection}">
+              {connectionLabel($status.connection)}
+            </strong>
+          </div>
+          <div class="row">
+            <span>Last reconnect</span>
+            <strong>{formatReconnect($status.lastReconnectMs)}</strong>
+          </div>
         </div>
-        <div class="row">
-          <span>Control</span>
-          <strong class="connection {$status.connection}">
-            {connectionLabel($status.connection)}
-          </strong>
-        </div>
-        <div class="row">
-          <span>Last reconnect</span>
-          <strong>{formatReconnect($status.lastReconnectMs)}</strong>
-        </div>
-      </div>
 
-      {#if $status.pipeline}
-        <div class="pipeline {$status.pipeline.state}">
-          <span class="state">{pipelineLabel($status.pipeline.state)}</span>
-          {#if $status.pipeline.utteranceId !== null}
-            <span class="meta">utterance #{$status.pipeline.utteranceId}</span>
-          {/if}
-          {#if $status.pipeline.pauseReason}
-            <span class="meta">pause: {$status.pipeline.pauseReason}</span>
-          {/if}
-          {#if $status.pipeline.ttsMuted}
-            <span class="meta">TTS muted</span>
-          {/if}
-        </div>
-      {:else}
-        <div class="pipeline empty">Waiting for PipelineState…</div>
-      {/if}
+        {#if $status.lastError || restartError}
+          <p class="error" role="alert">
+            {restartError ?? $status.lastError}
+          </p>
+        {/if}
 
-      {#if $status.lastError || restartError}
-        <p class="error" role="alert">
-          {restartError ?? $status.lastError}
-        </p>
-      {/if}
+        <button
+          type="button"
+          onclick={onRestart}
+          disabled={restarting || $status.daemon === "restarting"}
+        >
+          {restarting || $status.daemon === "restarting"
+            ? "Restarting…"
+            : "Restart daemon"}
+        </button>
+      </section>
+    {:else}
+      <section aria-label="Desktop status">
+        <p>Loading desktop status…</p>
+      </section>
+    {/if}
+  </div>
 
-      <button
-        type="button"
-        onclick={onRestart}
-        disabled={restarting || $status.daemon === "restarting"}
-      >
-        {restarting || $status.daemon === "restarting"
-          ? "Restarting…"
-          : "Restart daemon"}
-      </button>
-    </section>
-  {:else}
-    <section aria-label="Desktop status">
-      <p>Loading desktop status…</p>
-    </section>
-  {/if}
+  <StatusBar />
 </main>
 
 <style>
   main {
-    min-height: 100vh;
+    display: flex;
+    height: 100vh;
     margin: 0;
-    padding: 32px;
+    padding: 24px 32px 0;
     box-sizing: border-box;
+    flex-direction: column;
+    overflow: hidden;
     background: #101317;
     color: #e7ecf2;
     font-family: system-ui, sans-serif;
+  }
+
+  .view {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
   }
 
   h1 {
@@ -358,35 +364,6 @@
   .row span {
     color: #9aa7b5;
   }
-
-  .pipeline {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 20px;
-    border-radius: 10px;
-    background: #202833;
-    font-size: 24px;
-    font-weight: 650;
-  }
-
-  .pipeline.empty {
-    color: #9aa7b5;
-    font-size: 16px;
-    font-weight: 400;
-  }
-
-  .meta {
-    color: #9aa7b5;
-    font-size: 13px;
-    font-weight: 400;
-  }
-
-  .pipeline.idle { background: #202833; }
-  .pipeline.listening { background: #223a2c; }
-  .pipeline.thinking { background: #332f22; }
-  .pipeline.speaking { background: #283450; }
-  .pipeline.paused { background: #33303f; }
 
   .error {
     margin: 16px 0 0;

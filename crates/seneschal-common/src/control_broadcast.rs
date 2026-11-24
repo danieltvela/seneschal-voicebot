@@ -13,9 +13,13 @@ pub enum ControlEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         pause_reason: Option<String>,
     },
+    /// A finalized user utterance (voice or desktop text input). `source` is a
+    /// stable wire token (`voice` | `text`) for clients that badge the origin.
     Transcript {
         utterance_id: u64,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     LlmToken {
         utterance_id: u64,
@@ -194,6 +198,34 @@ mod tests {
             r#"{"type":"state_changed","state":"paused","utterance_id":null,"pause_reason":"consolidation"}"#
         );
         let _ = roundtrip(&event);
+    }
+
+    #[test]
+    fn transcript_source_uses_a_stable_wire_shape() {
+        let voice = ControlEvent::Transcript {
+            utterance_id: 42,
+            text: "hola".into(),
+            source: Some("voice".into()),
+        };
+        let json = serde_json::to_string(&voice).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"transcript","utterance_id":42,"text":"hola","source":"voice"}"#
+        );
+        assert!(matches!(
+            roundtrip(&voice),
+            ControlEvent::Transcript { source: Some(source), .. } if source == "voice"
+        ));
+
+        // Older producers may omit the field; it must remain decodable.
+        let legacy = serde_json::from_str::<ControlEvent>(
+            r#"{"type":"transcript","utterance_id":43,"text":"hola"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            ControlEvent::Transcript { source: None, .. }
+        ));
     }
 
     #[test]

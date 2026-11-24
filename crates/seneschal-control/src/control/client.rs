@@ -99,6 +99,8 @@ pub enum ClientControlEvent {
     Transcript {
         utterance_id: u64,
         text: String,
+        #[serde(default)]
+        source: Option<String>,
     },
     LlmToken {
         utterance_id: u64,
@@ -725,9 +727,26 @@ mod tests {
 
         assert!(event.is_some());
         match event.unwrap() {
-            ClientControlEvent::Transcript { utterance_id, text } => {
+            ClientControlEvent::Transcript {
+                utterance_id,
+                text,
+                source,
+            } => {
                 assert_eq!(utterance_id, 42);
                 assert_eq!(text, "Hello");
+                assert_eq!(source, None);
+            }
+            _ => panic!("wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sse_event_transcript_source() {
+        let event_text = "data: {\"type\":\"transcript\",\"utterance_id\":42,\"text\":\"Hello\",\"source\":\"text\"}";
+        let event = ControlClient::parse_sse_event(event_text).expect("parse");
+        match event {
+            ClientControlEvent::Transcript { source, .. } => {
+                assert_eq!(source.as_deref(), Some("text"));
             }
             _ => panic!("wrong event type"),
         }

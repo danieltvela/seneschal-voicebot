@@ -47,7 +47,9 @@ async fn main() -> anyhow::Result<()> {
                             state, utterance_id, pause_reason
                         );
                     }
-                    ClientControlEvent::Transcript { utterance_id, text } => {
+                    ClientControlEvent::Transcript {
+                        utterance_id, text, ..
+                    } => {
                         println!("[Transcript] utterance {}: '{}'", utterance_id, text);
                     }
                     ClientControlEvent::LlmToken {
